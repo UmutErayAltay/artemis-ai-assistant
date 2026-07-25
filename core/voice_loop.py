@@ -237,6 +237,14 @@ class VoiceAssistant:
         self._overlay.show_listening("Dinliyorum…")
 
         transcript = self._record_and_transcribe(mic)
+
+        # Dökümü MUTLAKA logla. Bu satır olmadan, "asistan yanlış şeyi yaptı"
+        # şikayetleri araştırılamıyor: log'da yalnızca hangi tool'un
+        # çalıştığı görünüyor, kullanıcının ne dediği ve modelin ne
+        # duyduğu görünmüyordu — yani hatanın tanımada mı yoksa LLM'in
+        # tool seçiminde mi olduğu ayırt edilemiyordu.
+        logger.info("Duyulan komut: %r", transcript)
+
         if not transcript:
             self._overlay.show_error("Sizi duyamadım.")
             time.sleep(1.4)
@@ -257,6 +265,13 @@ class VoiceAssistant:
             logger.error("Ollama bağlantı hatası: %s", exc)
             self._respond("Yerel modele ulaşamıyorum.", error=True)
             return
+
+        # Hangi tool'un neden seçildiğini sonradan anlayabilmek için, LLM'in
+        # döküme karşılık ürettiği planı da logla (bkz. yukarıdaki not).
+        logger.info(
+            "LLM planı: %s",
+            [(call.get("tool"), call.get("arguments")) for call in tool_calls],
+        )
 
         step_results = self._planner.execute_plan(tool_calls)
         self._respond(self._summarize(step_results, len(tool_calls)))
@@ -497,6 +512,26 @@ class VoiceAssistant:
         from voice.router import SpeechToTextRouter
 
         def build_cloud():
+            """Ayarda seçilen bulut tanıma servisini kurar.
+
+            Anahtarı olmayan bir servis seçilirse burada hata FIRLATILMAZ;
+            sağlayıcılar anahtarı ancak `transcribe()` sırasında kontrol
+            eder ve yönlendirici o hatayı yakalayıp yerele düşer. Yani
+            yanlış/eksik yapılandırma asistanı bozmaz, yalnızca doğruluğu
+            etkiler.
+            """
+
+            if self._settings.stt_cloud_provider == "azure":
+                from config.settings import get_azure_speech_credentials
+                from voice.stt_azure import AzureSpeechToText
+
+                api_key, region = get_azure_speech_credentials()
+                return AzureSpeechToText(
+                    api_key=api_key,
+                    region=region,
+                    timeout=self._settings.cloud_timeout_seconds,
+                )
+
             from voice.stt_cloud import GroqSpeechToText
 
             return GroqSpeechToText(

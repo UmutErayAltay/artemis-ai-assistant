@@ -1000,6 +1000,49 @@ kullanıcının karşılaştırma yapabilmesi için Emel/Ahmet × normal/yavaş
 sorun sesin kendisi değil, (d)'de düzeltilen 16 kHz düşürme ve
 kekemelikmiş; varsayılanlar değişmedi.
 
+### l) Azure Speech eklendi ve bulut STT seçilebilir oldu (v2.3)
+
+Kullanıcının gözlemi: *"Google mic kullanınca her şeyi net anlıyor."*
+Ölçüm bunu destekledi — Whisper ailesi (yerel `small` DE, bulut
+`large-v3-turbo` DA) "League of Legends" gibi yabancı özel isimlerde
+takılıyor ve bu, sadece ekranda yanlış metin değil **yanlış eylem**
+üretiyordu (log'da, kullanıcının istemediği bir `example.txt` dosyası
+oluşturulduğu görüldü).
+
+Google Cloud STT ile Azure Speech karşılaştırıldı; **Azure seçildi**:
+
+| | Google Cloud STT | Azure Speech |
+|---|---|---|
+| Ücretsiz kota | ~60 dk/ay | **5 saat/ay** |
+| Kurulum | servis hesabı JSON'u | **tek API anahtarı** |
+| İfade önceliklendirme | var (boost 0-20) | REST'te YOK, yalnızca SDK'da |
+
+Azure'un kotası 5 kat, kurulumu Groq kadar kolay. Karşılığında REST
+arayüzünde ifade önceliklendirme yok — bu bilinçli bir ödünç; temel
+Türkçe modeli yetmezse ağır SDK'ya geçilebilir.
+
+`stt_cloud_provider` ayarı eklendi (`azure` | `groq`). Seçilen servisin
+anahtarı yoksa asistan BOZULMAZ: yönlendirici sessizce yerele düşer ve
+log'a ne yapılması gerektiğini yazar.
+
+> **Dürüstlük notu**: Beğenilen "Google mic" muhtemelen Google Cloud STT
+> DEĞİL — Chrome/Android'in *tüketici* tanıma motorudur ve bulut API'siyle
+> aynı model olmak zorunda değildir. Bu yüzden hiçbir bulut servisi o
+> deneyimi birebir vaat edemez; karar kullanıcının kendi sesiyle
+> denemesine bırakıldı.
+
+### m) Teşhis boşluğu: ne duyulduğu loglanmıyordu
+
+"Asistan yanlış şeyi yaptı" şikayetleri araştırılamıyordu: log'da yalnızca
+hangi tool'un çalıştığı görünüyor, kullanıcının ne dediği ve modelin ne
+duyduğu görünmüyordu — yani hata TANIMADA mı yoksa LLM'in TOOL SEÇİMİNDE
+mi, ayırt etmek imkânsızdı. Artık ikisi de loglanıyor:
+
+```
+Duyulan komut: 'league of legends açar mısın'
+LLM planı: [('windows.launch_app', {'name': 'League of Legends'})]
+```
+
 ### g) Arayüz: ne dediğiniz artık ekranda kalıyor
 
 Kullanıcı isteği: *"Dediklerimi Artemis yazısının altında gösterse daha

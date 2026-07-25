@@ -98,8 +98,13 @@ class Settings(BaseModel):
         tts_provider: Sesli okumanın nereden yapılacağı; `stt_provider`
             ile aynı üç değeri alır. "local" seçilirse cevap metni de
             dışarı çıkmaz.
-        groq_model: Bulut konuşma tanımada kullanılacak Groq modeli.
-            API anahtarı BU DOSYADAN GELMEZ — bkz. `get_groq_api_key()`.
+        stt_cloud_provider: Bulut konuşma tanımada hangi servisin
+            kullanılacağı: "azure" (varsayılan) veya "groq". Seçilen
+            servisin anahtarı yoksa yönlendirici zaten yerele düşer, bu
+            yüzden yanlış seçim asistanı bozmaz — yalnızca doğruluğu
+            etkiler. Anahtarlar BU DOSYADAN GELMEZ (bkz.
+            `get_groq_api_key`, `get_azure_speech_credentials`).
+        groq_model: `stt_cloud_provider: "groq"` iken kullanılacak model.
         edge_tts_voice: Microsoft Edge TTS ses adı. Türkçe seçenekler:
             "tr-TR-EmelNeural" (kadın), "tr-TR-AhmetNeural" (erkek).
         edge_tts_rate: Konuşma hızı ("+0%" = normal, "-10%" = daha yavaş).
@@ -159,6 +164,7 @@ class Settings(BaseModel):
     # --- Hibrit (bulut/yerel) ses ayarları ---
     stt_provider: str = "auto"
     tts_provider: str = "auto"
+    stt_cloud_provider: str = "azure"
     groq_model: str = "whisper-large-v3-turbo"
     edge_tts_voice: str = "tr-TR-EmelNeural"
     edge_tts_rate: str = "+0%"
@@ -199,15 +205,44 @@ def get_groq_api_key() -> str | None:
     if from_env:
         return from_env
 
-    from_secrets = _read_key_from_secrets_file()
+    from_secrets = _read_from_secrets_file("groq_api_key")
     if from_secrets:
         return from_secrets
 
-    return _read_key_from_windows_environment()
+    return _read_from_windows_environment("GROQ_API_KEY")
 
 
-def _read_key_from_secrets_file() -> str | None:
-    """`config/secrets.yaml` içindeki `groq_api_key` alanını okur."""
+def get_azure_speech_credentials() -> tuple[str | None, str | None]:
+    """Azure Speech anahtarını ve bölgesini gizli kaynaklardan okur.
+
+    Groq anahtarıyla AYNI üç kaynağı aynı sırayla dener (bkz.
+    `get_groq_api_key`): ortam değişkeni → `config/secrets.yaml` →
+    Windows kayıt defteri. Son adım, `setx` ile kaydedilip zaten açık
+    olan terminale yansımayan değerleri de bulabilmek içindir.
+
+    Bölge gizli bir değer değildir ama anahtarla birlikte gitmesi
+    gerektiği için aynı yerden okunur; ikisinden biri eksikse bulut
+    tanıma kullanılamaz.
+
+    Returns:
+        (anahtar, bölge) çifti; bulunamayanlar None olur.
+    """
+
+    key = (
+        os.environ.get("AZURE_SPEECH_KEY", "").strip()
+        or _read_from_secrets_file("azure_speech_key")
+        or _read_from_windows_environment("AZURE_SPEECH_KEY")
+    )
+    region = (
+        os.environ.get("AZURE_SPEECH_REGION", "").strip()
+        or _read_from_secrets_file("azure_speech_region")
+        or _read_from_windows_environment("AZURE_SPEECH_REGION")
+    )
+    return key or None, region or None
+
+
+def _read_from_secrets_file(field: str) -> str | None:
+    """`config/secrets.yaml` içindeki bir alanı okur (dosya yoksa None)."""
 
     if not SECRETS_PATH.exists():
         return None
@@ -219,14 +254,14 @@ def _read_key_from_secrets_file() -> str | None:
         # Bozuk/okunamayan gizli dosya, uygulamayı çökertmemeli.
         return None
 
-    key = str(secrets.get("groq_api_key", "")).strip()
-    return key or None
+    value = str(secrets.get(field, "")).strip()
+    return value or None
 
 
-def _read_key_from_windows_environment() -> str | None:
-    """Windows kullanıcı ortam değişkenlerinden (kayıt defteri) anahtarı okur.
+def _read_from_windows_environment(variable: str) -> str | None:
+    """Windows kullanıcı ortam değişkenlerinden (kayıt defteri) bir değer okur.
 
-    `setx` ile kaydedilmiş ama bu sürecin ortamına yansımamış bir anahtarı
+    `setx` ile kaydedilmiş ama bu sürecin ortamına yansımamış bir değeri
     bulmak için son çare. Windows dışında sessizce None döner.
     """
 
@@ -237,13 +272,12 @@ def _read_key_from_windows_environment() -> str | None:
         import winreg  # lazy import: yalnızca Windows'ta vardır
 
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as env_key:
-            value, _ = winreg.QueryValueEx(env_key, "GROQ_API_KEY")
+            value, _ = winreg.QueryValueEx(env_key, variable)
     except (ImportError, OSError):
-        # Anahtar yok, erişilemiyor ya da Windows API kullanılamıyor.
+        # Değişken yok, erişilemiyor ya da Windows API kullanılamıyor.
         return None
 
-    key = str(value).strip()
-    return key or None
+    return str(value).strip() or None
 
 
 @lru_cache

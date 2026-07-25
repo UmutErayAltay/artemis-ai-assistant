@@ -120,8 +120,20 @@ stt_provider: "auto"
 # "local" seçilirse cevap metni de dışarı çıkmaz.
 tts_provider: "auto"
 
-# Bulut konuşma tanımada kullanılacak Groq modeli. API anahtarı BU DOSYADAN
-# GELMEZ, aşağıdaki güvenlik notuna bakın.
+# Bulut konuşma tanımada hangi servis kullanılacak: "azure" veya "groq".
+# Azure varsayılandır: Türkçesi güçlü ve ücretsiz kotası çok daha cömert
+# (ayda 5 saat; Groq'un kotası daha dardır). Seçilen servisin anahtarı
+# yoksa asistan BOZULMAZ — sessizce yerel Whisper'a düşer, yalnızca
+# doğruluk etkilenir.
+# NOT: Azure'un REST arayüzü ifade önceliklendirme (phrase list)
+# DESTEKLEMEZ; "League of Legends" gibi özel isimleri ayrıca öne çıkarmak
+# mümkün değil (o özellik yalnızca ağır Speech SDK'sında var). Groq ise
+# `prompt` üzerinden ipucu kabul eder. Hangisinin sizin sesinizde daha iyi
+# olduğunu deneyerek görün.
+stt_cloud_provider: "azure"
+
+# `stt_cloud_provider: "groq"` iken kullanılacak model. API anahtarı BU
+# DOSYADAN GELMEZ, aşağıdaki güvenlik notuna bakın.
 groq_model: "whisper-large-v3-turbo"
 
 # Microsoft Edge TTS ses adı. Türkçe seçenekler:
@@ -146,10 +158,14 @@ cloud_timeout_seconds: 15.0
 # beklerdi ve asistan kullanılamaz hale gelirdi (bkz. voice/router.py).
 cloud_failure_cooldown_seconds: 60.0
 
-# GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — Groq
-# API anahtarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.
-# Anahtar yalnızca şu iki kaynaktan okunur:
-#   1. GROQ_API_KEY ortam değişkeni (önerilen).
-#   2. config/secrets.yaml dosyasındaki groq_api_key alanı (bu dosya
-#      .gitignore'dadır, asla commit edilmez).
-# Bkz. config/settings.py::get_groq_api_key.
+# GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
+# anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.
+# Anahtarlar yalnızca şu üç kaynaktan, bu sırayla okunur:
+#   1. Ortam değişkeni (önerilen):
+#        GROQ_API_KEY
+#        AZURE_SPEECH_KEY + AZURE_SPEECH_REGION
+#   2. config/secrets.yaml dosyası (.gitignore'dadır, asla commit edilmez):
+#        groq_api_key / azure_speech_key / azure_speech_region
+#   3. Windows kayıt defteri — `setx` ile kaydedilmiş ama zaten açık olan
+#      terminale yansımamış değerleri de bulabilmek için son çare.
+# Bkz. config/settings.py::get_groq_api_key, get_azure_speech_credentials.
