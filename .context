@@ -1,0 +1,157 @@
+# Artemis — Proje Bağlamı (durum özeti)
+
+`CLAUDE.md` = "hızlıca doğru şeyi yap" talimatları.
+`README.md` = kronolojik sürüm geçmişi, her değişikliğin gerekçesi.
+**Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
+kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
+
+Son güncelleme: v1.2 denetim teslimatı (bkz. `README.md` bölüm 16).
+
+## 1) Artemis ne, tek cümleyle
+
+Yerel (offline-first), Ollama tabanlı, Türkçe konuşan bir masaüstü
+asistanı. LLM hiçbir zaman doğrudan işlem yapmaz; yalnızca kullanıcı
+niyetini bir JSON tool-call listesine çevirir, gerçek işi Python tarafı
+(`plugins/*.py`) yapar.
+
+## 2) Akış
+
+```
+kullanıcı metni
+  → OllamaLLMClient.get_tool_calls()   (core/llm_client.py)   [1 LLM çağrısı]
+  → TaskPlanner.execute_plan()         (core/planner.py)      [Python, LLM yok]
+  → ToolDispatcher.dispatch()          (core/dispatcher.py)   [Python, LLM yok]
+  → plugins/*.py execute()
+```
+
+**Plan üretimi tek seferliktir**: LLM tüm adımların argümanlarını baştan,
+tek bir çağrıda üretir. `TaskPlanner` bunları sırayla çalıştırır ama bir
+adımın SONUCUNU bir sonraki adımın argümanına enjekte ETMEZ. Yani bu bir
+"observe → replan" döngüsü (agentic loop) DEĞİL, bir "plan-and-execute"
+akışıdır. Bu bilinçli bir sadeleştirme — gerekçesi `core/planner.py`
+modül dokümantasyonunda.
+
+## 3) Ajanlara ihtiyaç var mı?
+
+**Hayır — mevcut kapsam için tek-model + planner doğru tercih.** Çoklu
+ajan (planlayıcı-ajan + yürütücü-ajan + eleştirmen-ajan gibi) her adımda
+birden fazla LLM çağrısı demek; yerel 7-8B modellerde bu gecikme bir
+masaüstü asistanı için kabul edilemez. Mevcut 20 tool da deterministik,
+tek adımda karar verilebilir işlemler — ayrı bir "ajan" gerektirecek
+özerklik ihtiyacı yok.
+
+Gerçek eksik "çoklu ajan" değil, **adımlar arası veri aktarımı** (§6.2).
+
+Not: `.claude/agents/artemis-worker.md` bambaşka bir şey — Artemis'in
+çalışma zamanıyla ilgisi yok; yalnızca bu repoda Claude Code ile
+geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
+
+## 4) Kod envanteri
+
+| Katman | Dosya | Durum |
+|---|---|---|
+| Tool sözleşmesi | `core/tool_base.py` | ✅ `BaseTool` + `ToolContext` DI |
+| Kayıt/keşif | `core/plugin_loader.py` | ✅ `@register_tool`, otomatik `pkgutil` taraması |
+| Giriş kapısı | `core/dispatcher.py` | ✅ tek nokta; onay kontrolü artık argümanları da taşıyor |
+| Çok adımlı yürütme | `core/planner.py` | ✅ sıralı; adımlar arası veri aktarımı YOK (§6.2) |
+| LLM istemcisi | `core/llm_client.py` | ✅ 4 katmanlı JSON güvencesi; şema artık **dizi** (§5.1) |
+| Prompt üretimi | `core/prompt_builder.py` | ✅ manifest otomatik enjekte (`.replace`, `.format` değil) |
+| Ollama yaşam döngüsü | `core/ollama_manager.py` | ✅ otomatik başlat/durdur, model seçimi, RAM yönetimi |
+| Sohbet döngüsü | `core/conversation_loop.py` | ✅ terminal I/O; onay ekranı artık argümanları gösteriyor |
+| Hafıza | `memory/context_memory.py` | ✅ SQLite k-v; `location: "last"` akışıyla plugin'lere bağlı |
+| Plugin: dosya sistemi | `plugins/filesystem_plugin.py` | ✅ 6 tool, testli, path-traversal'a karşı sertleştirilmiş |
+| Plugin: Windows | `plugins/windows_plugin.py` | ✅ 12 tool, testli |
+| Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
+| Plugin: app resolver | `plugins/_app_resolver.py` | ✅ registry + kısayol fuzzy-match, testli |
+| `skills/` | — | ⛔ bilinçli boş, karar verildi (§6.1) |
+| Browser / Mouse-Keyboard / MCP / Ses | — | ❌ henüz yok |
+
+**Toplam 20 tool**: `filesystem.*` (6), `windows.*` (12), `web.*` (2).
+
+Test durumu: **116 geçiyor, 2 atlanıyor** (v1.2 öncesi: 48 geçiyor,
+4 kırık). Atlanan ikisi `windows.set_volume` ve `windows.screenshot` —
+o oturumda masaüstü oturumuna erişilemiyorsa atlanıyor, kırılmıyor.
+
+## 5) v1.2'de düzeltilen iki sessiz hata (tekrar etmemesi için)
+
+Bu ikisi de "hiçbir test kırılmadan, hiçbir hata mesajı çıkmadan" yanlış
+davranan türdendi — bu yüzden burada kayıtlı.
+
+### 5.1) Şema, planner'ı kapatmıştı
+`_response_schema()` çıktıyı `type: object` ile kısıtlıyordu; grammar
+-constrained decoding yüzünden model liste ÜRETEMİYORDU. Yani v1.0'ın
+ana özelliği (çok adımlı planner) varsayılan konfigürasyonda hiç
+çalışmıyordu. Şema artık `type: array`.
+
+**Ders**: bir güvenilirlik katmanı eklerken, o katmanın başka bir
+özelliğin sözleşmesini daraltıp daraltmadığı kontrol edilmeli. Şema ile
+sistem promptu aynı sözleşmeyi konuşmak ZORUNDA.
+
+### 5.2) Onay ekranı neyi onayladığını söylemiyordu
+Onay, bu projenin tek güvenlik bariyeri. Ama yalnızca tool adı
+gösteriliyordu. `target` mutlak yol olursa pathlib tabanı attığı için
+(`Desktop / "C:/Windows/System32"` → `C:\Windows\System32`), kullanıcı
+"masaüstümde bir şey siliyorum" sanarak sistem klasörünü onaylayabilirdi.
+Artık hem argümanlar gösteriliyor hem de `target` mutlak yol/`..`
+içeremiyor.
+
+**Ders**: bir onay mekanizması, onaylanan şeyi göstermiyorsa güvenlik
+sağlamaz — yalnızca güvenlik hissi verir.
+
+### 5.3) Yol doğrulaması iki turda tamamlandı
+İlk sertleştirme mutlak yolu ve `..`'yi engelledi ama **kendine referans
+veren hedefi** kaçırdı: `target="."` + `location="desktop"`, `base / "."`
+pathlib'de `base`'e sadeleştiği için **masaüstü klasörünün tamamını**
+siliyordu (gerçek dispatcher üzerinde doğrulandı). Artık `target`,
+`location`'ın kendisine çözülemez — içindeki bir şeyi göstermek zorunda.
+
+**Ders**: "sandbox dışına çıkma"yı engellemek yetmez; "sandbox'ın
+KENDİSİNİ hedefleme"yi de engellemek gerekir. Bir yol doğrulayıcı
+yazarken üç sınıfı da düşünün: dışarı çıkan, yukarı çıkan, kendini
+gösteren.
+
+## 6) Verilmiş kararlar (yeniden tartışmadan önce buraya bakın)
+
+### 6.1) `skills/` çerçevesi kurulmayacak
+v0.1'den beri açık olan soru v1.2'de kapatıldı: `TaskPlanner` zaten tool
+zincirleme işini yapıyor; sabit skill'ler ikinci ve gereksiz bir yol
+olurdu. Tam gerekçe ve **hangi iki koşulda geri açılacağı**
+`skills/README.md`'de.
+
+### 6.2) Adımlar arası veri aktarımı eklenmedi
+"1. adımın çıktısını 2. adıma argüman ver" (örn. "ekran görüntüsü al ve
+şu klasöre taşı") desteklenmiyor. Gerekçe: küçük yerel modellerin
+adım-bağımlı akıl yürütmeyi güvenilir yapabildiği HENÜZ gözlemlenmedi.
+Eklenecekse doğru yer `TaskPlanner` (skills değil) ve önce modelin bunu
+gerçekten becerdiği doğrulanmalı — varsayımla değil.
+
+### 6.3) `location` tam yol kabul etmeye devam ediyor
+Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
+tam yol alabilmesi şemada belgelenmiş, bilinçli bir özellik.
+
+## 7) Bilinen boşluklar / sıradaki işler
+
+1. **Argüman şeması doğrulanmıyor.** `models/tool_models.py` docstring'i
+   "dispatcher argümanları bu modeller üzerinden doğrulayabilir" diyor
+   ama dispatcher yalnızca `ToolCall` zarfını doğruluyor — tool'un
+   `get_arguments_schema()`'sına karşı doğrulama YOK. Eksik zorunlu
+   argüman, tool'un içinde ham `KeyError` olup dispatcher'ın genel
+   yakalayıcısına düşüyor ve kullanıcı "Beklenmeyen hata: 'target'"
+   görüyor. Merkezi bir doğrulama, hem bu mesajı düzeltir hem LLM'e
+   düzeltilebilir bir geri bildirim verir. (Belgelenmiş ama
+   implemente edilmemiş bir vaat — ya yapılmalı ya docstring düzeltilmeli.)
+2. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
+   `mcp_plugin.py`, `voice/stt.py`, `voice/tts.py`. Hepsi aynı `BaseTool`
+   şablonuyla, çekirdeği bozmadan eklenebilir.
+3. **Gerçek Ollama ile uçtan uca doğrulama yapılmadı.** Tüm testler sahte
+   `ollama.chat` ile çalışıyor. Özellikle §5.1'deki dizi-şema
+   düzeltmesinin GERÇEK bir modelde çok adımlı plan ürettirip
+   ürettirmediği, `python main.py --chat` ile doğrulanmalı. Ollama
+   kurulu (v0.32.1) ama testler sırasında çalışmıyordu.
+4. **Repo'da hiç commit yok.** Tüm dosyalar untracked; `.gitignore`
+   hazır ve doğru (log/db hariç tutuluyor).
+
+## 8) Güncelleme notu
+
+Mimariye yeni bir katman eklendiğinde, bir karar değiştiğinde veya §7'deki
+bir boşluk kapandığında bu dosyayı elle güncelleyin.

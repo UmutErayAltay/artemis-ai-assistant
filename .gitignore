@@ -1,0 +1,23 @@
+# Sanal ortam (varsa) — binlerce paket dosyası; bunlar git/VS Code
+# tarafından izlenirse "10000+ changes" gibi anormal şişmelere yol açar.
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache/derlenmiş dosyalar
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Artemis'e özel: log ve hafıza dosyaları versiyon kontrolüne girmemeli
+logs/*.log
+memory/*.db
+
+# IDE / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

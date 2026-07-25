@@ -1,0 +1,26 @@
+# Artemis örnek konfigürasyonu.
+# Burada tanımlanmayan alanlar için config/settings.py::Settings
+# sınıfındaki varsayılanlar kullanılır.
+
+ollama_model: "llama3.1"
+# Not: `python main.py --chat` artık başlangıçta kurulu modelleri
+# listeleyip interaktif seçim sunuyor (core/ollama_manager.py); bu alan
+# yalnızca ileride eklenecek interaktif olmayan/otomasyon senaryoları
+# için bir yedek (fallback) değerdir.
+
+# True yaparsanız Ollama'nın native tools=[...] (function-calling) mekanizması
+# denenir; modeliniz desteklemiyorsa otomatik olarak metin+şema tabanlı
+# akışa düşülür (bkz. core/llm_client.py modül dokümantasyonu).
+use_native_tool_calling: false
+
+# Model, son kullanımdan bu süre sonra RAM'den otomatik boşaltılır.
+# RAM kısıtlıysa (sesli asistan gibi arka planda uzun süre bekleyen
+# kullanımlarda önerilir) "30s" veya "1m" gibi kısa bir değer kullanın.
+# Aktif kullanımda hız öncelikliyse "5m"/"30m" gibi uzun tutun.
+# "0" = her cevaptan hemen sonra boşalt, "-1" = hiç boşaltma.
+ollama_keep_alive: "1m"
+
+# Tool'ların kendi danger_level'i zaten temel korumayı sağlar; bu liste
+# operasyonel olarak ek/geçici bir kısıtlama eklemek istendiğinde,
+# kod değiştirmeden burada tool adı belirtmek için vardır.
+dangerous_tools: []

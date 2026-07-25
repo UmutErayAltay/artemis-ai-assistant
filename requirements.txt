@@ -1,0 +1,18 @@
+# --- v0.1 çekirdek ---
+pydantic>=2.7
+PyYAML>=6.0
+pytest>=8.0
+
+# --- LLM bağlantısı (bu teslimatta implemente edildi) ---
+ollama>=0.3
+
+# --- windows_plugin.py (bu teslimatta implemente edildi) ---
+psutil>=5.9
+pyautogui>=0.9.54
+pywin32>=306 ; sys_platform == "win32"
+
+# --- Sonraki fazlarda plugin eklendikçe eklenecek (henüz kullanılmıyor) ---
+# keyboard          # mouse_keyboard_plugin.py
+# mouse             # mouse_keyboard_plugin.py
+# openai-whisper    # voice/stt.py
+# piper-tts         # voice/tts.py  (veya pyttsx3)
