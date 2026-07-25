@@ -29,6 +29,99 @@ import difflib
 import os
 from pathlib import Path
 
+# Başlat Menüsü'nde bulunan ama kimsenin sesli olarak "aç" demeyeceği
+# kalabalık: geliştirici araçları, dokümantasyon, kaldırıcılar, sistem
+# yönetim panelleri. Bunlar `known_app_names()` dışında bırakılır çünkü
+# Whisper'a verilecek sözlüğün (hotwords) token bütçesi sınırlıdır ve
+# gerçek uygulama adlarını seyreltirler.
+_VOCABULARY_NOISE_MARKERS: tuple[str, ...] = (
+    "documentation",
+    "samples",
+    "manuals",
+    "module docs",
+    "uninstall",
+    "verifier",
+    "command prompt",
+    "powershell",
+    "release notes",
+    "yardım",
+    "tools for",
+    "software development kit",
+    "installation center",
+    "cert kit",
+    "debuggable",
+    "visual profiler",
+    "browse ",
+    "check for",
+    "reset ",
+    "configuration",
+    "management",
+    "monitor",
+    "recorder",
+    "scheduler",
+    "administrative",
+    "app recovery",
+    "disk cleanup",
+    "firewall",
+    "remote desktop",
+    "sql server",
+    "windows app",
+)
+
+_VOCABULARY_NOISE_EXACT: frozenset[str] = frozenset(
+    {
+        # Windows'un yerleşik erişilebilirlik/yönetim araçları: `windows.*`
+        # tool'larıyla zaten yapılabilen işler, sesli komutta uygulama adı
+        # olarak geçmezler.
+        "magnify",
+        "narrator",
+        "voiceaccess",
+        "livecaptions",
+        "character map",
+        "event viewer",
+        "task manager",
+        "services",
+        "dfrgui",
+        "recoverydrive",
+        "iscsi initiator",
+        "explorer",
+        "notepad",
+        "calculator",
+    }
+)
+"""Tam adı bu kümede olan kısayollar sözlüğe alınmaz. `_VOCABULARY_NOISE_MARKERS`
+alt-dizge bakar; burası ise yalnızca birebir eşleşenleri eler (örn. "services"
+elenirken "steelseries gg" korunur)."""
+
+_MAX_VOCABULARY_WORDS = 4
+"""Bundan daha çok sözcüklü kısayol adları sözlüğe alınmaz — bunlar
+neredeyse her zaman araç/doküman girdileridir ("x64 native tools command
+prompt for vs 2022" gibi)."""
+
+# Günlük konuşmada "…'ı aç" denmesi en olası uygulamalar. Sözlükte yer
+# DARDIR (bkz. `known_app_names` docstring'indeki ölçüm), bu yüzden
+# sıralama önemlidir: bunlar kuruluysa listeye önce girer.
+_COMMONLY_SPOKEN_APPS: tuple[str, ...] = (
+    "discord",
+    "steam",
+    "valorant",
+    "chrome",
+    "brave",
+    "spotify",
+    "riot client",
+    "league of legends",
+    "epic games launcher",
+    "battle.net",
+    "ubisoft connect",
+    "obs studio",
+    "telegram",
+    "whatsapp",
+    "visual studio code",
+    "word",
+    "excel",
+    "notepad++",
+)
+
 _ALIASES: dict[str, str] = {
     "lol": "league of legends",
     "league": "league of legends",
@@ -150,6 +243,67 @@ class AppResolver:
                     continue
                 if target:
                     self._shortcut_index[lnk_path.stem.lower()] = Path(target)
+
+    def known_app_names(self, limit: int = 15) -> list[str]:
+        """Konuşma tanımaya ipucu olarak verilecek uygulama adlarını döndürür.
+
+        Bu, ses tanımanın en zayıf noktasının çözümüdür: "Discord",
+        "Riot Client", "Valorant" gibi YABANCI ÖZEL İSİMLER Türkçe bir
+        modele göre sözlük dışıdır ve "Biyot Cilent", "Dischord" gibi
+        çevrilir. Whisper'a `hotwords` olarak kullanıcının GERÇEKTEN
+        kurulu uygulamalarının adları verildiğinde bu isimler doğru
+        tanınır (ölçüldü: "Biyot Cilent" -> "Riot Client").
+
+        Liste, Başlat Menüsü taramasından üretilir; geliştirici araçları
+        ve dokümantasyon girdileri (`_VOCABULARY_NOISE_MARKERS`) ayıklanır.
+
+        SINIR NEDEN BU KADAR DÜŞÜK (varsayılan 15)? Çünkü "ne kadar çok
+        isim, o kadar iyi" DEĞİL — tersi. Aynı ses klipleriyle ölçüldü:
+
+            söylenen          ipucu yok      6 ad        15 ad       45 ad
+            "Discord'u aç"    bozuk          discord ✓   discord ✓   "distrodoge" ✗
+            "Valorant'ı aç"   "balorantı"    "balorantı" valorant ✓  "balorantı" ✗
+
+        Uzun listeler kod çözücüyü seyreltip birbirine karışmış çıktılar
+        ("distrodoge", "stamiac") üretiyor. Bu yüzden liste hem kısa
+        tutulur hem de günlük konuşmada geçme olasılığına göre sıralanır
+        (`_COMMONLY_SPOKEN_APPS`), alfabetik/uzunluk sırasına göre değil.
+
+        Args:
+            limit: Döndürülecek en fazla ad sayısı. 15'in belirgin biçimde
+                üstüne çıkarmak tanımayı KÖTÜLEŞTİRİR (yukarıdaki ölçüm).
+
+        Returns:
+            Önce yaygın olarak sesli söylenen uygulamalar, sonra kalanlar.
+            Başlat Menüsü taranamadıysa (pywin32 yoksa) yalnızca bilinen
+            sistem komutları ve takma adlar döner.
+        """
+
+        candidates: set[str] = set(_SYSTEM_COMMANDS)
+        candidates.update(_ALIASES.values())
+
+        self._ensure_shortcut_index()
+        for raw_name in self._shortcut_index or {}:
+            if self._is_vocabulary_noise(raw_name):
+                continue
+            candidates.add(raw_name)
+
+        def priority(name: str) -> tuple[int, int, str]:
+            # 0 = yaygın konuşulan uygulama (kuruluysa öne alınır), 1 = diğer.
+            common = 0 if any(app in name for app in _COMMONLY_SPOKEN_APPS) else 1
+            return (common, len(name), name)
+
+        return sorted(candidates, key=priority)[:limit]
+
+    @staticmethod
+    def _is_vocabulary_noise(name: str) -> bool:
+        """Bir kısayol adının ipucu sözlüğüne alınmaması gerekip gerekmediğini söyler."""
+
+        if name in _VOCABULARY_NOISE_EXACT:
+            return True
+        if len(name.split()) > _MAX_VOCABULARY_WORDS:
+            return True
+        return any(marker in name for marker in _VOCABULARY_NOISE_MARKERS)
 
     def _search_shortcuts(self, name: str) -> Path | None:
         self._ensure_shortcut_index()

@@ -26,6 +26,13 @@ Kurallar:
    Kullanıcı tek komutta birden fazla işlem istiyorsa, sırayla
    çalıştırılacak adımları aynı listeye sırasıyla ekle.
 3. Aşağıdaki listede OLMAYAN bir tool ismi asla uydurma.
+   Sık karışan durum — uygulama mı, web sitesi mi:
+   - Kullanıcı bir program/oyun adı söyleyip "aç"/"başlat" diyorsa
+     (örn. "League of Legends aç", "Discord'u aç") → `windows.launch_app`
+   - `web.open_url` YALNIZCA gerçek bir web adresi söylendiğinde
+     (örn. "github.com'u aç") kullanılır.
+   - Konuşma tanıma hatalı olabilir; tanımadığın bir ad gördüğünde onu
+     bir web adresi SANMA, büyük olasılıkla bir uygulama adıdır.
 4. Argümanları, ilgili tool'un şemasına birebir uydur.
 5. "delete", "shutdown", "restart", "format", "registry", "service"
    içeren tool'lar zaten sistem tarafından onay istenerek çalıştırılır;

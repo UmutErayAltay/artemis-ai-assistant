@@ -29,5 +29,18 @@ dev = ["pytest>=8.0"]
 pythonpath = ["."]
 testpaths = ["tests"]
 
+# `disruptive` işaretli testler, çalıştırıldıkları GERÇEK bilgisayarı
+# gözle görülür biçimde etkiler: ekranı kilitler, sesi kapatır vb.
+# Bunlar VARSAYILAN OLARAK ÇALIŞTIRILMAZ — `pytest` yazan biri (veya bir
+# IDE'nin test paneli, ya da bir CI adımı) makinesinin kilitlenmesini
+# beklemez. Kasıtlı olarak çalıştırmak için:
+#
+#     pytest -m disruptive          # yalnızca bunlar
+#     pytest -m ""                  # işaret filtresini tamamen kaldır
+addopts = "-m 'not disruptive'"
+markers = [
+    "disruptive: çalıştırıldığı gerçek makineyi etkiler (ekran kilidi, ses kapatma). Varsayılan olarak atlanır.",
+]
+
 [tool.setuptools.packages.find]
 include = ["core*", "config*", "models*", "memory*", "plugins*", "utils*"]

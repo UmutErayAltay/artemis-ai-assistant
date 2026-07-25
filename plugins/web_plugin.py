@@ -121,7 +121,11 @@ class WebOpenUrlTool(BaseTool):
     """
 
     name = "web.open_url"
-    description = "Verilen URL'yi varsayılan tarayıcıda açar."
+    description = (
+        "Verilen bir web ADRESİNİ (URL) tarayıcıda açar — örn. 'github.com'. "
+        "YALNIZCA kullanıcı gerçekten bir site/adres söylediğinde kullanılır; "
+        "kurulu bir uygulamayı veya oyunu başlatmak için windows.launch_app kullanın."
+    )
     danger_level = DangerLevel.SAFE
 
     def get_arguments_schema(self) -> dict[str, Any]:

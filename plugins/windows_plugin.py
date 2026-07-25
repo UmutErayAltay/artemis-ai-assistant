@@ -14,8 +14,10 @@ senaryolarda gereksiz RAM ayak izini önlemeyi sağlar.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
+import time
 from datetime import datetime
 from typing import Any
 
@@ -44,7 +46,11 @@ class WindowsLaunchAppTool(BaseTool):
     """
 
     name = "windows.launch_app"
-    description = "Bir uygulamayı açar."
+    description = (
+        "Bilgisayarda KURULU bir uygulamayı veya oyunu başlatır "
+        "(örn. Discord, Steam, Valorant, League of Legends, Chrome, not defteri). "
+        "Kullanıcı bir program/oyun adı söyleyip 'aç' veya 'başlat' dediğinde BU kullanılır."
+    )
     danger_level = DangerLevel.SAFE
 
     def get_arguments_schema(self) -> dict[str, Any]:
@@ -89,12 +95,114 @@ class WindowsLaunchAppTool(BaseTool):
         )
 
 
+_GRACEFUL_CLOSE_WAIT_SECONDS: float = 2.0
+"""`_send_graceful_close` ile `WM_CLOSE` gönderildikten sonra, hâlâ ayakta
+olan kök süreçleri zorla kapatmadan (`terminate()`) önce beklenecek süre
+(saniye). Uygulamaya kendi kapanma akışını (oturum/sekme kaydetme gibi)
+tamamlaması için makul bir pay tanır. Testler bu süreyi hızlandırmak
+isterse modülü monkeypatch'leyebilir."""
+
+
+def _is_root_process(proc: Any, matched_pids: set[int]) -> bool:
+    """`proc`, `matched_pids` kümesindeki başka bir sürecin ÇOCUĞU mu?
+
+    Modern uygulamalar (örn. Chromium tabanlı tarayıcılar) tek başlatmada
+    10+ süreç açabilir; hepsini tek tek öldürmek yerine yalnızca KÖK
+    süreç hedeflenir (ana süreç kapanınca çocukları da kendiliğinden
+    kapanır). Bir sürecin üst sürecinin PID'i de `matched_pids` içindeyse
+    bu süreç çocuktur. Üst sürece erişilemiyorsa (zaten kapanmış ya da
+    yetki yok) güvenli tarafta kalınıp KÖK sayılır.
+    """
+
+    import psutil
+
+    try:
+        parent = proc.parent()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return True
+
+    if parent is None:
+        return True
+
+    return parent.pid not in matched_pids
+
+
+def _send_graceful_close(pids: set[int], logger: logging.Logger) -> None:
+    """Verilen PID'lere ait görünür ana pencerelere `WM_CLOSE` gönderir.
+
+    Bu, `terminate()` (TerminateProcess) ile zorla öldürmek yerine
+    uygulamanın kendi kapanma akışını (oturum kaydetme, "kaydetmek ister
+    misiniz?" diyaloğu gibi) çalıştırmasına izin verir. `pywin32` kurulu
+    değilse (örn. Windows dışı bir test ortamı) sessizce hiçbir şey
+    yapmadan döner — çağıran taraf (Adım 4) hâlâ ayakta kalan süreçleri
+    zaten zorla kapatacaktır.
+    """
+
+    if not pids:
+        return
+
+    try:
+        import win32con
+        import win32gui
+        import win32process
+    except ImportError:
+        return
+
+    def _on_window(hwnd: int, _extra: Any) -> None:
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:  # noqa: BLE001 - pencere bu sırada kapanmış olabilir
+            return
+        if pid in pids:
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+
+    try:
+        win32gui.EnumWindows(_on_window, None)
+    except Exception as exc:  # noqa: BLE001 - numaralandırma ortama göre başarısız olabilir
+        logger.debug("Pencereler numaralandırılırken hata oluştu (zorla kapatmaya geçilecek): %s", exc)
+
+
 @register_tool
 class WindowsCloseAppTool(BaseTool):
-    """Adı eşleşen çalışan süreçleri (process) sonlandırır."""
+    """Adı eşleşen çalışan süreçleri önce NAZİKÇE, gerekirse ZORLA kapatır.
+
+    Akış:
+      1) İsim alt-dizgesiyle eşleşen tüm süreçler bulunur (hemen
+         öldürülmez, önce bir listede toplanır).
+      2) Yalnızca KÖK süreçler hedeflenir (bkz. `_is_root_process`) —
+         üst süreci de eşleşenler arasında olan bir süreç ÇOCUKTUR ve
+         ayrıca hedeflenmez.
+      3) Kök süreçlerin görünür ana pencerelerine `WM_CLOSE` gönderilir
+         (bkz. `_send_graceful_close`); bu, uygulamanın kendi kapanma
+         akışını (oturum/sekme kaydetme gibi) çalıştırmasına izin verir.
+         `pywin32` yoksa bu adım sessizce atlanır.
+      4) `_GRACEFUL_CLOSE_WAIT_SECONDS` kadar beklenir; hâlâ ayakta olan
+         kök süreçler `terminate()` ile zorla kapatılır. Erişim reddi/
+         süreç zaten yoksa DEBUG seviyesinde loglanır (korumalı yardımcı
+         süreçler için bu normaldir, log'u WARNING ile kirletmez).
+      5) Sonuç dürüstçe raporlanır: kaç uygulamanın nazikçe/zorla
+         kapandığı, benzersiz uygulama adlarıyla özetlenir (ham PID/süreç
+         listesi kullanıcıya basılmaz, `data` alanında ayrıntı olarak
+         kalır).
+
+    Neden `danger_level = SAFE`: eskiden bu tool doğrudan `terminate()`
+    (TerminateProcess) çağırıyordu; bu, uygulamaya kaydetme şansı
+    tanımadığı için sessiz veri kaybına yol açabiliyordu. Artık önce
+    nazik kapatma (`WM_CLOSE`) denendiği için uygulama -destekliyorsa-
+    kendi kaydetme/onay akışını çalıştırabiliyor; zorla kapatma yalnızca
+    uygulama makul bir süre içinde yanıt vermediğinde devreye giriyor.
+    Bu yüzden kullanıcı onayı gerektirmiyor.
+    """
 
     name = "windows.close_app"
-    description = "Bir uygulamayı kapatır."
+    description = (
+        "Bir uygulamayı kapatır: önce ana penceresine kapanma sinyali "
+        "gönderip uygulamanın kendi kapanma akışını (kaydetme/onay "
+        "diyaloğu gibi) çalıştırmasına fırsat tanır, kısa bir "
+        "bekleyişin ardından hâlâ açık kalan süreçleri zorla kapatır."
+    )
     danger_level = DangerLevel.SAFE
 
     def get_arguments_schema(self) -> dict[str, Any]:
@@ -107,22 +215,70 @@ class WindowsCloseAppTool(BaseTool):
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         import psutil
 
-        query = arguments["name"].lower()
-        closed = []
+        query_name = arguments["name"]
+        query = query_name.lower()
 
-        for proc in psutil.process_iter(["pid", "name"]):
-            proc_name = (proc.info.get("name") or "").lower()
-            if query in proc_name:
-                try:
-                    proc.terminate()
-                    closed.append(proc.info["name"])
-                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                    context.logger.warning("Süreç kapatılamadı (%s): %s", proc.info.get("name"), exc)
+        # Adım 1: eşleşen tüm süreçleri topla, hemen öldürme.
+        matches = [
+            proc
+            for proc in psutil.process_iter(["pid", "name"])
+            if query in (proc.info.get("name") or "").lower()
+        ]
+
+        if not matches:
+            return ToolResult(success=False, message=f"'{query_name}' ile eşleşen çalışan süreç bulunamadı.")
+
+        # Adım 2: yalnızca kök süreçleri hedefle (çocukları ayrıca öldürme).
+        matched_pids = {proc.pid for proc in matches}
+        roots = [proc for proc in matches if _is_root_process(proc, matched_pids)]
+        root_pids = {proc.pid for proc in roots}
+
+        # Adım 3: nazikçe kapatmayı dene (pywin32 yoksa sessizce atlanır).
+        _send_graceful_close(root_pids, context.logger)
+
+        # Adım 4: kısa bir süre bekle, hâlâ ayakta olanları zorla kapat.
+        time.sleep(_GRACEFUL_CLOSE_WAIT_SECONDS)
+
+        closed: list[dict[str, Any]] = []
+        for proc in roots:
+            proc_name = proc.info.get("name") or str(proc.pid)
+            try:
+                if not proc.is_running():
+                    closed.append({"pid": proc.pid, "name": proc_name, "method": "graceful"})
+                    continue
+                proc.terminate()
+                closed.append({"pid": proc.pid, "name": proc_name, "method": "forced"})
+            except psutil.NoSuchProcess:
+                closed.append({"pid": proc.pid, "name": proc_name, "method": "graceful"})
+            except psutil.AccessDenied as exc:
+                context.logger.debug(
+                    "Süreç kapatılamadı (korumalı bir yardımcı süreç olabilir): %s (pid=%s): %s",
+                    proc_name,
+                    proc.pid,
+                    exc,
+                )
 
         if not closed:
-            return ToolResult(success=False, message=f"'{arguments['name']}' ile eşleşen çalışan süreç bulunamadı.")
+            return ToolResult(
+                success=False,
+                message=f"'{query_name}' eşleşen süreçler bulundu ama hiçbiri kapatılamadı (erişim reddedildi).",
+                data={"matched_pids": sorted(matched_pids)},
+            )
 
-        return ToolResult(success=True, message=f"{len(closed)} süreç kapatıldı: {closed}", data={"closed": closed})
+        # Adım 5: dürüst ve okunabilir bir özet üret (ham süreç listesi değil).
+        graceful = [c for c in closed if c["method"] == "graceful"]
+        forced = [c for c in closed if c["method"] == "forced"]
+
+        parts = []
+        if graceful:
+            names = ", ".join(sorted({c["name"] for c in graceful}))
+            parts.append(f"{len(graceful)} uygulama nazikçe ({names})")
+        if forced:
+            names = ", ".join(sorted({c["name"] for c in forced}))
+            parts.append(f"{len(forced)} uygulama zorla ({names})")
+
+        message = f"'{query_name}' kapatıldı: {', '.join(parts)}."
+        return ToolResult(success=True, message=message, data={"closed": closed})
 
 
 @register_tool

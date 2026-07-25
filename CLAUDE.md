@@ -100,6 +100,16 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
 - Windows'a özgü davranış (registry, win32gui, ctypes.windll) test
   edilecekse `@pytest.mark.skipif(sys.platform != "win32", ...)` ile
   işaretle (bkz. `tests/test_windows_plugin.py`).
+- **Testin çalıştığı GERÇEK makineyi etkileyen hiçbir şey varsayılan
+  olarak çalışmamalı.** Ekran kilitleme, ses açma/kapatma, uygulama
+  başlatma, dosya açma gibi gözle görülür yan etkileri ya monkeypatch ile
+  engelle (bkz. `os.startfile` deseni) ya da `@pytest.mark.disruptive`
+  ile işaretle — bu işaretliler `pytest`'te otomatik atlanır
+  (`pyproject.toml::addopts`), bilinçli çalıştırmak için `pytest -m disruptive`.
+  Gerekçe: `windows.lock` testi bir dönem varsayılan olarak çalışıyordu ve
+  her test turunda geliştiricinin ekranı kilitleniyordu. Yan etkisi geri
+  alınabilir olanlar (ses kapatma gibi) testin sonunda eski haline
+  döndürülmeli.
 - LLM/Ollama'ya bağımlı testler gerçek sunucu gerektirmemeli — `ollama`
   modülünü `monkeypatch.setitem(sys.modules, "ollama", fake_module)` ile
   sahte bir modülle değiştir (bkz. `tests/test_llm_client.py`,

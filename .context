@@ -64,13 +64,28 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
 | Plugin: app resolver | `plugins/_app_resolver.py` | ✅ registry + kısayol fuzzy-match, testli |
 | `skills/` | — | ⛔ bilinçli boş, karar verildi (§6.1) |
-| Browser / Mouse-Keyboard / MCP / Ses | — | ❌ henüz yok |
+| Arayüz (overlay) | `ui/overlay.py` | ✅ PyQt6, Siri benzeri, 4 durum, sese tepkili dalga formu |
+| Arayüz (kısayol/tepsi) | `ui/hotkey.py`, `ui/tray.py` | ✅ Windows global hotkey + tepsi simgesi |
+| Ses: mikrofon | `voice/audio.py` | ✅ 16kHz mono akış + RMS genlik |
+| Ses: uyandırma | `voice/wake_word.py` | ✅ enerji kapısı + Whisper tiny (Vosk ATILDI, §5.4) |
+| Ses: STT | `voice/stt.py`, `voice/stt_cloud.py` | ✅ yerel Whisper / Groq |
+| Ses: TTS | `voice/tts.py`, `voice/tts_cloud.py` | ✅ yerel Piper / Microsoft Edge |
+| Ses: bulut-yerel geçişi | `voice/router.py` | ✅ dene-ve-düş + soğuma |
+| Ses: orkestrasyon | `core/voice_loop.py` | ✅ durum makinesi + geri besleme koruması |
+| Model indirme | `scripts/setup_voice.py` | ✅ stdlib-only, ~60MB (yalnızca Piper) |
+| Browser / Mouse-Keyboard / MCP | — | ❌ henüz yok |
 
 **Toplam 20 tool**: `filesystem.*` (6), `windows.*` (12), `web.*` (2).
 
-Test durumu: **116 geçiyor, 2 atlanıyor** (v1.2 öncesi: 48 geçiyor,
+Test durumu: **181 geçiyor, 2 atlanıyor** (v1.2 öncesi: 48 geçiyor,
 4 kırık). Atlanan ikisi `windows.set_volume` ve `windows.screenshot` —
 o oturumda masaüstü oturumuna erişilemiyorsa atlanıyor, kırılmıyor.
+
+`tests/test_voice_loop.py` özellikle önemlidir: tek tek modülleri değil,
+ARALARINDAKİ SÖZLEŞMEYİ test eder (voice_loop ↔ recorder/STT/TTS/planner
+↔ overlay). Sahte mikrofon/Whisper/Piper/Ollama kullanır ama dispatcher,
+planner ve filesystem_plugin GERÇEKTİR — testin sonunda gerçekten bir
+klasör oluşur ve onay kapısı gerçekten işler.
 
 ## 5) v1.2'de düzeltilen iki sessiz hata (tekrar etmemesi için)
 
@@ -110,6 +125,27 @@ KENDİSİNİ hedefleme"yi de engellemek gerekir. Bir yol doğrulayıcı
 yazarken üç sınıfı da düşünün: dışarı çıkan, yukarı çıkan, kendini
 gösteren.
 
+### 5.4) Vosk uyandırma sözcüğünü HİÇ tanıyamıyordu
+v2.0'da uyandırma Vosk küçük Türkçe modeliyle yapılıyordu. Ölçüm:
+"Artemis" → **"akdeniz"**. Üstelik grammar kısıtlaması her girdide boş
+string döndürüyordu ("artemiz sözlükte yok"). Yani özellik hiç
+çalışmıyordu ve hiçbir test bunu yakalamadı — çünkü testler sahte
+tanıyıcı kullanıyordu, gerçek modelin SÖZLÜĞÜNÜ kimse sorgulamamıştı.
+
+**Ders**: bir ses/dil modelini bağlarken "API doğru çağrılıyor mu"yu test
+etmek yetmez; modelin o kelimeyi ÜRETEBİLDİĞİNİ de doğrulamak gerekir.
+Bunu yapmanın ucuz yolu: TTS ile sentetik konuşma üretip tanıyıcıya vermek
+(bu projede tam olarak böyle yakalandı).
+
+### 5.5) "Daha çok ipucu daha iyi" sezgisi YANLIŞ çıktı
+Whisper'a verilen `hotwords` sözlüğü 45 ada çıkarıldığında tanıma
+BOZULDU ("distrodoge", "stamiac"); 15 adda en iyi sonuç alındı. Ayrıca
+"ünsüz iskeleti" eşleştirme fikri ölçülüp mevcut `difflib`'den kötü
+çıktığı için REDDEDİLDİ.
+
+**Ders**: bu alandaki değişiklikleri ölçmeden eklemeyin — sezgiye uyan
+bir "iyileştirme" sessizce zarar verebilir.
+
 ## 6) Verilmiş kararlar (yeniden tartışmadan önce buraya bakın)
 
 ### 6.1) `skills/` çerçevesi kurulmayacak
@@ -125,9 +161,36 @@ adım-bağımlı akıl yürütmeyi güvenilir yapabildiği HENÜZ gözlemlenmedi
 Eklenecekse doğru yer `TaskPlanner` (skills değil) ve önce modelin bunu
 gerçekten becerdiği doğrulanmalı — varsayımla değil.
 
+### 6.4) Sesli asistanda İKİ ayrı tanıma motoru (v2.0)
+Uyandırma sözcüğü gün boyu çalıştığı için en ucuz motor (Vosk küçük
+model, grammar-kısıtlı) kullanılır; gerçek komut yalnızca uyandıktan
+sonra, doğruluğun kritik olduğu yerde Whisper ile çözülür ve Whisper
+YALNIZCA o an belleğe alınır. Bu, `ollama_keep_alive` felsefesinin
+(README §10) ses tarafındaki karşılığıdır. Tek motora indirmek cazip
+görünebilir ama ikisi de kötü olur: Vosk komutlarda yetersiz doğru,
+Whisper sürekli çalıştırılamayacak kadar ağır.
+
+### 6.5) Sesli onay "şüphede reddet" kuralıyla çalışır
+Ses tanıma hata yapar ve onay istenen tool'lar geri alınamaz. Bu yüzden
+kural asimetriktir: **yalnızca net bir onay duyulursa devam edilir**;
+sessizlik/anlaşılmayan cevap/zaman aşımı/mikrofon hatası = RED. Bunu
+"hayır duyarsam dururum" şeklinde çevirmeyin — yanlış anlaşılan bir
+"hayır" işlemi ÇALIŞTIRIRDI.
+
 ### 6.3) `location` tam yol kabul etmeye devam ediyor
 Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
 tam yol alabilmesi şemada belgelenmiş, bilinçli bir özellik.
+
+## 6.6) Bu makineye özgü donanım notları (KOD HATASI DEĞİL)
+
+Aşağıdakiler Artemis'in hatası değildir; ileride "bu tool bozuk" diye
+araştırmaya girişilmesin diye kayıtlıdır.
+
+- **`windows.sleep` bu bilgisayarda çalışmaz.** Kullanıcının makinesinde
+  hall sensörü arızalı olduğu için uyku modu BIOS/donanım seviyesinde
+  devre dışı. Tool projede KALIYOR (başka makinelerde çalışır); bu
+  makinede başarısız olması beklenen davranıştır, düzeltilecek bir şey
+  yoktur.
 
 ## 7) Bilinen boşluklar / sıradaki işler
 

@@ -609,3 +609,400 @@ yazılı.
 - **`.claude/agents/artemis-worker.md`** (yeni): Claude Code'da mekanik
   işleri (test yazma, şablonu izleyerek tool ekleme) daha küçük/ucuz bir
   modele devretmek için proje kurallarını taşıyan bir alt-ajan tanımı.
+
+## 17) Sesli asistan ve Siri benzeri arayüz (v2.0)
+
+Artık `python main.py --voice` ile Artemis penceresiz, arka planda
+çalışır; **adını söylediğinizde** ekranın altında Siri benzeri bir
+pencere belirir.
+
+### a) Akış
+
+```
+"Artemis"  →  wake_word (Vosk)   ── uyanır ──▶  overlay belirir (fade-in)
+komut       →  stt (Whisper)      ── metin ──▶  overlay metni gösterir
+            →  llm_client (Ollama) ─ JSON ──▶  planner → dispatcher → tool
+cevap       →  tts (Piper)         ── ses ──▶  dalga formu konuşmayla canlanır
+            →  overlay kapanır (fade-out)
+```
+
+### b) Neden İKİ ayrı ses tanıma motoru?
+
+Bu, teslimatın en önemli tasarım kararı:
+
+- **Uyandırma sözcüğü GÜN BOYU çalışır** → en ucuz seçenek olmalı.
+  Vosk'un küçük Türkçe modeli (~50MB RAM) kullanılır ve tanıyıcı
+  **dilbilgisi (grammar) kısıtlamasıyla** yalnızca "artemis" varyantlarını
+  arayacak şekilde daraltılır — bu hem doğruluğu artırır hem işlemciyi
+  neredeyse boşta tutar.
+- **Komut tanıma yalnızca uyandıktan sonra, birkaç saniye çalışır** →
+  orada DOĞRULUK kritiktir, çünkü yanlış anlaşılan bir komut yanlış tool
+  çağrısı demektir. Bu yüzden çok daha doğru olan Whisper
+  (`faster-whisper`) kullanılır ve **yalnızca gerektiğinde** belleğe
+  alınır.
+
+Bu, projenin `ollama_keep_alive` felsefesinin (bölüm 10) ses tarafındaki
+karşılığıdır: ağır olanı sürekli değil, gerektiğinde yükle.
+
+### c) Sesli onay: "şüphede reddet"
+
+Tehlikeli tool'lar (`filesystem.delete`, `windows.shutdown`) sesli modda
+da onay ister — ama kural bilinçli olarak asimetriktir:
+
+> **Yalnızca NET bir onay duyulursa devam edilir.** Sessizlik,
+> anlaşılmayan cevap, zaman aşımı, mikrofon hatası — hepsi RED sayılır.
+
+Gerekçe: ses tanıma hata yapabilir ve bu işlemler geri alınamaz.
+"Hayır dediğini anlarsam dururum" kuralı, yanlış anlaşılan bir "hayır"da
+işlemi ÇALIŞTIRIRDI. Ayrıca onaylanacak işlem ve argümanları ekranda
+gösterilir (bkz. bölüm 16b — kör onay güvenlik açığıdır).
+
+### d) Geri besleme (feedback) koruması
+
+Artemis konuşurken mikrofon açıktır ve kendi sesini duyar. Önlem
+alınmazsa kendi "Artemis" deyişini duyup kendini uyandırır (sonsuz
+döngü). Bu yüzden konuşma boyunca ve sonrasında kısa bir soğuma süresi
+boyunca uyandırma algılaması susturulur (`core/voice_loop.py::_muted_until`).
+
+### e) Arayüz (`ui/overlay.py`)
+
+PyQt6 ile çerçevesiz, gerçek alfa-saydamlıklı, her zaman üstte bir
+pencere. Dört durumu farklı renk paletiyle gösterir: dinliyor
+(mavi→mor→pembe), düşünüyor (mor nabız), konuşuyor (mavi), hata
+(turuncu→kırmızı). Dalga formu gerçek mikrofon/hoparlör seviyesine göre
+canlanır.
+
+**Ses katmanı olmadan önizlemek için** (mikrofon/model gerekmez):
+
+```bash
+python -m ui.overlay
+```
+
+Arayüz katmanı bilinçli olarak "aptal"dır: ne mikrofon dinler ne karar
+verir, yalnızca dışarıdan sürülür. Böylece arayüz tamamen değiştirilse
+bile `core/` ve `voice/` katmanlarında değişiklik gerekmez.
+
+### f) İş parçacığı (thread) mimarisi
+
+Qt'de arayüze yalnızca ana iş parçacığından dokunulabilir; ses işleme ise
+bloklayıcıdır. Bu yüzden:
+
+- **Ana iş parçacığı**: Qt olay döngüsü, overlay çizimi, kısayol tuşu, tepsi simgesi
+- **Ses işçisi**: mikrofon okuma, uyandırma algılama, Whisper, Ollama, tool, Piper
+
+Ses işçisi arayüzü doğrudan çağırmaz; `ArtemisOverlay`'in public metotları
+Qt sinyali yayınlar ve Qt bunları otomatik olarak ana iş parçacığına
+kuyruklar. Bu yüzden overlay metotları her iş parçacığından güvenle
+çağrılabilir.
+
+Mikrofonu **tek bir yer** açar (`voice_loop._run`); onay dinlemesi gibi
+iç adımlar bu akışı paylaşır — aynı cihazı iki kez açmak bazı Windows
+ses sürücülerinde başarısız olur.
+
+### g) Kurulum
+
+```bash
+pip install -r requirements.txt
+python scripts/setup_voice.py    # Vosk + Piper modellerini indirir (~150MB)
+python main.py --voice
+```
+
+Modeller `voice_models/` altına iner ve `.gitignore`'dadır (repoya girmez).
+
+### h) Çift mod: uyandırma sözcüğü + kısayol
+
+`config.yaml::wake_word_enabled` ile sürekli dinleme kapatılabilir; bu
+durumda Artemis yalnızca kısayol tuşuyla (varsayılan `ctrl+alt+a`) veya
+tepsi simgesindeki "Şimdi dinle" ile çağrılır. Kısayol Windows'un
+`RegisterHotKey` API'siyle kaydedilir (`ui/hotkey.py`) — hangi uygulamada
+olursanız olun çalışır.
+
+Uygulama penceresiz çalıştığı için **sistem tepsisi simgesi**
+(`ui/tray.py`) tek görünür arayüzdür; çıkış oradan yapılır.
+
+### i) Bu teslimattaki bilinen sınırlar
+
+- ⚠️ **Uyandırma sözcüğü gerçek sesle doğrulanmadı.** "Artemis" bir özel
+  isimdir ve küçük Türkçe modelin sözlüğünde tam karşılığı olmayabilir;
+  model bunu "artemiz", "arte mis" gibi çevirebilir. Bu yüzden hem varyant
+  listesi hem bulanık eşleşme kullanılır ve varyantlar
+  `config.yaml::wake_words` ile genişletilebilir. Kendi telaffuzunuzda
+  neyin çıktığını görüp listeye eklemeniz gerekebilir.
+- ⚠️ Türkçe TTS sesi kurulu olmadığı için Piper tercih edildi; Windows'un
+  kendi Türkçe sesi (Tolga) kuruluysa ileride `pyttsx3` alternatifi
+  eklenebilir.
+
+## 18) Vosk atıldı, hibrit bulut/yerel ses geldi (v2.1)
+
+**Bildirilen sorun**: "Uygulamaların isimleri özel isim ve yabancı isim
+olduğu için çoğunu anlamıyor. Artemis'i de anlamıyor."
+
+Bu iki AYRI sorundu ve farklı katmanlarda çözüldü. Tahminle değil,
+ölçerek: kullanıcının sesi kullanılamadığı için **Piper ile Türkçe
+konuşma üretilip** motorlara verildi.
+
+### a) Uyandırma sözcüğü hiç çalışmıyordu (Vosk atıldı)
+
+Ölçüm:
+
+| Söylenen | Vosk küçük TR modeli | Whisper tiny + ipucu |
+|---|---|---|
+| "Artemis" | **"akdeniz"** ❌ | **"Artemis"** ✅ |
+
+Dahası, Vosk'un dilbilgisi (grammar) kısıtlaması **her girdide boş string
+döndürüyordu** (`"artemiz" sözlükte yok` uyarısıyla) — yani v2.0'daki
+uyandırma kodu fiilen hiçbir zaman uyanamıyordu. Modelin sözlüğü FST'ye
+derlenmiş olduğu için "artemis" gibi bir özel isim orada yoksa
+üretilemiyor; bu bir ayar meselesi değil, modelin sınırı.
+
+**Yeni tasarım**: Vosk tamamen kaldırıldı. Uyandırma artık **enerji
+kapısı + Whisper `tiny`**:
+
+- Önce ucuz bir RMS ölçümüyle konuşma olup olmadığına bakılır. Sessiz
+  odada Whisper **hiç çağrılmaz** — CPU maliyeti sıfırdır.
+- Konuşma bittiğinde biriken ses bir kez Whisper'a verilir.
+  Ölçüm: 0.81 sn'lik klip → **0.24 sn** tanıma.
+- **Ön-tampon (pre-roll)** şart: enerji eşiği aşıldığında "Ar-" hecesi
+  çoktan geçmiştir; öncesindeki birkaç blok saklanıp sesin başına eklenir.
+
+Yan fayda: bir bağımlılık ve 35MB model eksildi.
+
+### b) Uygulama isimleri: Whisper'a "ipucu sözlüğü" (hotwords)
+
+`faster-whisper`'ın `hotwords` parametresi, modele "bu sözcükler geçebilir"
+der. Sözlük **kullanıcının GERÇEKTEN kurulu uygulamalarından** üretilir
+(`AppResolver.known_app_names()`, Başlat Menüsü taraması) — sabit bir liste
+her makinede yanlış olurdu.
+
+**Beklenmedik bulgu — daha çok isim DAHA İYİ DEĞİL.** Aynı ses klipleriyle:
+
+| Söylenen | ipucu yok | 6 ad | 15 ad | 45 ad |
+|---|---|---|---|---|
+| "Discord'u aç" | bozuk | discord ✓ | discord ✓ | **"distrodoge"** ✗ |
+| "Valorant'ı aç" | "balorantı" | "balorantı" | **valorant ✓** | "balorantı" ✗ |
+
+Uzun listeler kod çözücüyü seyreltip birbirine karışmış çıktılar üretiyor.
+Bu yüzden sözlük **15 adla sınırlı** ve alfabetik/uzunluk yerine "günlük
+konuşmada geçme olasılığı"na göre sıralı. Başlat Menüsü'ndeki geliştirici
+araçları/dokümantasyon girdileri ayıklanıyor (175 kısayoldan 15'e).
+
+> Denenip **REDDEDİLEN** bir fikir: yanlış çevirileri kurtarmak için
+> "ünsüz iskeleti" eşleştirme (chrome→chrm, cehrum→chrm). Gerçek yanlış
+> çevirilere karşı ölçüldü ve mevcut `difflib` eşleşmesinden **daha kötü**
+> çıktı; eklenmedi. Ölçmeden eklenseydi sessizce zarar verecekti.
+
+### c) Hibrit: internet varsa bulut, yoksa yerel
+
+Kullanıcı kararı: *"%100 local olmak zorunda değiliz."* Bulut modelleri
+yabancı özel isimlerde belirgin biçimde daha iyi.
+
+```
+voice/
+├── stt.py        stt_cloud.py     # yerel Whisper   | Groq whisper-large-v3-turbo
+├── tts.py        tts_cloud.py     # yerel Piper      | Microsoft Edge (anahtarsız)
+└── router.py                      # kararı veren tek yer
+```
+
+**Yönlendirici neden "önce ping atıp internet var mı" BAKMIYOR**: bir
+bağlantı testi (a) her komuta gecikme ekler, (b) yanıltıcıdır — ping geçse
+bile anahtar geçersiz olabilir, servis 500 dönebilir. Yaklaşım "sor" değil
+**"dene"**: bulut denenir, herhangi bir hata olursa sessizce yerele düşülür.
+
+**Soğuma (cooldown) neden şart**: olmasaydı internet tamamen kapalıyken
+HER komut önce bulutun zaman aşımını (15 sn) beklerdi ve asistan
+kullanılamaz hale gelirdi. Bir hatadan sonra bulut 60 saniye atlanır.
+
+**Yan fayda**: bulut çalışırken yerel Whisper **hiç yüklenmez** — RAM
+maliyeti hiç ödenmez (sağlayıcılar fabrika olarak, tembel kurulur).
+
+Gerçek ağ üzerinde doğrulandı: Edge sentez+çözme 1.43 sn; bulut kasten
+bozulduğunda Piper devraldı ve soğuma devreye girdi.
+
+### d) `stt_provider` / `tts_provider`
+
+| Değer | Anlamı |
+|---|---|
+| `auto` (varsayılan) | Önce bulut, hata/internet yoksa yerele düş |
+| `cloud` | Yalnızca bulut; başarısız olursa dürüstçe hata ver (sessizce yerele düşmek kullanıcının tercihini çiğnerdi) |
+| `local` | Yalnızca yerel — ses/metin **hiçbir yere gönderilmez** |
+
+### e) GÜVENLİK: API anahtarı asla depoya girmez
+
+Bu depo **herkese açıktır** ve `config/config.yaml` git ile izlenir. Bu
+yüzden Groq anahtarı bilinçli olarak `Settings`/`config.yaml` üzerinden
+GELMEZ; yalnızca iki kaynaktan okunur (`config/settings.py::get_groq_api_key`):
+
+1. `GROQ_API_KEY` ortam değişkeni (önerilen)
+2. `config/secrets.yaml` — `.gitignore`'dadır
+
+Anahtar hiçbir log'a veya hata mesajına yazılmaz (bunun için ayrı test var).
+
+### f) `voice_enabled` ayarı gerçekten bağlandı
+
+`voice_enabled: false` "mikrofon hiç açılmaz" diye BELGELENMİŞTİ ama
+hiçbir kod onu okumuyordu — kullanıcı kapatsa bile mikrofon açılırdı.
+Artık `main_voice()` bunu Ollama'yı başlatmadan önce kontrol ediyor ve
+regresyon testi var.
+
+### g) Kurulum değişikliği
+
+```bash
+pip install -r requirements.txt
+python scripts/setup_voice.py     # artık YALNIZCA Piper (~60MB); Whisper
+                                   # modelleri ilk kullanımda otomatik iner
+setx GROQ_API_KEY "gsk_..."       # opsiyonel; yoksa her şey yerel çalışır
+python main.py --voice
+```
+
+### h) Bu teslimattaki bilinen sınırlar
+
+- ⚠️ **Tüm ölçümler Piper'ın SENTETİK sesiyle yapıldı**, gerçek insan
+  sesiyle değil. Piper İngilizce isimleri Türkçe fonetikle okuduğu için
+  ("Brave" → "Bravi") bazı vakalar gerçekte olduğundan zor görünüyor
+  olabilir. Yön doğru ama mutlak başarı oranı kendi sesinizle
+  denendiğinde farklı çıkacaktır.
+- ⚠️ Groq yolu **gerçek bir anahtarla denenmedi** (ortamda anahtar yoktu);
+  yalnızca sahte HTTP yanıtlarıyla test edildi.
+- ⚠️ Uyandırma sözcüğü hâlâ gerçek sesle doğrulanmadı; `config.yaml::wake_words`
+  listesine kendi telaffuzunuzda çıkanı ekleyebilirsiniz.
+
+## 19) İlk gerçek kullanımdan gelen düzeltmeler (v2.2)
+
+Asistan ilk kez gerçek bir makinede, gerçek sesle çalıştırıldı. Ortaya
+çıkan dört sorun — hepsi yalnızca sahada görülebilecek türden.
+
+### a) CUDA çökmesi: `device` açıkça geçilmiyordu (KRİTİK)
+
+```
+RuntimeError: Library cublas64_12.dll is not found or cannot be loaded
+```
+
+`voice/wake_word.py`, `WhisperModel`'i cihaz belirtmeden çağırıyordu.
+`faster-whisper`'ın varsayılanı **`device="auto"`**: makinede bir NVIDIA
+GPU görürse CUDA'yı seçer. Kullanıcıda GPU vardı ama CUDA çalışma
+kütüphaneleri kurulu değildi.
+
+Bu hatanın sinsi tarafı: model YÜKLENİRKEN değil, **ilk TANIMA sırasında**
+patlıyor. Yani her şey sorunsuz başlıyor, kullanıcı "Artemis" dediğinde
+çöküyor. (`voice/stt.py` `device="cpu"` geçtiği için güvendeydi —
+yalnızca uyandırma modülünde eksikti.)
+
+**Düzeltme**: cihaz artık her yerde AÇIKÇA geçilir, `whisper_device`
+ayarıyla ("cpu" varsayılan; CUDA kuruluysa "cuda"). `"auto"` kullanılmaz.
+
+### b) Tembel generator tuzağı
+
+`transcribe()` bir **generator** döndürür; asıl çıkarım segmentler
+tüketildiğinde çalışır. Bu yüzden yalnızca `transcribe()` çağrısını
+try/except'e almak yetmiyordu — hata `"".join(...)` satırında yüzeye
+çıkıyordu. İkisi de aynı bloğa alındı.
+
+### c) Tek bir tanıma hatası TÜM asistanı öldürüyordu
+
+`feed()` içindeki hata ses işçisi iş parçacığını sonlandırıyor, böylece
+kısayol tuşu ve tepsi menüsü dahil hiçbir şey kalmıyordu. Artık uyandırma
+onarılamaz biçimde bozulursa **kapatılır**, kullanıcıya "kısayolu
+kullanın" denir ve asistan çalışmaya devam eder. Hata döngü başına bir
+kez raporlanır (her ses bloğunda denemek log'u ve işlemciyi boğardı).
+
+### d) Ses kalitesi: gereksiz 16 kHz'e düşürme + kekemelik
+
+Kullanıcı geri bildirimi: *"Geri konuştuğu ses çok robotik ve takılıyor
+gibi."* İki ayrı sebep:
+
+1. **Gereksiz örnekleme düşürme**: Edge TTS 24 kHz üretiyor ama kod sesi
+   16 kHz'e indiriyordu — bant genişliğinin üçte biri çöpe gidiyordu.
+   16 kHz yalnızca Whisper'a GİRDİ verirken zorunludur; bu bir ÇIKTI.
+   Artık akışın kendi hızı korunuyor.
+2. **Çok küçük çalma tamponu**: `RawOutputStream` varsayılan düşük
+   gecikmeyle açılıyordu ve döngü her yazma arasında genlik hesaplıyordu;
+   tampon boşalıp ses kesik kesik çıkıyordu. Artık `latency="high"` ve
+   genlik yazmadan ÖNCE hesaplanıyor. (Aynı düzeltme yerel Piper'a da
+   uygulandı.)
+
+### e) "aç" → "such": sözlük tamamen İngilizceydi
+
+`hotwords` yalnızca İngilizce uygulama adlarından oluşunca kod çözücü
+İngilizceye kayıyordu. Ölçüm:
+
+| İpucu sözlüğü | "League of Legends aç" |
+|---|---|
+| yalnızca uygulama adları | "lagoi of **legansage**" |
+| + Türkçe komut sözcükleri | "lagoi of **legends, aç**" |
+
+Sözlüğe Türkçe komut fiilleri eklendi (`aç`, `kapat`, `oluştur`, `sil`…);
+hem fiil hem uygulama adı düzeliyor.
+
+### f) Yanlış tool seçimi: uygulama mı, site mi?
+
+"league of legends such" gibi bozuk bir girdide LLM `web.open_url`
+seçiyordu. Tool açıklamaları fazla kısaydı ("Bir uygulamayı açar." /
+"Verilen URL'yi açar.") ve küçük bir model için ayırt edici değildi.
+
+Açıklamalar örneklerle genişletildi ve sistem promptuna bir ayrım kuralı
+eklendi ("tanımadığın bir adı web adresi SANMA, muhtemelen bir uygulamadır").
+
+Kullanıcının kendi modeliyle (`llama3.1:8b`) doğrulandı — **5/5**:
+"League of Legends aç" → `windows.launch_app`, "github.com'u aç" →
+`web.open_url` (aşırı düzeltme yok).
+
+### g') Testler kullanıcının bilgisayarını kilitliyordu (GELİŞTİRME HATASI)
+
+Kullanıcı, geliştirme sırasında bilgisayarının sürekli kilit ekranına
+düştüğünü ve sesinin kapandığını bildirdi. Sebep testlerin kendisiydi:
+
+- `test_lock_workstation` → `windows.lock` çağırıp ekranı GERÇEKTEN kilitliyordu
+- `test_set_volume` → sesi GERÇEKTEN kapatıyor ve geri açmıyordu
+
+Bu testler her `pytest` çalıştırmasında koşuyordu. Artık
+`@pytest.mark.disruptive` işaretliler ve **varsayılan olarak
+çalıştırılmıyorlar** (`pyproject.toml::addopts = "-m 'not disruptive'"`).
+Bilinçli çalıştırmak için `pytest -m disruptive`. Ses testi ayrıca
+sessize aldığı sesi eski haline döndürüyor.
+
+Kural `CLAUDE.md`'ye eklendi: *gerçek makineyi gözle görülür biçimde
+etkileyen hiçbir şey varsayılan testte çalışmamalı.*
+
+### h) `windows.close_app` 12 süreci zorla öldürüyordu
+
+Kullanıcı "Brave'i kapat" dedi; tool ismi eşleşen HER süreci tek tek
+`terminate()` etti — Chromium 10+ süreç açtığı için 12 süreç, üstelik
+crash handler'lar dahil (onlar erişim reddi verip log'u kirletti).
+`terminate()` Windows'ta zorla sonlandırmadır: uygulamaya sekmelerini
+kaydetme şansı vermez.
+
+Yeni akış: (1) eşleşenleri bul, (2) yalnızca KÖK süreçleri seç (çocuklar
+zaten ana süreçle kapanır), (3) ana pencerelere `WM_CLOSE` gönderip
+uygulamanın kendi kapanma akışını çalıştırmasına izin ver, (4) kısa bir
+beklemeden sonra hâlâ yaşayanları zorla kapat.
+
+### i) `setx` ile kaydedilen API anahtarı "kayıtlı ama görünmez"di
+
+Kullanıcı `setx GROQ_API_KEY ...` çalıştırıp aynı pencereden Artemis'i
+başlattı; anahtar kayıt defterine yazılmıştı ama `setx` ZATEN AÇIK
+terminalleri etkilemediği için süreç onu göremiyordu. `get_groq_api_key()`
+artık son çare olarak Windows kullanıcı ortam değişkenlerini (kayıt
+defteri) de okuyor — terminali yeniden açmak gerekmiyor.
+
+### j) Log hangi ses sağlayıcısının kullanıldığını söylemiyordu
+
+"Ses neden robotik?" sorusu araştırılırken log'a bakıp bulut mu yerel mi
+kullanıldığını anlamanın yolu yoktu (yönlendirici yalnızca HATA durumunda
+yazıyordu). Artık sağlayıcı DEĞİŞTİĞİNDE bir INFO satırı yazılıyor
+("Ses sağlayıcı (TTS): bulut") — her çağrıda değil, yoksa log şişer.
+
+### k) Ses tonlaması ayarlanabilir oldu
+
+`edge_tts_rate` / `edge_tts_pitch` ayarları eklendi. Nöral seslerin
+robotik algılanmasının en yaygın sebebi fazla hızlı/düz okumadır;
+kullanıcının karşılaştırma yapabilmesi için Emel/Ahmet × normal/yavaş
+örnekleri üretildi. **Kullanıcı `Emel + normal`'ı seçti** — yani asıl
+sorun sesin kendisi değil, (d)'de düzeltilen 16 kHz düşürme ve
+kekemelikmiş; varsayılanlar değişmedi.
+
+### g) Arayüz: ne dediğiniz artık ekranda kalıyor
+
+Kullanıcı isteği: *"Dediklerimi Artemis yazısının altında gösterse daha
+iyi olabilir."* Döküm artık başlığın hemen altında, tırnak içinde ve
+**cevaptan ayrı bir satırda** duruyor; Artemis konuşurken de görünür
+kalır. Asistanın yanlış anladığı ancak böyle fark edilir.
