@@ -7,7 +7,8 @@ döngüsü (Whisper STT -> ... -> Piper/pyttsx3 TTS) eklenecektir;
 
 Kullanım:
     python main.py                # tek seferlik demo dispatch (LLM'siz)
-    python main.py --chat          # gerçek Ollama sohbet döngüsü
+    python main.py --chat          # gerçek Ollama sohbet döngüsü (terminal)
+    python main.py --voice         # sesli asistan: "Artemis" deyince ekrana gelir
     python main.py --stop-ollama   # RAM temizliği: yetim ollama süreçlerini kapatır
 """
 
@@ -131,6 +132,99 @@ def main_chat() -> None:
         server_manager.stop_if_we_started_it()
 
 
+def main_voice() -> None:
+    """`python main.py --voice`: sesli asistanı arka planda başlatır.
+
+    Artemis penceresiz çalışır; yalnızca adı söylendiğinde (veya kısayol
+    tuşuna basıldığında) ekranın altında Siri benzeri bir pencere belirir.
+    Uygulamayı kapatmak için sistem tepsisindeki simgeyi kullanın.
+
+    Ön koşullar:
+        1) `pip install -r requirements.txt`
+        2) `python scripts/setup_voice.py` (ses modellerini indirir)
+        3) Ollama kurulu ve en az bir model çekilmiş olmalı.
+    """
+
+    from PyQt6.QtWidgets import QApplication
+
+    from core.voice_loop import VoiceAssistant
+    from ui.hotkey import GlobalHotkey, HotkeyParseError
+    from ui.overlay import ArtemisOverlay
+    from ui.tray import ArtemisTray
+
+    dispatcher = bootstrap()
+    settings = dispatcher.settings
+
+    # `voice_enabled: false` "mikrofon hiç açılmaz" anlamına gelir; bu
+    # sözü tutmanın tek yolu ses işçisini hiç başlatmamaktır. Ollama'yı
+    # başlatmadan ÖNCE kontrol edilir ki gereksiz yere sunucu ayağa
+    # kalkmasın ve model seçimi sorulmasın.
+    if not settings.voice_enabled:
+        print(
+            "Sesli asistan config.yaml'da kapalı (voice_enabled: false).\n"
+            "Açmak için bu ayarı true yapın, ya da metin modunda çalıştırın:\n"
+            "    python main.py --chat"
+        )
+        return
+
+    server_manager = OllamaServerManager()
+
+    try:
+        server_manager.ensure_running()
+        selected_model = prompt_user_to_select_model(list_installed_models())
+    except OllamaUnavailableError as exc:
+        print(f"Artemis başlatılamadı: {exc}")
+        return
+
+    llm_client = OllamaLLMClient(
+        model=selected_model,
+        use_native_tool_calling=settings.use_native_tool_calling,
+        keep_alive=settings.ollama_keep_alive,
+    )
+
+    app = QApplication(sys.argv)
+    # KRİTİK: overlay gizlendiğinde son pencere kapanmış sayılır. Bu bayrak
+    # olmadan Qt, Artemis ilk kez sustuğu anda tüm uygulamayı kapatır.
+    app.setQuitOnLastWindowClosed(False)
+
+    overlay = ArtemisOverlay()
+    assistant = VoiceAssistant(dispatcher, llm_client, overlay, settings)
+
+    hotkey_text = settings.voice_hotkey
+    hotkey: GlobalHotkey | None = None
+    try:
+        hotkey = GlobalHotkey(hotkey_text, assistant.trigger)
+        app.installNativeEventFilter(hotkey)
+        if not hotkey.register():
+            hotkey = None
+    except HotkeyParseError as exc:
+        logger.warning("Kısayol ayarı geçersiz (%s); kısayol olmadan devam ediliyor.", exc)
+        hotkey = None
+
+    tray = ArtemisTray(
+        on_listen=assistant.trigger,
+        on_quit=app.quit,
+        hotkey_text=hotkey_text if hotkey else "",
+    )
+    tray.show()
+
+    assistant.start()
+
+    print("Artemis dinlemede. Adını söyleyin veya tepsi simgesinden 'Şimdi dinle' deyin.")
+    if hotkey:
+        print(f"Kısayol: {hotkey_text}")
+    print("Çıkmak için tepsi simgesine sağ tıklayıp 'Çıkış' deyin.")
+
+    try:
+        app.exec()
+    finally:
+        assistant.stop()
+        if hotkey is not None:
+            hotkey.unregister()
+        tray.hide()
+        server_manager.stop_if_we_started_it()
+
+
 def main_stop_ollama() -> None:
     """`python main.py --stop-ollama`: RAM temizliği için tüm ollama
     süreçlerini zorla sonlandırır (bkz. `core.ollama_manager.stop_all_ollama_processes`)."""
@@ -145,6 +239,8 @@ def main_stop_ollama() -> None:
 if __name__ == "__main__":
     if "--stop-ollama" in sys.argv:
         main_stop_ollama()
+    elif "--voice" in sys.argv:
+        main_voice()
     elif "--chat" in sys.argv:
         main_chat()
     else:

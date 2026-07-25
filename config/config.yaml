@@ -24,3 +24,132 @@ ollama_keep_alive: "1m"
 # operasyonel olarak ek/geçici bir kısıtlama eklemek istendiğinde,
 # kod değiştirmeden burada tool adı belirtmek için vardır.
 dangerous_tools: []
+
+# --- Sesli asistan ayarları ---
+# `python scripts/setup_voice.py` model dosyalarını indirir; burada
+# tanımlanmayan yollar için config/settings.py'deki repo-köküne-göre
+# varsayılanlar (voice_models/...) kullanılır.
+
+# Sesli asistan katmanının ana açma/kapama anahtarı. False yapılırsa
+# mikrofon hiç açılmaz; Artemis yalnızca metin tabanlı çalışır.
+voice_enabled: true
+
+# Sürekli "Artemis" uyandırma sözcüğü dinlemesinin açma/kapama anahtarı.
+# voice_enabled açıkken bunu false yaparsanız asistan yine kullanılabilir
+# ama uyanmak için kısayol tuşu gerekir (bkz. ui/hotkey.py).
+wake_word_enabled: true
+
+# Uyandırma sözcüğü için kabul edilen telaffuz varyantları. "Artemis" özel
+# bir isim olduğundan küçük Whisper "tiny" modeli onu "artemiz", "arte mis"
+# gibi farklı dizilere çevirebilir. Konsol/log çıktısında kendi
+# telaffuzunuz için modelin ne ürettiğini görüp buraya yeni bir varyant
+# ekleyebilirsiniz.
+wake_words:
+  - "artemis"
+  - "artemiz"
+  - "arte mis"
+  - "art emis"
+  - "hartemis"
+
+# Komut tanıma (STT) için faster-whisper model boyutu: tiny/base/small/
+# medium/large-v3. Boyut arttıkça doğruluk artar ama RAM/CPU yükü de
+# artar. "small" Türkçe için makul bir denge (~500MB RAM); daha güçlü
+# bir makinede daha yüksek doğruluk istiyorsanız "medium"a geçin
+# (~1.5GB RAM).
+whisper_model_size: "small"
+
+# faster-whisper çıkarımının sayısal hassasiyeti. CPU'da "int8" en az
+# RAM'i kullanır ve en hızlıdır (ufak bir doğruluk kaybıyla); CUDA/GPU
+# varsa "float16" daha doğru sonuç verebilir.
+whisper_compute_type: "int8"
+
+# Whisper'ın çalışacağı cihaz: "cpu" veya "cuda". "auto" YAZMAYIN —
+# faster-whisper'ın kendi varsayılanı odur ve makinede NVIDIA GPU görürse
+# CUDA'yı seçer; CUDA kütüphaneleri (cuBLAS/cuDNN) kurulu değilse bu, model
+# yüklenirken değil İLK TANIMA sırasında şu hatayla çöker:
+#   RuntimeError: Library cublas64_12.dll is not found or cannot be loaded
+# GPU kullanmak istiyorsanız önce CUDA Toolkit + cuDNN kurup buraya "cuda"
+# yazın; kurulu değilse "cpu" bırakın (bu makinede ölçülen hız zaten yeterli:
+# uyandırma için ~0.24 sn).
+whisper_device: "cpu"
+
+# Piper Türkçe ses modelinin (.onnx) yolu. Yanında aynı adı taşıyan bir
+# .onnx.json dosyası da bulunmalıdır (Piper bunu şart koşar). Belirtilmezse
+# repo kökündeki voice_models/tr_TR-dfki-medium.onnx kullanılır (kurmak
+# için: python scripts/setup_voice.py). Farklı bir yere koyduysanız:
+# piper_model_path: "C:/yol/tr_TR-dfki-medium.onnx"
+
+# Komut dinlerken kullanıcı sustuktan sonra kaydın kaç saniye beklenip
+# sonlandırılacağı. Kısa tutmak tepkiyi hızlandırır ama cümle arasında
+# duraklayan kullanıcıları yarıda kesebilir.
+silence_timeout_seconds: 1.2
+
+# Tek bir komut kaydı için üst sınır (saniye) — kullanıcı hiç susmasa
+# bile kayıt bu süre sonunda zorla kesilir (sonsuz dinlemeyi önleyen
+# güvenlik sınırı).
+max_command_seconds: 12.0
+
+# Artemis'i elle uyandıran, sistem genelinde çalışan kısayol.
+# `wake_word_enabled: false` yaptıysanız Artemis'i çağırmanın tek yolu
+# budur (tepsi simgesindeki "Şimdi dinle" dışında). Kısayolu başka bir
+# uygulama kullanıyorsa Artemis kısayolsuz çalışmaya devam eder.
+# Biçim: değiştiriciler + tek tuş, artı ile ayrılır (ctrl/alt/shift/win).
+voice_hotkey: "ctrl+alt+a"
+
+# Uyandırma sözcüğü için kullanılan Whisper model boyutu. Komut tanımadan
+# AYRI ve kasıtlı olarak küçük tutulur ("tiny"): uyandırma algılaması çok
+# daha sık çalışır, bu yüzden ucuz olmalı. Komut tanımada doğruluk kritik
+# olduğundan orada whisper_model_size (yukarıda, varsayılan "small")
+# geçerlidir (bkz. voice/wake_word.py).
+wake_word_model_size: "tiny"
+
+# --- Hibrit (bulut/yerel) ses ayarları ---
+# İnternet varken bulut sağlayıcılar (Groq STT, Microsoft Edge TTS) belirgin
+# biçimde daha doğru sonuç verir — özellikle yabancı özel isimlerde (Discord,
+# Riot Client gibi). İnternet yokken ya da bulut bir hata verirse otomatik
+# olarak yukarıdaki yerel modellere (faster-whisper/Piper) düşülür; asistan
+# bu durumda da çalışmaya devam eder (bkz. voice/router.py).
+
+# Konuşma tanımanın nereden yapılacağı: "auto" (varsayılan — önce bulut,
+# hata/internet yoksa otomatik yerele düşer), "cloud" (yalnızca bulut;
+# başarısız olursa dürüstçe hata verir), "local" (yalnızca yerel — ses
+# HİÇBİR yere gönderilmez).
+stt_provider: "auto"
+
+# Sesli okumanın nereden yapılacağı; stt_provider ile aynı üç değeri alır.
+# "local" seçilirse cevap metni de dışarı çıkmaz.
+tts_provider: "auto"
+
+# Bulut konuşma tanımada kullanılacak Groq modeli. API anahtarı BU DOSYADAN
+# GELMEZ, aşağıdaki güvenlik notuna bakın.
+groq_model: "whisper-large-v3-turbo"
+
+# Microsoft Edge TTS ses adı. Türkçe seçenekler:
+# "tr-TR-EmelNeural" (kadın), "tr-TR-AhmetNeural" (erkek).
+edge_tts_voice: "tr-TR-EmelNeural"
+
+# Konuşma hızı (yüzde kayması). Nöral sesler fazla hızlı/düz okuduğu için
+# robotik algılanır; ses çok robotik geliyorsa "-10%" gibi bir değer
+# deneyin, belirgin fark yaratır. Masaüstünüzdeki artemis_ses_ornekleri
+# klasöründe Emel/Ahmet için normal/yavaş karşılaştırmalı örnekler var.
+edge_tts_rate: "+0%"
+
+# Ses perdesi kayması. rate ile aynı mantık: "-10Hz" gibi daha pes bir
+# değer denenebilir (karşılaştırmalı örnekler için yukarıdaki nota bakın).
+edge_tts_pitch: "+0Hz"
+
+# Bulut çağrılarının zaman aşımı (saniye).
+cloud_timeout_seconds: 15.0
+
+# Bir bulut hatasından sonra bulutun atlanacağı süre (saniye). Bu olmasa,
+# internet tamamen kapalıyken her komut önce buluta gidip zaman aşımını
+# beklerdi ve asistan kullanılamaz hale gelirdi (bkz. voice/router.py).
+cloud_failure_cooldown_seconds: 60.0
+
+# GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — Groq
+# API anahtarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.
+# Anahtar yalnızca şu iki kaynaktan okunur:
+#   1. GROQ_API_KEY ortam değişkeni (önerilen).
+#   2. config/secrets.yaml dosyasındaki groq_api_key alanı (bu dosya
+#      .gitignore'dadır, asla commit edilmez).
+# Bkz. config/settings.py::get_groq_api_key.

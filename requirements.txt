@@ -11,6 +11,20 @@ psutil>=5.9
 pyautogui>=0.9.54
 pywin32>=306 ; sys_platform == "win32"
 
+# --- Sesli asistan + arayüz (bu teslimatta implemente edildi) ---
+PyQt6>=6.4               # masaüstü overlay/tepsi (tray) arayüzü (ui/)
+sounddevice>=0.4.6       # ham mikrofon akışı, 16kHz PCM okuma (voice/audio.py)
+numpy>=1.24              # ses örneklerinin (PCM) işlenmesi (voice/audio.py)
+faster-whisper>=1.0      # HEM komut tanıma (STT) HEM uyandırma sözcüğü (tiny) için kullanılır (voice/stt.py, voice/wake_word.py)
+piper-tts>=1.2           # yerel sesli cevap (TTS) (voice/tts.py)
+
+# --- Hibrit bulut/yerel ses (bu teslimatta implemente edildi) ---
+# İnternet varken bulut (daha doğru, özellikle yabancı özel isimlerde),
+# yoksa/hata olursa yukarıdaki yerel modellere düşülür (bkz. voice/router.py).
+requests>=2.31           # Groq STT HTTP çağrıları (voice/stt_cloud.py)
+edge-tts>=6.1            # bulut TTS; Microsoft, API anahtarı GEREKTİRMEZ (voice/tts_cloud.py)
+av>=11.0                 # Edge'in döndürdüğü mp3'ü PCM'e çevirir; PyAV (voice/tts_cloud.py)
+
 # --- Sonraki fazlarda plugin eklendikçe eklenecek (henüz kullanılmıyor) ---
 # keyboard          # mouse_keyboard_plugin.py
 # mouse             # mouse_keyboard_plugin.py

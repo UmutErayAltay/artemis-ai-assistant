@@ -16,6 +16,16 @@ __pycache__/
 logs/*.log
 memory/*.db
 
+# API anahtarları — BU DEPO HERKESE AÇIK. Anahtarlar yalnızca ortam
+# değişkeninde veya bu ignore edilen dosyada tutulur (bkz.
+# config/settings.py::get_groq_api_key). Asla config.yaml'a yazmayın.
+config/secrets.yaml
+.env
+
+# Ses modelleri (Vosk/Piper) yüzlerce MB'tır; repoya girmemeli, gerekirse
+# `python scripts/setup_voice.py` ile yeniden indirilir.
+voice_models/
+
 # IDE / OS
 .vscode/
 .idea/
