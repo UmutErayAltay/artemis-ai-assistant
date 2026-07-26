@@ -29,9 +29,12 @@ süresi boyunca uyandırma algılama devre dışı bırakılır.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+from pathlib import PureWindowsPath
 from typing import Any
+from urllib.parse import urlparse
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
@@ -50,6 +53,55 @@ _AFFIRMATIVE_WORDS = frozenset(
 """Sesli onayda kabul edilen sözcükler. Bunun DIŞINDAKİ her şey RED sayılır."""
 
 _CONFIRMATION_TIMEOUT_SECONDS = 8.0
+
+_WINDOWS_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+")
+_URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
+_MAX_SPOKEN_LENGTH = 120
+
+_SPEAKABLE_NOISE = re.compile(r"[''\"]")
+
+
+def speakable(message: str) -> str:
+    """Bir tool mesajını SESLİ OKUNMAYA uygun, kısa bir biçime indirger.
+
+    Tool mesajları terminal için yazılmıştı ve tam yol/tam URL içeriyor:
+
+        "'C:\\Users\\Ali\\Desktop\\Orbit' klasörü oluşturuldu."
+        "'https://www.bilmemne.com/a/b?q=1' açıldı."
+
+    Ekranda bunlar bilgi vericidir ama sesli dinlerken işkencedir —
+    kullanıcı "C ters bölü Users ters bölü..." diye dinlemek zorunda
+    kalır. Bu fonksiyon gürültüyü atar, anlamı bırakır:
+
+        "Orbit klasörü oluşturuldu."
+        "bilmemne.com açıldı."
+
+    Yapılan üç şey:
+      1. Windows yolları son bileşene indirilir (`...\\Orbit` -> `Orbit`).
+      2. URL'ler yalnızca alan adına indirilir; `www.` ve yol/sorgu atılır.
+      3. Tırnaklar temizlenir (sesli okumada anlamsız) ve sonuç çok
+         uzunsa sözcük sınırından kırpılır.
+
+    Tam mesaj KAYBOLMAZ: log'a olduğu gibi yazılır (bkz. `_respond`).
+    """
+
+    def _shorten_path(match: re.Match[str]) -> str:
+        return PureWindowsPath(match.group(0)).name or match.group(0)
+
+    def _shorten_url(match: re.Match[str]) -> str:
+        host = urlparse(match.group(0)).netloc
+        return host[4:] if host.startswith("www.") else (host or match.group(0))
+
+    text = _URL_PATTERN.sub(_shorten_url, message)
+    text = _WINDOWS_PATH_PATTERN.sub(_shorten_path, text)
+    text = _SPEAKABLE_NOISE.sub("", text).strip()
+
+    if len(text) <= _MAX_SPOKEN_LENGTH:
+        return text
+
+    clipped = text[:_MAX_SPOKEN_LENGTH].rsplit(" ", 1)[0]
+    return f"{clipped}…"
+
 
 _TURKISH_COMMAND_WORDS = (
     "aç",
@@ -404,14 +456,24 @@ class VoiceAssistant:
         return f"{total} işlemden {successful} tanesini tamamladım; kalanında sorun oldu."
 
     def _respond(self, message: str, error: bool = False) -> None:
-        """Cevabı ekranda gösterir, sesli okur ve pencereyi kapatır."""
+        """Cevabı ekranda gösterir, sesli okur ve pencereyi kapatır.
+
+        Kullanıcıya giden metin `speakable()` ile kısaltılır: tool
+        mesajları terminal için yazıldığından tam yol/tam URL içeriyor ve
+        bunları dinlemek işkence ("C ters bölü Users ters bölü..."). Tam
+        mesaj kaybolmaz — log'a olduğu gibi yazılır.
+        """
+
+        spoken = speakable(message)
+        if spoken != message:
+            logger.info("Cevap (tam): %s", message)
 
         if error:
-            self._overlay.show_error(message)
+            self._overlay.show_error(spoken)
         else:
-            self._overlay.show_speaking(message)
+            self._overlay.show_speaking(spoken)
 
-        self._speak(message)
+        self._speak(spoken)
         self._overlay.dismiss()
 
     def _speak(self, message: str) -> None:

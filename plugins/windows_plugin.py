@@ -461,7 +461,12 @@ class WindowsScreenshotTool(BaseTool):
             )
 
         context.memory.remember_last_path(str(full_path))
-        return ToolResult(success=True, message=f"Ekran görüntüsü kaydedildi: '{full_path}'", data={"path": str(full_path)})
+        location_label = "masaüstüne" if location == "desktop" else "indirilenler klasörüne"
+        return ToolResult(
+            success=True,
+            message=f"Ekran görüntüsü {location_label} kaydedildi.",
+            data={"path": str(full_path)},
+        )
 
 
 @register_tool

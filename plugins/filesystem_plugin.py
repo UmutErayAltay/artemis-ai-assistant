@@ -291,7 +291,11 @@ class FilesystemCopyTool(BaseTool):
         else:
             shutil.copy2(source, destination)
 
-        return ToolResult(success=True, message=f"'{source}' -> '{destination}' kopyalandı.")
+        return ToolResult(
+            success=True,
+            message=f"'{source.name}', {destination.parent.name} klasörüne kopyalandı.",
+            data={"source": str(source), "destination": str(destination)},
+        )
 
 
 @register_tool

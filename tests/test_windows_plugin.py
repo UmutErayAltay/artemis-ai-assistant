@@ -399,6 +399,11 @@ def test_screenshot(dispatcher: ToolDispatcher, tmp_path: Path) -> None:
     assert result.success is True
     assert Path(result.data["path"]).exists()
 
+    # Mesaj sesli okunacağı için dosya adını (zaman damgalı, anlamsız)
+    # İÇERMEMELİ, yalnızca konumu söylemeli; tam yol yalnızca `data`'da kalır.
+    assert Path(result.data["path"]).name not in result.message
+    assert "masaüstüne" in result.message
+
 
 @WINDOWS_ONLY
 def test_list_windows_returns_data(dispatcher: ToolDispatcher) -> None:

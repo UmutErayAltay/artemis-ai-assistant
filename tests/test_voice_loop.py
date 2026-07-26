@@ -22,7 +22,7 @@ import pytest
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
 from core.plugin_loader import load_plugins
-from core.voice_loop import VoiceAssistant
+from core.voice_loop import VoiceAssistant, speakable
 from memory.context_memory import ContextMemory
 from voice.audio import BLOCK_FRAMES
 
@@ -553,3 +553,55 @@ def test_amplitude_is_reported_while_listening(dispatcher: ToolDispatcher, setti
 
     assert overlay.amplitudes, "Dinlerken hiç genlik bildirilmedi"
     assert max(overlay.amplitudes) > 0.1, "Konuşma bloklarında genlik yükselmeliydi"
+
+
+# --------------------------------------------------------------------------
+# speakable() — sesli okumaya uygun kısaltma
+# --------------------------------------------------------------------------
+
+
+def test_speakable_reduces_windows_paths_to_the_file_name() -> None:
+    """Tam yol sesli okunursa "C ters bölü Users ters bölü..." olur."""
+
+    result = speakable(r"'C:\Users\Ali\Desktop\Orbit' klasörü oluşturuldu.")
+
+    assert result == "Orbit klasörü oluşturuldu."
+    assert "\\" not in result
+
+
+def test_speakable_reduces_urls_to_the_bare_domain() -> None:
+    """Tam URL (şema, www, yol, sorgu) dinlenebilir bir şey değildir."""
+
+    result = speakable("'https://www.bilmemne.com/arama?q=deneme&x=1' açıldı.")
+
+    assert result == "bilmemne.com açıldı."
+
+
+def test_speakable_keeps_plain_messages_untouched() -> None:
+    """Yol/URL içermeyen mesaj olduğu gibi kalmalı — gereksiz bozma yok."""
+
+    assert speakable("League of Legends başlatıldı.") == "League of Legends başlatıldı."
+    assert speakable("3 sonuç bulundu.") == "3 sonuç bulundu."
+
+
+def test_speakable_strips_quotes_that_are_meaningless_when_spoken() -> None:
+    assert "'" not in speakable("'yapay zeka' için google araması açıldı.")
+
+
+def test_speakable_truncates_very_long_messages_at_a_word_boundary() -> None:
+    """Çok uzun cevap dinletmek yerine kırpılır; sözcük ortasından değil."""
+
+    uzun = "Bu cevap gereğinden uzun bir metindir. " * 20
+    result = speakable(uzun)
+
+    assert len(result) <= 121  # 120 + kırpma işareti
+    assert result.endswith("…")
+    assert not result[:-1].endswith(" ")
+
+
+def test_speakable_handles_multiple_paths_in_one_message() -> None:
+    result = speakable(r"'C:\a\kaynak.txt' -> 'C:\b\hedef.txt' kopyalandı.")
+
+    assert "kaynak.txt" in result
+    assert "hedef.txt" in result
+    assert ":\\" not in result

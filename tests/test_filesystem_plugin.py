@@ -307,6 +307,15 @@ def test_copy_file_to_downloads_keeps_original(
     assert copied.exists()
     assert copied.read_text(encoding="utf-8") == "içerik"
 
+    # Mesaj sesli okunacağı için hedef KLASÖR adını söylemeli, tam yol
+    # içermemeli (bkz. `core/voice_loop.py::speakable`).
+    assert "Downloads" in result.message
+    assert ":\\" not in result.message
+
+    # Ayrıntı kaybolmaz: tam yollar `data` alanında kalır.
+    assert result.data["source"] == str(source)
+    assert result.data["destination"] == str(copied)
+
 
 def test_copy_folder_recursively_includes_nested_file(
     dispatcher: ToolDispatcher, desktop: Path, downloads: Path
