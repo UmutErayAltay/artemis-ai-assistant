@@ -26,13 +26,23 @@ NEDEN VOSK GERİ GELDİ — "KONUŞMA VAR MI?" KAPISI OLARAK (ölçüldü)
     Yani sabit bir enerji eşiği ilkesel olarak çalışamaz: kullanıcının
     gerçek ortamında Whisper sürekli boşuna tetiklenip `'artemiz 맛이'`,
     `'temiz'`, `'As if it is artemiz...'` gibi saçma "uyanmalar" üretti.
-    Aynı gürültüyle test edilen Vosk ise HİÇ kelime üretmedi — yani
-    gürültüyle gerçek konuşmayı ayırt edebiliyor; enerji eşiğinin
-    yapamadığı tam olarak bu. Bu yüzden `vosk_model_path` verilirse
-    "konuşma var mı?" kararı artık Vosk'un ürettiği metnin boş olup
-    olmamasına bakılarak verilir (bkz. `_is_speech`); enerji eşiği
-    yalnızca Vosk yapılandırılmamışsa ya da kurulamazsa devrede kalan bir
-    YEDEKTİR (geri uyumluluk, bkz. `_ensure_vosk`).
+    Bu sorunun ASIL çözümü eşiği ORTAMA GÖRE KALİBRE ETMEKTİR: açılışta
+    ortam gürültüsü ölçülüp eşik ona göre ayarlanır (bkz.
+    `voice.audio.measure_noise_floor` ve `set_energy_threshold`).
+
+    VOSK'UN ROLÜ: YALNIZCA DUYARLILIK EKLER, ASLA ENGELLEMEZ
+    Vosk bir dönem TEK karar verici yapıldı ve bu ciddi bir hataydı:
+    Vosk yalnızca KENDİ SÖZLÜĞÜNDEKİ sözcükler için metin üretir,
+    "Artemis" o sözlükte yok. Ölçüm: sentezlenmiş bir "Artemis" klibinin
+    7 bloğunun 7'sinde de "konuşma yok" dedi — yani kapı tam da
+    dinlediğimiz sözcüğü susturdu ve uyandırma HİÇ çalışmadı.
+
+    Bu yüzden karar artık VEYA'dır (bkz. `_is_speech`):
+
+        konuşma = (enerji eşiği aşıldı) VEYA (Vosk bir sözcük duydu)
+
+    Enerji eşiği aşıldıysa Vosk ne derse desin blok geçer; Vosk yalnızca
+    eşiğin ALTINDA kalan kısık konuşmayı kurtarır.
 
 NEDEN ENERJİ/VOSK KAPISI + WHISPER (ikisi neden ayrı)
     Whisper tiny, uyandırma sözcüğünü tanımakta hem Vosk'un küçük
@@ -212,25 +222,28 @@ class WakeWordDetector:
         if self._model is not None:
             return self._model
 
+        from voice.gpu import resolve_compute_type, resolve_device
+
+        # `device` MUTLAKA açıkça geçilir ve ÖNCE `resolve_device`'tan
+        # geçirilir. faster-whisper'ın varsayılanı "auto"dur; CUDA
+        # kütüphaneleri yokken model YÜKLENİRKEN değil ilk TANIMA sırasında
+        # "Library cublas64_12.dll is not found" ile çöker. `resolve_device`
+        # hem DLL'leri sürece yükler hem yükleyemezse CPU'ya düşer.
+        device = resolve_device(self._device)
+        compute_type = resolve_compute_type(device, self._compute_type)
+
         from faster_whisper import WhisperModel  # lazy import
 
         try:
-            # `device` MUTLAKA açıkça geçilir. faster-whisper'ın varsayılanı
-            # "auto"dur ve makinede bir NVIDIA GPU görürse CUDA'yı seçer;
-            # ama CUDA çalışma kütüphaneleri (cuBLAS/cuDNN) kurulu değilse
-            # bu, model YÜKLENİRKEN değil ilk TANIMA sırasında
-            # "Library cublas64_12.dll is not found" ile çöker — yani
-            # sessizce kurulup ilk komutta patlar. Varsayılanı "cpu"
-            # tutmak bu tuzağı tamamen kapatır.
             self._model = WhisperModel(
                 self._model_size,
-                device=self._device,
-                compute_type=self._compute_type,
+                device=device,
+                compute_type=compute_type,
             )
         except Exception as exc:  # noqa: BLE001 - model/ağ/donanım kaynaklı her hata
             raise WakeWordUnavailableError(
                 f"Uyandırma sözcüğü modeli yüklenemedi "
-                f"('{self._model_size}', device={self._device}). "
+                f"('{self._model_size}', device={device}). "
                 "İnternet bağlantınızı kontrol edin ya da modeli önceden indirin: "
                 "python scripts/setup_voice.py"
             ) from exc
@@ -279,32 +292,56 @@ class WakeWordDetector:
 
         return self._vosk_recognizer
 
+    def set_energy_threshold(self, threshold: float) -> None:
+        """Konuşma kapısının enerji eşiğini günceller.
+
+        `core/voice_loop.py` açılışta ortam gürültüsünü ölçüp bu değeri
+        buraya verir. Sabit bir eşik değişken ortam gürültüsünde
+        çalışmıyordu (bkz. `voice.audio.measure_noise_floor`).
+        """
+
+        self._energy_threshold = threshold
+        logger.info("Uyandırma enerji eşiği güncellendi: %.3f", threshold)
+
     def _is_speech(self, block: bytes) -> bool:
         """Bir ses bloğunda gerçek konuşma olup olmadığına karar verir.
 
-        Vosk yapılandırılmışsa (bkz. `vosk_model_path`) karar onun metin
-        çıktısına dayanır: blok `AcceptWaveform`'a verilir; tümce
-        tamamlandıysa `Result()`, tamamlanmadıysa `PartialResult()`
-        içindeki metin BOŞ DEĞİLSE "konuşma var" sayılır. Vosk yoksa ya
-        da kurulamadıysa (bkz. `_ensure_vosk`) eski davranışa, ham enerji
-        eşiğine düşülür.
+        Karar İKİ göstergenin BİRLEŞİMİDİR (VEYA, kesişim değil):
+
+            konuşma = (enerji eşiği aşıldı) VEYA (Vosk bir sözcük duydu)
+
+        VOSK NEDEN TEK BAŞINA KARAR VEREMEZ (ölçüldü, acı bir dersle):
+            Vosk yalnızca KENDİ SÖZLÜĞÜNDEKİ sözcükler için metin üretir.
+            "Artemis" o sözlükte yok. Vosk tek karar verici yapıldığında,
+            sentezlenmiş bir "Artemis" klibinin 7 bloğunun 7'sinde de
+            "konuşma yok" dedi — yani kapı, tam da dinlediğimiz sözcüğü
+            susturdu ve uyandırma HİÇ çalışmadı.
+
+            Bu yüzden Vosk burada yalnızca DUYARLILIK EKLER: enerji
+            eşiğinin altında kalan ama gerçekten konuşma olan blokları
+            kurtarır. Hiçbir zaman bir bloğu ENGELLEYEMEZ.
+
+        Gürültü sorununu çözen şey Vosk değil, eşiğin ORTAMA GÖRE
+        kalibre edilmesidir (bkz. `voice.audio.measure_noise_floor` ve
+        `core.voice_loop.VoiceAssistant._calibrate_silence_threshold`).
 
         ÖNEMLİ — Vosk'un rolü SINIRLI: burada okunan metin ("artemis" mi
         dedi mi?) HİÇ SORULMAZ, yalnızca metnin varlığına bakılır. Sözcüğü
-        tanımak hâlâ tamamen `_recognize()` üzerinden Whisper'a aittir
-        (bkz. modül dokümantasyonu, "NEDEN VOSK SÖZCÜĞÜ TANIMAK İÇİN
-        KULLANILMIYOR").
+        tanımak hâlâ tamamen `_recognize()` üzerinden Whisper'a aittir.
         """
 
-        recognizer = self._ensure_vosk()
-        if recognizer is not None:
-            if recognizer.AcceptWaveform(block):
-                text = json.loads(recognizer.Result()).get("text", "")
-            else:
-                text = json.loads(recognizer.PartialResult()).get("partial", "")
-            return bool(text.strip())
+        if rms_amplitude(block) >= self._energy_threshold:
+            return True
 
-        return rms_amplitude(block) >= self._energy_threshold
+        recognizer = self._ensure_vosk()
+        if recognizer is None:
+            return False
+
+        if recognizer.AcceptWaveform(block):
+            text = json.loads(recognizer.Result()).get("text", "")
+        else:
+            text = json.loads(recognizer.PartialResult()).get("partial", "")
+        return bool(text.strip())
 
     def feed(self, block: bytes) -> bool:
         """Bir ses bloğunu konuşma kapısından geçirir; uyandırma sözcüğü algılanırsa True döner.

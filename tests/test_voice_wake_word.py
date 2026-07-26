@@ -25,11 +25,13 @@ yalnızca biriken ses gerçekten bir tanıma denemesine gönderildiğinde
 `test_model_load_failure_raises_wake_word_unavailable_error` testleri,
 eski model-klasörü testlerinin bu yeni tasarıma uyarlanmış halidir.
 
-Vosk, bu sürümde "konuşma var mı?" KAPISI olarak GERİ GELDİ (bkz.
-`voice/wake_word.py` modül dokümantasyonu, "NEDEN VOSK GERİ GELDİ") —
-ama yalnızca isteğe bağlı (`vosk_model_path=None` varsayılan) bir
-yedektir, uyandırma sözcüğünü TANIMAZ. Bu dosyanın altındaki "Vosk
-konuşma kapısı" bölümü bunu doğrular.
+Vosk, bu sürümde "konuşma var mı?" kapısına EK bir gösterge olarak
+geri geldi — uyandırma sözcüğünü TANIMAZ ve bir bloğu ASLA ENGELLEYEMEZ.
+Karar `(enerji eşiği aşıldı) VEYA (Vosk bir sözcük duydu)` biçimindedir.
+Vosk bir dönem tek karar verici yapılmıştı ve "Artemis" onun sözlüğünde
+olmadığı için uyandırmayı tamamen susturmuştu; aşağıdaki
+`test_vosk_silence_can_never_block_loud_speech` o hatanın regresyon
+testidir.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ import types
 import numpy as np
 import pytest
 
-from voice.audio import SAMPLE_RATE
+from voice.audio import SAMPLE_RATE, rms_amplitude
 from voice.wake_word import (
     DEFAULT_FUZZY_THRESHOLD,
     DEFAULT_WAKE_WORDS,
@@ -554,28 +556,61 @@ def test_reset_clears_buffered_state(fake_whisper: _FakeWhisperEnvironment) -> N
 # tetiklememeli — bu düzeltmenin ana kazancı.
 
 
-def test_vosk_empty_text_never_triggers_whisper_even_with_loud_noise(
+def test_vosk_silence_can_never_block_loud_speech(
     tmp_path,
     fake_vosk: _FakeVoskEnvironment,
     fake_whisper: _FakeWhisperEnvironment,
 ) -> None:
-    """Vosk boş metin döndürdüğünde (gürültü) Whisper HİÇ çağrılmamalı.
+    """REGRESYON: Vosk bir bloğu ASLA engelleyememeli — yalnızca ekleyebilir.
 
-    `_speech_block()` enerji eşiğini rahatça aşacak kadar yüksek genlikli;
-    eski (enerji tabanlı) kapı bunu "konuşma" sayıp Whisper'ı tetiklerdi.
-    Vosk burada boş metin döndürdüğü için (gerçek ortamda ölçülen gürültü
-    davranışı) yeni kapı TETİKLEMEMELİ.
+    GERÇEK ARIZA: Vosk bir dönem TEK karar verici yapılmıştı. Vosk
+    yalnızca KENDİ SÖZLÜĞÜNDEKİ sözcükler için metin ürettiğinden ve
+    "Artemis" o sözlükte olmadığından, sentezlenmiş bir "Artemis"
+    klibinin 7 bloğunun 7'sinde de "konuşma yok" dedi — kapı tam da
+    dinlediğimiz sözcüğü susturdu ve uyandırma HİÇ çalışmadı.
+
+    Bu yüzden karar artık VEYA'dır: enerji eşiği aşıldıysa Vosk ne derse
+    desin konuşma sayılır. Bu test o kuralı sabitler.
     """
 
-    fake_vosk.next_text = ""  # gürültü: Vosk hiçbir kelime duymuyor
+    fake_vosk.next_text = ""  # Vosk hiçbir kelime duymuyor (bilmediği sözcük)
     wake_detector = WakeWordDetector(vosk_model_path=tmp_path, silence_blocks=2, max_buffer_seconds=5.0)
+    fake_whisper.next_text = "artemis"
 
-    for _ in range(30):
-        assert wake_detector.feed(_speech_block()) is False
+    algilandi = any(wake_detector.feed(_speech_block()) for _ in range(6))
+    algilandi = algilandi or any(wake_detector.feed(_silence_block()) for _ in range(4))
 
-    assert fake_whisper.call_count == 0
-    assert fake_whisper.model_load_calls == []  # model bir kez bile yüklenmedi
-    assert fake_vosk.accept_waveform_calls > 0  # Vosk gerçekten kullanıldı (enerjiye düşülmedi)
+    assert fake_whisper.call_count > 0, "Vosk sessiz kalsa da yüksek sesli konuşma Whisper'a gitmeliydi"
+    assert algilandi is True
+
+
+def test_vosk_adds_sensitivity_below_the_energy_threshold(
+    tmp_path,
+    fake_vosk: _FakeVoskEnvironment,
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """Vosk'un asıl katkısı: enerji eşiğinin ALTINDAKİ konuşmayı kurtarmak.
+
+    Enerji eşiği yüksek tutulduğunda (gürültülü ortam kalibrasyonu) sessiz
+    konuşma kaçardı; Vosk bir sözcük duyduğunda blok yine de konuşma sayılır.
+    """
+
+    fake_vosk.next_text = "merhaba"  # Vosk gerçek bir sözcük duyuyor
+    wake_detector = WakeWordDetector(
+        vosk_model_path=tmp_path,
+        energy_threshold=0.99,  # enerjiyle asla tetiklenemeyecek kadar yüksek
+        silence_blocks=2,
+        max_buffer_seconds=5.0,
+    )
+
+    # Enerji eşiğinin ALTINDA kalan, kısık ama gerçek konuşma
+    # (`_speech_block()` genliği 1.0'a doyar ve eşik ne olursa olsun geçer).
+    kisik = np.random.default_rng(1).integers(-300, 300, size=2000, dtype=np.int16).tobytes()
+    assert rms_amplitude(kisik) < 0.99, "test bloğu eşiğin altında olmalı"
+
+    wake_detector.feed(kisik)
+
+    assert fake_vosk.accept_waveform_calls > 0, "Enerji yetmediğinde Vosk'a sorulmalıydı"
 
 
 def test_vosk_nonempty_text_lets_flow_reach_whisper(
@@ -583,13 +618,13 @@ def test_vosk_nonempty_text_lets_flow_reach_whisper(
     fake_vosk: _FakeVoskEnvironment,
     fake_whisper: _FakeWhisperEnvironment,
 ) -> None:
-    """Vosk boş olmayan bir metin döndürdüğünde akış normal ilerler ve Whisper çağrılır.
+    """Konuşma kapısı geçildiğinde akış ilerler ve sözcüğü WHISPER tanır.
 
-    Vosk'un burada döndürdüğü metnin ("merhaba") uyandırma sözcüğüyle
-    HİÇBİR ilgisi yok ve olmamalı da — Vosk yalnızca "biri konuşuyor mu?"
-    kapısıdır, sözcüğü tanıyan hâlâ Whisper'dır (bkz. `fake_whisper.next_text`).
-    `max_buffer_seconds` yolu kullanılıyor ki test yalnızca konuşma kapısını
-    sınasın, sessizlik mantığına karışmasın.
+    Vosk'un döndürdüğü metnin ("merhaba") uyandırma sözcüğüyle HİÇBİR
+    ilgisi yok ve olmamalı da — Vosk yalnızca "biri konuşuyor mu?"
+    kapısına katkıdır, sözcüğü tanıyan hâlâ Whisper'dır (bkz.
+    `fake_whisper.next_text`). `max_buffer_seconds` yolu kullanılıyor ki
+    test yalnızca kapıyı sınasın, sessizlik mantığına karışmasın.
     """
 
     fake_vosk.next_text = "merhaba"  # Vosk için önemli olan tek şey: boş DEĞİL
@@ -606,8 +641,10 @@ def test_vosk_nonempty_text_lets_flow_reach_whisper(
 
     assert result is True
     assert fake_whisper.call_count == 1
-    assert fake_vosk.accept_waveform_calls > 0
-    assert fake_vosk.set_log_level_calls == [-1]  # Vosk'un konsol çıktısı susturuldu
+    # NOT: Vosk'a burada sorulmayabilir — `_speech_block()` enerji eşiğini
+    # zaten aştığı için kapı Vosk'a hiç ihtiyaç duymadan geçer. Vosk'un
+    # gerçekten kullanıldığı senaryo ayrı bir testte
+    # (`test_vosk_adds_sensitivity_below_the_energy_threshold`) sınanıyor.
 
 
 def test_vosk_model_path_none_never_touches_vosk_and_uses_energy_threshold(

@@ -563,6 +563,10 @@ class VoiceAssistant:
                 # `voice/wake_word.py` modül dokümantasyonu).
                 vosk_model_path=self._settings.vosk_speech_gate_model_path,
             )
+            # Açılışta ortam ölçüldüyse kalibre edilmiş eşiği kullan;
+            # sabit bir sayı, değişken ortam gürültüsünde çalışmıyordu.
+            if self._silence_threshold is not None:
+                self._wake_detector.set_energy_threshold(self._silence_threshold)
         return self._wake_detector
 
     def _calibrate_silence_threshold(self, mic: Any) -> None:
@@ -583,6 +587,12 @@ class VoiceAssistant:
             self._silence_threshold = measure_noise_floor(mic)
         except Exception:  # noqa: BLE001 - kalibrasyon başarısızlığı akışı durdurmasın
             logger.warning("Ortam gürültüsü ölçülemedi; varsayılan eşik kullanılacak.", exc_info=True)
+            return
+
+        # Uyandırma algılayıcısı zaten kurulduysa yeni eşiği ona da ver:
+        # gürültü sorunu hem kayıtta hem uyandırmada aynıydı.
+        if self._wake_detector is not None:
+            self._wake_detector.set_energy_threshold(self._silence_threshold)
 
     def _ensure_recorder(self):
         if self._recorder is None:

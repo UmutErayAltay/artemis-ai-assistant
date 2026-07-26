@@ -176,7 +176,7 @@ class SpeechToText:
         if self._model is not None:
             return self._model
 
-        from voice.gpu import resolve_device
+        from voice.gpu import resolve_compute_type, resolve_device
 
         # "cuda" istendiği hâlde CUDA kütüphaneleri yoksa sessizce çökmek
         # yerine CPU'ya düşülür (bkz. `voice/gpu.py`). Bu kontrol modelin
@@ -204,7 +204,7 @@ class SpeechToText:
             self._model = WhisperModel(
                 model_size,
                 device=device,
-                compute_type=self._compute_type,
+                compute_type=resolve_compute_type(device, self._compute_type),
             )
         except Exception as exc:  # noqa: BLE001 - model/ağ/donanım kaynaklı her hata
             raise SpeechRecognitionUnavailableError(

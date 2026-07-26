@@ -94,6 +94,37 @@ def prepare_cuda_libraries() -> bool:
     return True
 
 
+CPU_COMPUTE_TYPE = "int8"
+"""CPU'da kullanılacak hassasiyet.
+
+`float16` bir GPU biçimidir; CTranslate2 CPU'da onu ya reddeder ya da
+çok yavaş çalıştırır. GPU'dan CPU'ya düşüldüğünde hassasiyetin de
+düşürülmesi ŞARTTIR, yoksa "CPU'ya düştük ama yine çalışmıyor" durumu
+oluşur."""
+
+
+def resolve_compute_type(device: str, requested: str) -> str:
+    """Cihaza uygun hassasiyeti seçer.
+
+    GPU istenip CPU'ya düşüldüğünde `float16` ile devam etmek yeni bir
+    arızaya yol açar; bu yüzden cihaz CPU ise hassasiyet de CPU'ya uygun
+    olana çevrilir.
+
+    Args:
+        device: `resolve_device()` sonucu (gerçekten kullanılacak cihaz).
+        requested: `config.yaml::whisper_compute_type` değeri.
+
+    Returns:
+        Kullanılacak hassasiyet.
+    """
+
+    if device != "cpu" or requested != "float16":
+        return requested
+
+    logger.info("CPU'da 'float16' desteklenmiyor; '%s' kullanılacak.", CPU_COMPUTE_TYPE)
+    return CPU_COMPUTE_TYPE
+
+
 def resolve_device(requested: str) -> str:
     """İstenen cihazı, gerçekten kullanılabilir olana çevirir.
 
