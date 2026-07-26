@@ -70,6 +70,62 @@ def rms_amplitude(block: bytes) -> float:
     return normalized**0.5
 
 
+NOISE_FLOOR_MARGIN = 2.0
+"""Sessizlik eşiği, ölçülen gürültü tabanının kaç katı olsun."""
+
+NOISE_FLOOR_MIN_THRESHOLD = 0.08
+NOISE_FLOOR_MAX_THRESHOLD = 0.40
+"""Eşiğin sıkışacağı alt/üst sınırlar.
+
+Alt sınır: çok sessiz bir odada eşik sıfıra yaklaşıp her hışırtıyı
+konuşma saymasın. Üst sınır: çok gürültülü bir odada eşik o kadar
+yükselmesin ki normal konuşma da altında kalsın (konuşma tipik olarak
+0.6-1.0 aralığındadır)."""
+
+
+def measure_noise_floor(mic: MicrophoneStream, seconds: float = 1.0) -> float:
+    """Ortamın gürültü tabanını ölçer ve uygun sessizlik eşiğini döndürür.
+
+    NEDEN GEREKLİ: Sabit bir sessizlik eşiği ilkesel olarak çalışmaz.
+    Aynı odada, aynı gün yapılan iki ölçüm:
+
+        ölçüm 1: ortalama genlik 0.075  (sabit eşik 0.06'nın ÜSTÜNDE)
+        ölçüm 2: ortalama genlik 0.019  (altında)
+
+    Eşiğin altında kalındığında her şey yolunda; üstünde kalındığında ise
+    kayıt "kullanıcı sustu" diyemiyor ve komutun etrafındaki arka plan
+    konuşmalarını da yutuyor. Kullanıcının log'unda bunun sonucu şuydu:
+    12 saniyelik kayıtlar ve "Hazırlamadım. Gamze, sosyal medya klasörünü
+    aç." gibi, komutun başına yabancı sözcükler eklenmiş dökümler.
+
+    Args:
+        mic: Açık bir mikrofon akışı.
+        seconds: Ölçüm süresi. Bu sürede kullanıcının SESSİZ olduğu
+            varsayılır (asistan yeni başlamıştır).
+
+    Returns:
+        Kullanılacak sessizlik eşiği (0-1), alt/üst sınırlara sıkıştırılmış.
+    """
+
+    import numpy as np  # lazy import
+
+    block_count = max(1, int(seconds * SAMPLE_RATE / BLOCK_FRAMES))
+    amplitudes = [rms_amplitude(mic.read_block()) for _ in range(block_count)]
+
+    # Ortalama değil 90. yüzdelik: ortamdaki ara sıra gelen tıkırtılar da
+    # gürültü tabanına dahil edilsin, yoksa eşik onların altında kalır.
+    noise_floor = float(np.percentile(amplitudes, 90))
+    threshold = min(
+        NOISE_FLOOR_MAX_THRESHOLD,
+        max(NOISE_FLOOR_MIN_THRESHOLD, noise_floor * NOISE_FLOOR_MARGIN),
+    )
+
+    logger.info(
+        "Ortam gürültüsü ölçüldü: taban=%.3f -> sessizlik eşiği=%.3f", noise_floor, threshold
+    )
+    return threshold
+
+
 class MicrophoneStream:
     """Mikrofonu açan ve ses bloklarını sırayla veren bağlam yöneticisi.
 

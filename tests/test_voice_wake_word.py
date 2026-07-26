@@ -1,30 +1,41 @@
 """`voice/wake_word.py` için testler: `WakeWordDetector`.
 
-Gerçek mikrofon veya gerçek Whisper modeli GEREKTİRMEZ:
+Gerçek mikrofon veya gerçek Whisper/Vosk modeli GEREKTİRMEZ:
     - `normalize_turkish()` ve `matches()` saf metin fonksiyonlarıdır;
       hiçbir ses/model katmanına dokunmaz, doğrudan test edilir.
-    - Enerji kapısı (`feed()`'in "konuşma var mı?" kısmı) numpy ile
-      üretilmiş sentetik PCM (sessizlik/"konuşma" gürültüsü) ile test
-      edilir — `voice.audio.rms_amplitude` gerçek bir fonksiyondur, mock'a
-      gerek yoktur.
+    - Enerji kapısı (`feed()`'in "konuşma var mı?" kısmı, Vosk
+      yapılandırılmamışken) numpy ile üretilmiş sentetik PCM
+      (sessizlik/"konuşma" gürültüsü) ile test edilir —
+      `voice.audio.rms_amplitude` gerçek bir fonksiyondur, mock'a gerek
+      yoktur.
+    - Vosk konuşma kapısı (`_ensure_vosk`/`_is_speech`), `vosk` modülü
+      sahte bir modülle değiştirilerek test edilir (aşağıdaki
+      `fake_vosk` fixture'ı); gerçek model asla indirilmez/yüklenmez.
     - Whisper'a gerçekten gidecek yol (`_recognize`), `faster_whisper`
       modülü sahte bir modülle değiştirilerek test edilir (bkz.
       `tests/test_voice_stt.py`'deki aynı desen); gerçek model asla
       indirilmez/yüklenmez.
 
 Eski Vosk tabanlı tasarımda `__init__` bir model KLASÖRÜNÜN varlığını
-kontrol ediyordu (`WakeWordModelMissingError`). Yeni tasarımda model
-kavramı (Whisper) tamamen LAZY'dir: nesne oluşturmak hiçbir şey
-yüklemez, yükleme yalnızca biriken ses gerçekten bir tanıma denemesine
-gönderildiğinde (`_ensure_model`) tetiklenir. Bu dosyadaki
+kontrol ediyordu (`WakeWordModelMissingError`). Yeni tasarımda Whisper
+modeli tamamen LAZY'dir: nesne oluşturmak hiçbir şey yüklemez, yükleme
+yalnızca biriken ses gerçekten bir tanıma denemesine gönderildiğinde
+(`_ensure_model`) tetiklenir. Bu dosyadaki
 `test_construction_never_touches_whisper` ve
 `test_model_load_failure_raises_wake_word_unavailable_error` testleri,
 eski model-klasörü testlerinin bu yeni tasarıma uyarlanmış halidir.
+
+Vosk, bu sürümde "konuşma var mı?" KAPISI olarak GERİ GELDİ (bkz.
+`voice/wake_word.py` modül dokümantasyonu, "NEDEN VOSK GERİ GELDİ") —
+ama yalnızca isteğe bağlı (`vosk_model_path=None` varsayılan) bir
+yedektir, uyandırma sözcüğünü TANIMAZ. Bu dosyanın altındaki "Vosk
+konuşma kapısı" bölümü bunu doğrular.
 """
 
 from __future__ import annotations
 
 import difflib
+import json
 import sys
 import types
 
@@ -132,6 +143,75 @@ def fake_whisper(monkeypatch: pytest.MonkeyPatch) -> _FakeWhisperEnvironment:
     fake_module = types.ModuleType("faster_whisper")
     fake_module.WhisperModel = env._make_model
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    return env
+
+
+# --------------------------------------------------------------------------
+# Sahte vosk modülü — "konuşma var mı?" kapısı testleri için
+# --------------------------------------------------------------------------
+
+
+class _FakeKaldiRecognizer:
+    """`vosk.KaldiRecognizer`'ın gözlemlenebilir sahte sürümü.
+
+    Gerçek Vosk'un yaptığı gibi `text`/`partial` alanlarını taşıyan JSON
+    dizgeleri döndürür; hangi metnin döneceği `env.next_text` ile kontrol
+    edilir. `AcceptWaveform` her zaman True döner (yani sonuç hep
+    `Result()` yoluyla okunur) — bu, testin `_is_speech`'in hem doğrudan
+    hem parça (partial) yoluna güvenmeden davranışı doğrulamasına yeter.
+    """
+
+    def __init__(self, env: "_FakeVoskEnvironment") -> None:
+        self._env = env
+
+    def AcceptWaveform(self, data: bytes) -> bool:
+        self._env.accept_waveform_calls += 1
+        return True
+
+    def Result(self) -> str:
+        return json.dumps({"text": self._env.next_text})
+
+    def PartialResult(self) -> str:
+        return json.dumps({"partial": self._env.next_text})
+
+
+class _FakeVoskEnvironment:
+    """Sahte `vosk` modülünü kuran ve çağrı kayıtlarını taşıyan yardımcı.
+
+    `WakeWordDetector._ensure_vosk()` içindeki `from vosk import ...`
+    çağrısı, `monkeypatch.setitem(sys.modules, ...)` sayesinde burada
+    üretilen sahte modülü bulur; gerçek Vosk modeli asla yüklenmez.
+    """
+
+    def __init__(self) -> None:
+        self.next_text = ""
+        self.model_load_calls: list[str] = []
+        self.accept_waveform_calls = 0
+        self.set_log_level_calls: list[int] = []
+        self.fail_model_load = False
+
+    def _make_model(self, model_path: str):
+        if self.fail_model_load:
+            raise RuntimeError("sahte model bozuk")
+        self.model_load_calls.append(model_path)
+        return object()  # gerçek Model içeriğinin önemi yok, yalnızca referans
+
+    def _make_recognizer(self, model, sample_rate: int) -> _FakeKaldiRecognizer:
+        return _FakeKaldiRecognizer(self)
+
+    def _set_log_level(self, level: int) -> None:
+        self.set_log_level_calls.append(level)
+
+
+@pytest.fixture
+def fake_vosk(monkeypatch: pytest.MonkeyPatch) -> _FakeVoskEnvironment:
+    env = _FakeVoskEnvironment()
+
+    fake_module = types.ModuleType("vosk")
+    fake_module.Model = env._make_model
+    fake_module.KaldiRecognizer = env._make_recognizer
+    fake_module.SetLogLevel = env._set_log_level
+    monkeypatch.setitem(sys.modules, "vosk", fake_module)
     return env
 
 
@@ -462,3 +542,127 @@ def test_reset_clears_buffered_state(fake_whisper: _FakeWhisperEnvironment) -> N
         assert wake_detector.feed(_silence_block()) is False
 
     assert fake_whisper.call_count == 0
+
+
+# --------------------------------------------------------------------------
+# feed() — Vosk konuşma kapısı: "konuşma var mı?" kararı artık Vosk'a dayanır
+# --------------------------------------------------------------------------
+#
+# Bu bölüm `voice/wake_word.py` modül dokümantasyonundaki "NEDEN VOSK GERİ
+# GELDİ" ölçümünü doğrudan test eder: yüksek genlikli GÜRÜLTÜ (eski enerji
+# kapısını rahatça aşan) Vosk boş metin döndürdüğünde Whisper'ı hiç
+# tetiklememeli — bu düzeltmenin ana kazancı.
+
+
+def test_vosk_empty_text_never_triggers_whisper_even_with_loud_noise(
+    tmp_path,
+    fake_vosk: _FakeVoskEnvironment,
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """Vosk boş metin döndürdüğünde (gürültü) Whisper HİÇ çağrılmamalı.
+
+    `_speech_block()` enerji eşiğini rahatça aşacak kadar yüksek genlikli;
+    eski (enerji tabanlı) kapı bunu "konuşma" sayıp Whisper'ı tetiklerdi.
+    Vosk burada boş metin döndürdüğü için (gerçek ortamda ölçülen gürültü
+    davranışı) yeni kapı TETİKLEMEMELİ.
+    """
+
+    fake_vosk.next_text = ""  # gürültü: Vosk hiçbir kelime duymuyor
+    wake_detector = WakeWordDetector(vosk_model_path=tmp_path, silence_blocks=2, max_buffer_seconds=5.0)
+
+    for _ in range(30):
+        assert wake_detector.feed(_speech_block()) is False
+
+    assert fake_whisper.call_count == 0
+    assert fake_whisper.model_load_calls == []  # model bir kez bile yüklenmedi
+    assert fake_vosk.accept_waveform_calls > 0  # Vosk gerçekten kullanıldı (enerjiye düşülmedi)
+
+
+def test_vosk_nonempty_text_lets_flow_reach_whisper(
+    tmp_path,
+    fake_vosk: _FakeVoskEnvironment,
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """Vosk boş olmayan bir metin döndürdüğünde akış normal ilerler ve Whisper çağrılır.
+
+    Vosk'un burada döndürdüğü metnin ("merhaba") uyandırma sözcüğüyle
+    HİÇBİR ilgisi yok ve olmamalı da — Vosk yalnızca "biri konuşuyor mu?"
+    kapısıdır, sözcüğü tanıyan hâlâ Whisper'dır (bkz. `fake_whisper.next_text`).
+    `max_buffer_seconds` yolu kullanılıyor ki test yalnızca konuşma kapısını
+    sınasın, sessizlik mantığına karışmasın.
+    """
+
+    fake_vosk.next_text = "merhaba"  # Vosk için önemli olan tek şey: boş DEĞİL
+    fake_whisper.next_text = "artemis"
+    wake_detector = WakeWordDetector(
+        vosk_model_path=tmp_path, max_buffer_seconds=0.3, silence_blocks=1_000
+    )
+
+    result = False
+    for _ in range(10):  # hiç susmadan sürekli "konuşma" besleniyor
+        result = wake_detector.feed(_speech_block(duration=0.125))
+        if result:
+            break
+
+    assert result is True
+    assert fake_whisper.call_count == 1
+    assert fake_vosk.accept_waveform_calls > 0
+    assert fake_vosk.set_log_level_calls == [-1]  # Vosk'un konsol çıktısı susturuldu
+
+
+def test_vosk_model_path_none_never_touches_vosk_and_uses_energy_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """`vosk_model_path=None` (varsayılan) iken Vosk'a HİÇ dokunulmamalı (geri uyumluluk).
+
+    `sys.modules["vosk"] = None` Python'da "bu importu deneme, doğrudan
+    ImportError fırlat" anlamına gelir (bkz. `test_construction_never_
+    touches_whisper`'daki aynı desen). Nesne oluşturma ve `feed()` yine de
+    patlamazsa Vosk'a gerçekten hiç dokunulmamış, eski enerji eşiği
+    davranışı (bkz. mevcut `feed()` testleri) korunmuş demektir.
+    """
+
+    monkeypatch.setitem(sys.modules, "vosk", None)
+    fake_whisper.next_text = "artemis"
+
+    wake_detector = WakeWordDetector(silence_blocks=2, max_buffer_seconds=5.0)  # patlamamalı
+
+    result = False
+    for block in (_speech_block(), _speech_block(), _silence_block(), _silence_block()):
+        result = wake_detector.feed(block)  # patlamamalı
+        if result:
+            break
+
+    assert result is True
+    assert fake_whisper.call_count == 1
+
+
+def test_vosk_load_failure_falls_back_to_energy_threshold_without_raising(
+    tmp_path,
+    fake_vosk: _FakeVoskEnvironment,
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """Vosk modeli yüklenemezse HATA FIRLATILMAZ; akış enerji kapısıyla çalışmaya devam eder.
+
+    Gerçek dünyada bu, model klasörü eksik/bozuk olduğunda ya da `vosk`
+    paketi kurulu olmadığında karşılığa gelir. Beklenen davranış Whisper
+    ile birebir aynı desendir (bkz. `_ensure_model`): kurulamama HATA
+    değil, bir sonraki en iyi seçeneğe (burada: enerji eşiği) düşülmesidir.
+    """
+
+    fake_vosk.fail_model_load = True
+    fake_whisper.next_text = "artemis"
+
+    wake_detector = WakeWordDetector(vosk_model_path=tmp_path, silence_blocks=2, max_buffer_seconds=5.0)
+
+    result = False
+    for block in (_speech_block(), _speech_block(), _silence_block(), _silence_block()):
+        result = wake_detector.feed(block)  # patlamamalı
+        if result:
+            break
+
+    assert result is True
+    assert fake_whisper.call_count == 1
+    assert fake_vosk.accept_waveform_calls == 0  # Vosk hiç kullanılamadı
+    assert fake_vosk.model_load_calls == []  # yükleme denemesi başarısız oldu

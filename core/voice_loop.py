@@ -172,6 +172,9 @@ class VoiceAssistant:
         # asistan bu durumda kısayol/tepsi ile çalışmaya devam eder
         # (bkz. `_disable_wake_word`).
         self._wake_word_broken = False
+        # Açılışta ortam gürültüsü ölçülerek doldurulur (bkz.
+        # `_calibrate_silence_threshold`). None ise varsayılan kullanılır.
+        self._silence_threshold: float | None = None
 
     # ------------------------------------------------------------------
     # Yaşam döngüsü
@@ -216,6 +219,7 @@ class VoiceAssistant:
         try:
             with MicrophoneStream() as mic:
                 self._active_mic = mic
+                self._calibrate_silence_threshold(mic)
                 try:
                     while not self._stop_event.is_set():
                         self._sleep_until_woken(mic)
@@ -554,16 +558,44 @@ class VoiceAssistant:
                 model_size=self._settings.wake_word_model_size,
                 compute_type=self._settings.whisper_compute_type,
                 device=self._settings.whisper_device,
+                # Konuşma/gürültü ayrımını Vosk yapar; sabit enerji eşiği
+                # değişken ortam gürültüsünde çalışmıyordu (bkz.
+                # `voice/wake_word.py` modül dokümantasyonu).
+                vosk_model_path=self._settings.vosk_speech_gate_model_path,
             )
         return self._wake_detector
+
+    def _calibrate_silence_threshold(self, mic: Any) -> None:
+        """Açılışta ortam gürültüsünü ölçüp sessizlik eşiğini ona göre ayarlar.
+
+        Sabit bir eşik, ortam gürültüsü değişken olduğu için çalışmıyordu:
+        eşiğin üstünde kalan bir odada kayıt "kullanıcı sustu" diyemiyor ve
+        komutun etrafındaki konuşmaları da yutuyordu (bkz.
+        `voice.audio.measure_noise_floor`).
+
+        Ölçüm başarısız olursa varsayılan eşik korunur — kalibrasyonun
+        kendisi asistanı çalışmaz hâle getirmemeli.
+        """
+
+        from voice.audio import measure_noise_floor
+
+        try:
+            self._silence_threshold = measure_noise_floor(mic)
+        except Exception:  # noqa: BLE001 - kalibrasyon başarısızlığı akışı durdurmasın
+            logger.warning("Ortam gürültüsü ölçülemedi; varsayılan eşik kullanılacak.", exc_info=True)
 
     def _ensure_recorder(self):
         if self._recorder is None:
             from voice.stt import SpeechRecorder
 
+            from voice.stt import DEFAULT_SILENCE_THRESHOLD
+
             self._recorder = SpeechRecorder(
                 silence_timeout=self._settings.silence_timeout_seconds,
                 max_duration=self._settings.max_command_seconds,
+                # Açılışta ölçülen ortam gürültüsüne göre ayarlanmış eşik;
+                # kalibrasyon yapılamadıysa varsayılana düşülür.
+                silence_threshold=self._silence_threshold or DEFAULT_SILENCE_THRESHOLD,
             )
         return self._recorder
 

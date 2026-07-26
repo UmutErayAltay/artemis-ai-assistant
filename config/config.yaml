@@ -51,27 +51,28 @@ wake_words:
   - "art emis"
   - "hartemis"
 
-# Komut tanıma (STT) için faster-whisper model boyutu: tiny/base/small/
-# medium/large-v3. Boyut arttıkça doğruluk artar ama RAM/CPU yükü de
-# artar. "small" Türkçe için makul bir denge (~500MB RAM); daha güçlü
-# bir makinede daha yüksek doğruluk istiyorsanız "medium"a geçin
-# (~1.5GB RAM).
-whisper_model_size: "small"
+# Komut tanıma (STT) için faster-whisper modeli.
+# Varsayılan "large-v3-turbo": GPU'da hem EN DOĞRU hem hızlı seçenek.
+# Ölçüm (RTX 4050, aynı ses klipleri):
+#     small (CPU)          1.35 sn -> "lobby of legends açar mısın"
+#     large-v3-turbo (GPU) 0.33 sn -> "league of legends, açar mısın"
+# GPU yoksa Artemis bunu otomatik olarak "small"a düşürür (büyük model
+# CPU'da 10+ saniye sürer ve asistanı kullanılamaz yapar).
+whisper_model_size: "large-v3-turbo"
 
-# faster-whisper çıkarımının sayısal hassasiyeti. CPU'da "int8" en az
-# RAM'i kullanır ve en hızlıdır (ufak bir doğruluk kaybıyla); CUDA/GPU
-# varsa "float16" daha doğru sonuç verebilir.
-whisper_compute_type: "int8"
+# faster-whisper çıkarımının sayısal hassasiyeti. GPU'da "float16"
+# önerilir (6GB VRAM için fazlasıyla yeterli). Yalnızca CPU
+# kullanacaksanız "int8" yapın — CPU'da float16 çok yavaştır.
+whisper_compute_type: "float16"
 
-# Whisper'ın çalışacağı cihaz: "cpu" veya "cuda". "auto" YAZMAYIN —
-# faster-whisper'ın kendi varsayılanı odur ve makinede NVIDIA GPU görürse
-# CUDA'yı seçer; CUDA kütüphaneleri (cuBLAS/cuDNN) kurulu değilse bu, model
-# yüklenirken değil İLK TANIMA sırasında şu hatayla çöker:
-#   RuntimeError: Library cublas64_12.dll is not found or cannot be loaded
-# GPU kullanmak istiyorsanız önce CUDA Toolkit + cuDNN kurup buraya "cuda"
-# yazın; kurulu değilse "cpu" bırakın (bu makinede ölçülen hız zaten yeterli:
-# uyandırma için ~0.24 sn).
-whisper_device: "cpu"
+# Whisper'ın çalışacağı cihaz: "cuda" (GPU) veya "cpu". "auto" YAZMAYIN —
+# faster-whisper'ın kendi varsayılanı odur ve CUDA kütüphaneleri yokken
+# model yüklenirken değil İLK TANIMA sırasında çöker.
+# GPU için CUDA Toolkit'in tamamı GEREKMEZ, pip yeterlidir:
+#     pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+# Kütüphaneler bulunamazsa Artemis sessizce CPU'ya düşer ve büyük modeli
+# küçüğüyle değiştirir (bkz. voice/gpu.py, voice/stt.py).
+whisper_device: "cuda"
 
 # Piper Türkçe ses modelinin (.onnx) yolu. Yanında aynı adı taşıyan bir
 # .onnx.json dosyası da bulunmalıdır (Piper bunu şart koşar). Belirtilmezse
@@ -99,7 +100,7 @@ voice_hotkey: "ctrl+alt+a"
 # Uyandırma sözcüğü için kullanılan Whisper model boyutu. Komut tanımadan
 # AYRI ve kasıtlı olarak küçük tutulur ("tiny"): uyandırma algılaması çok
 # daha sık çalışır, bu yüzden ucuz olmalı. Komut tanımada doğruluk kritik
-# olduğundan orada whisper_model_size (yukarıda, varsayılan "small")
+# olduğundan orada whisper_model_size (yukarıda, large-v3-turbo)
 # geçerlidir (bkz. voice/wake_word.py).
 wake_word_model_size: "tiny"
 

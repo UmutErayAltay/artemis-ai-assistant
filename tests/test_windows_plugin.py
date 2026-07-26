@@ -147,7 +147,16 @@ def test_close_app_terminates_real_process(dispatcher: ToolDispatcher, monkeypat
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(0.3)  # sürecin process listesine yansımasını bekle
+    # Sürecin işletim sisteminin süreç listesine yansımasını BEKLE — sabit
+    # bir `sleep` yerine yoklama kullanılır: sabit süre, makine yüklüyken
+    # (örn. tüm test paketi koşarken) yetmeyip testi kararsız yapıyordu.
+    for _ in range(50):
+        if any("waitfor" in (p.info.get("name") or "").lower() for p in psutil.process_iter(["name"])):
+            break
+        time.sleep(0.05)
+    else:
+        proc.kill()
+        pytest.fail("waitfor süreci process listesinde görünmedi")
 
     try:
         result = dispatcher.dispatch({"tool": "windows.close_app", "arguments": {"name": "waitfor"}})

@@ -30,3 +30,17 @@ av>=11.0                 # Edge'in döndürdüğü mp3'ü PCM'e çevirir; PyAV (
 # mouse             # mouse_keyboard_plugin.py
 # openai-whisper    # voice/stt.py
 # piper-tts         # voice/tts.py  (veya pyttsx3)
+
+# --- GPU hızlandırma (opsiyonel, yalnızca NVIDIA ekran kartı varsa) ---
+# CUDA Toolkit'in tamamını kurmaya GEREK YOK; faster-whisper'ın (CTranslate2)
+# ihtiyaç duyduğu iki kütüphane pip ile gelir. Kurulu değilse Artemis
+# sessizce CPU'ya düşer (bkz. voice/gpu.py).
+nvidia-cublas-cu12 ; sys_platform == "win32"
+nvidia-cudnn-cu12 ; sys_platform == "win32"
+
+# --- Konuşma kapısı (gürültü/konuşma ayrımı) ---
+# Uyandırma sözcüğünü TANIMAZ (bunu Whisper yapar); yalnızca "birisi
+# gerçekten konuşuyor mu?" sorusunu ucuza cevaplar. Sabit enerji eşiği
+# değişken ortam gürültüsünde çalışmadığı için geri eklendi
+# (bkz. voice/wake_word.py modül dokümantasyonu).
+vosk>=0.3.45

@@ -32,6 +32,13 @@ DEFAULT_SILENCE_TIMEOUT = 1.2
 DEFAULT_MAX_DURATION = 12.0
 """Kullanıcı hiç susmasa bile kayıt bu saniyeden uzun sürmez."""
 
+_CPU_FALLBACK_MODEL_SIZE = "small"
+"""GPU istenip bulunamadığında düşülecek model boyutu.
+
+`large-v3-turbo` GPU'da ~0.3 saniyede tanır ama CPU'da 10 saniyeyi
+aşabilir. Sessizce yavaşlamak yerine küçük modele inmek, asistanı
+kullanılabilir tutar (bkz. `_ensure_model`)."""
+
 MIN_TRANSCRIBE_SECONDS = 0.2
 """Bundan kısa ses Whisper'a hiç gönderilmez — anlamlı bir söz olamayacak
 kadar kısadır ve modeli boşuna belleğe/çalışmaya zorlamanın alemi yok."""
@@ -169,12 +176,34 @@ class SpeechToText:
         if self._model is not None:
             return self._model
 
+        from voice.gpu import resolve_device
+
+        # "cuda" istendiği hâlde CUDA kütüphaneleri yoksa sessizce çökmek
+        # yerine CPU'ya düşülür (bkz. `voice/gpu.py`). Bu kontrol modelin
+        # OLUŞTURULMASINDAN önce yapılmalı: eksik cuBLAS hatası model
+        # yüklenirken değil İLK TANIMA sırasında patlıyor.
+        device = resolve_device(self._device)
+        model_size = self._model_size
+
+        # GPU istenip CPU'ya düşüldüyse büyük modeli CPU'da çalıştırmak
+        # komut başına 10+ saniye demektir — asistanı kullanılamaz yapar.
+        # Böyle bir durumda küçük modele inip DURUMU AÇIKÇA söyle.
+        if self._device == "cuda" and device == "cpu" and model_size.startswith("large"):
+            logger.warning(
+                "GPU kullanılamadığı için '%s' yerine '%s' modeline düşülüyor "
+                "(büyük model CPU'da çok yavaş). CUDA'yı kurmak için: "
+                "pip install nvidia-cublas-cu12 nvidia-cudnn-cu12",
+                model_size,
+                _CPU_FALLBACK_MODEL_SIZE,
+            )
+            model_size = _CPU_FALLBACK_MODEL_SIZE
+
         from faster_whisper import WhisperModel  # lazy import
 
         try:
             self._model = WhisperModel(
-                self._model_size,
-                device=self._device,
+                model_size,
+                device=device,
                 compute_type=self._compute_type,
             )
         except Exception as exc:  # noqa: BLE001 - model/ağ/donanım kaynaklı her hata

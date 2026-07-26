@@ -52,6 +52,13 @@ class Settings(BaseModel):
             "arte mis" gibi farklı dizilere çevirebilir; kullanıcı
             log'da kendi telaffuzu için modelin ne ürettiğini görüp
             buraya yeni bir varyant ekleyebilir (bkz. `voice/wake_word.py`).
+        vosk_speech_gate_model_path: Uyandırma algılamasında "birisi
+            gerçekten KONUŞUYOR mu?" kapısı için kullanılan Vosk model
+            klasörü. Vosk burada uyandırma sözcüğünü TANIMAZ (bunu
+            Whisper yapar); tek görevi gürültüyle konuşmayı ayırmaktır —
+            sabit enerji eşiği, ortam gürültüsü değişken olduğu için bu
+            işi yapamıyordu (bkz. `voice/wake_word.py`). Klasör yoksa
+            enerji eşiğine düşülür, asistan çalışmaya devam eder.
         whisper_device: Whisper'ın çalışacağı cihaz: "cpu" (varsayılan)
             veya "cuda". **"auto" KULLANMAYIN.** faster-whisper'ın kendi
             varsayılanı "auto"dur ve makinede bir NVIDIA GPU görürse
@@ -155,9 +162,14 @@ class Settings(BaseModel):
             "hartemis",
         ]
     )
-    whisper_model_size: str = "small"
-    whisper_compute_type: str = "int8"
-    whisper_device: str = "cpu"
+    vosk_speech_gate_model_path: Path = Field(
+        default_factory=lambda: Path(__file__).resolve().parent.parent
+        / "voice_models"
+        / "vosk-model-small-tr-0.3"
+    )
+    whisper_model_size: str = "large-v3-turbo"
+    whisper_compute_type: str = "float16"
+    whisper_device: str = "cuda"
     piper_model_path: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent
         / "voice_models"

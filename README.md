@@ -1043,6 +1043,89 @@ Duyulan komut: 'league of legends açar mısın'
 LLM planı: [('windows.launch_app', {'name': 'League of Legends'})]
 ```
 
+### n) GPU, Vosk konuşma kapısı ve gürültü kalibrasyonu (v2.7)
+
+Kullanıcı "dediklerimi tam anlamıyor" dedi ve NVIDIA ekran kartı olduğunu
+belirtti. Model değiştirmeden önce ölçüm yapıldı ve **iki ayrı sorun**
+olduğu görüldü.
+
+#### Sorun 1: ses girdisi — sabit eşik değişken gürültüde çalışmaz
+
+Log'da aynı cümlenin her seferinde farklı çevrildiği görüldü:
+
+```
+"Masajındaki sosyal medyayı aç"              ← yanlış
+"Masa üstündeki sosyal medya klasörünü aç"   ← doğru
+"Masa, üstümdeki sosyal ve medya klasörünü"  ← yanlış
+```
+
+Model tutarlı olsaydı aynı sesi aynı yazardı. Mikrofon ölçüldü — ve
+sonuç, model değiştirmenin bunu çözmeyeceğini gösterdi. Aynı odada,
+aynı gün:
+
+| Ölçüm | Ortalama genlik | Sabit eşiğe (0.06) göre |
+|---|---|---|
+| 1 | **0.075** | blokların **%65'i** eşiği aşıyor (kimse konuşmuyorken) |
+| 2 | 0.019 | hiç aşmıyor |
+
+Yani **sabit bir enerji eşiği ilkesel olarak çalışamaz.** Eşiğin üstünde
+kalan bir odada iki şey birden bozulur: (a) uyandırma sürekli tetiklenir,
+(b) kayıt "kullanıcı sustu" diyemez ve komutun etrafındaki konuşmaları da
+yutar — log'daki *"Hazırlamadım. Gamze, sosyal medya klasörünü aç."*
+dökümü tam olarak budur.
+
+İki ayrı düzeltme:
+
+- **Vosk geri geldi — ama sözcük tanıyıcı olarak DEĞİL.** Aynı gürültü
+  Vosk'a verildi ve **hiç kelime üretmedi**; yani gürültüyle konuşmayı
+  ayırt edebiliyor. Enerji eşiğinin yapamadığı tam olarak bu. Vosk artık
+  yalnızca "birisi gerçekten konuşuyor mu?" kapısıdır; uyandırma sözcüğünü
+  tanımak hâlâ Whisper'ın işi (Vosk "Artemis"i "akdeniz" duyuyor — bu
+  ölçülmüştü, v2.1'de atılma sebebiydi).
+- **Kayıt eşiği açılışta kalibre ediliyor.** `measure_noise_floor()` ilk
+  saniyede ortamı dinler ve eşiği gürültü tabanının 2 katına ayarlar
+  (0.08-0.40 arasına sıkıştırılmış). Sessiz odada alt sınıra, gürültülü
+  odada gürültünün üstüne oturur.
+
+#### Sorun 2: model — GPU açıldı
+
+RTX 4050 (6 GB) için CUDA Toolkit'in tamamı gerekmedi; iki pip paketi
+yetti (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). Ama Windows bu DLL'leri
+`site-packages` altında BULAMAZ; `voice/gpu.py` iki adımı birden yapar:
+dizinleri arama yoluna ekler **ve** DLL'leri `ctypes.CDLL` ile açıkça
+sürece yükler. Yalnızca birincisi yetmiyor (ölçüldü).
+
+Sonuç — aynı ses klipleri:
+
+| | Model | Süre | "League of Legends açar mısın" |
+|---|---|---|---|
+| Önce | small (CPU) | 1.35 sn | "**lobby** of legends açar mısın" ❌ |
+| Sonra | **large-v3-turbo (GPU)** | **0.33 sn** | "**league of legends**, açar mısın" ✅ |
+
+Haftalardır sorun olan cümle düzeldi; üstelik 4 kat hızlı.
+
+**Güvenlik ağı**: `whisper_device: "cuda"` istenip CUDA bulunamazsa
+Artemis sessizce CPU'ya düşer **ve** büyük modeli `small` ile değiştirir —
+`large-v3-turbo` CPU'da 10+ saniye sürer ve asistanı kullanılamaz yapardı.
+
+#### `scripts/smoke_voice.py` — uçtan uca duman testi
+
+Birim testleri her parçayı ayrı doğruluyor ama "mikrofondan tool'a"
+yolunun tamamını yalnızca bu gösterir. Piper ile konuşma üretip
+`VoiceAssistant`'a mikrofondan geliyormuş gibi besler; zincirin geri
+kalanı (uyandırma, Whisper, komut kapısı, Ollama, planner, dispatcher)
+GERÇEKTİR. Yalnızca hoparlör susturulur ve masaüstü geçici bir klasöre
+yönlendirilir — gerçek masaüstüne dokunulmaz.
+
+```
+[söylenen] Masaüstünde Orbit klasörü oluştur
+  duyulan : 'Masaüstünde orbit klasörü oluştur.'
+  cevap   : orbit klasörü oluşturuldu.
+
+[söylenen] Sen kimsin?
+  cevap   : Bir komut duymadım.     ← komut kapısı çalışıyor
+```
+
 ### g) Arayüz: ne dediğiniz artık ekranda kalıyor
 
 Kullanıcı isteği: *"Dediklerimi Artemis yazısının altında gösterse daha

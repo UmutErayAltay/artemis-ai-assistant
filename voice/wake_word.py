@@ -1,6 +1,6 @@
-"""Uyandırma sözcüğü ("Artemis") algılama — enerji kapısı + Whisper tiny.
+"""Uyandırma sözcüğü ("Artemis") algılama — konuşma kapısı (Vosk/enerji) + Whisper tiny.
 
-NEDEN VOSK ATILDI (ölçüldü, varsayılmadı)
+NEDEN VOSK SÖZCÜĞÜ TANIMAK İÇİN KULLANILMIYOR (ölçüldü, varsayılmadı)
     Piper ile üretilmiş Türkçe "Artemis" sesi hem Vosk'un küçük Türkçe
     modeline hem Whisper tiny'ye (hotwords ile) verildi:
 
@@ -9,23 +9,45 @@ NEDEN VOSK ATILDI (ölçüldü, varsayılmadı)
         "Artemis" | "akdeniz"      (YANLIŞ) | "Artemis"       (DOĞRU)
 
     Üstelik Vosk'un dilbilgisi (grammar) kısıtlaması HER girdide boş
-    string döndürüyordu ("artemiz sözlükte yok" uyarısıyla) — yani eski
-    kod fiilen hiçbir zaman uyanamıyordu. Bu bir tahmin değil, ölçülmüş
-    bir arıza; bu yüzden Vosk'a hiçbir referans bırakılmadan bu dosya
-    baştan yazıldı.
+    string döndürüyordu ("artemiz sözlükte yok" uyarısıyla) — yani Vosk'u
+    doğrudan uyandırma sözcüğü tanıyıcısı yapan eski tasarım fiilen hiçbir
+    zaman uyanamıyordu. Bu yüzden **Vosk uyandırma sözcüğünü ASLA
+    tanımaya çalışmaz** — sözcüğü tanımak hâlâ tamamen Whisper'ın işidir
+    (bkz. `_recognize`). Vosk'un buradaki tek görevi aşağıda anlatılıyor.
 
-NEDEN ENERJİ KAPISI + WHISPER
-    Whisper tiny, Vosk'un küçük modelinden çok daha doğru ama Vosk kadar
-    "sürekli bedava çalıştırılabilir" değildir. Çözüm: Whisper'ı SÜREKLİ
-    çalıştırmak yerine önce ucuz bir enerji ölçümüyle (bkz.
-    `voice.audio.rms_amplitude`) konuşma olup olmadığına bakılır; Whisper
-    yalnızca gerçekten konuşma algılandığında, biriken sesin TAMAMI
-    üzerinde BİR KEZ çalıştırılır. Sessiz bir odada Whisper hiç
-    çağrılmaz — CPU maliyeti sıfırdır, bu tasarımın ana kazancı budur.
+NEDEN VOSK GERİ GELDİ — "KONUŞMA VAR MI?" KAPISI OLARAK (ölçüldü)
+    Ham enerji eşiği (`energy_threshold`) sabit bir sayı olduğu için
+    ortam gürültüsündeki değişime dayanamıyor. Aynı odada iki ayrı ölçüm:
+
+        ölçüm 1: ortalama genlik 0.075 -> blokların %65'i eşiği AŞIYOR
+                 (kimse konuşmuyorken)
+        ölçüm 2: ortalama genlik 0.019 -> hiç aşmıyor
+
+    Yani sabit bir enerji eşiği ilkesel olarak çalışamaz: kullanıcının
+    gerçek ortamında Whisper sürekli boşuna tetiklenip `'artemiz 맛이'`,
+    `'temiz'`, `'As if it is artemiz...'` gibi saçma "uyanmalar" üretti.
+    Aynı gürültüyle test edilen Vosk ise HİÇ kelime üretmedi — yani
+    gürültüyle gerçek konuşmayı ayırt edebiliyor; enerji eşiğinin
+    yapamadığı tam olarak bu. Bu yüzden `vosk_model_path` verilirse
+    "konuşma var mı?" kararı artık Vosk'un ürettiği metnin boş olup
+    olmamasına bakılarak verilir (bkz. `_is_speech`); enerji eşiği
+    yalnızca Vosk yapılandırılmamışsa ya da kurulamazsa devrede kalan bir
+    YEDEKTİR (geri uyumluluk, bkz. `_ensure_vosk`).
+
+NEDEN ENERJİ/VOSK KAPISI + WHISPER (ikisi neden ayrı)
+    Whisper tiny, uyandırma sözcüğünü tanımakta hem Vosk'un küçük
+    modelinden hem ham enerji ölçümünden çok daha doğru ama SÜREKLİ
+    çalıştırılabilecek kadar ucuz değildir. Çözüm: Whisper'ı sürekli
+    çalıştırmak yerine önce ucuz bir konuşma kapısıyla (Vosk ya da enerji
+    ölçümü, bkz. `voice.audio.rms_amplitude`) konuşma olup olmadığına
+    bakılır; Whisper yalnızca gerçekten konuşma algılandığında, biriken
+    sesin TAMAMI üzerinde BİR KEZ çalıştırılır. Sessiz/gürültülü bir
+    odada Whisper hiç çağrılmaz — CPU maliyeti sıfırdır, bu tasarımın
+    ana kazancı budur.
 
     Ölçülen gecikme bunu doğruluyor: 0.81 saniyelik bir klip için 0.24
-    saniye tanıma süresi; model yükleme (bir kez, lazy) ~4 saniye. Enerji
-    kapısıyla tetiklenen bir uyandırma algılaması için fazlasıyla yeterli.
+    saniye tanıma süresi; model yükleme (bir kez, lazy) ~4 saniye. Bu
+    kapıyla tetiklenen bir uyandırma algılaması için fazlasıyla yeterli.
 
 NEDEN ÖN-TAMPON (pre-roll) ŞART
     Enerji eşiği aşıldığı ANDA konuşma aslında bir-iki blok önce başlamış
@@ -53,8 +75,10 @@ hem bir varyant listesine hem bulanık (fuzzy) benzerliğe dayanır (bkz.
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 from collections import deque
+from pathlib import Path
 
 from voice.audio import SAMPLE_RATE, SAMPLE_WIDTH_BYTES, rms_amplitude
 
@@ -100,11 +124,14 @@ class WakeWordUnavailableError(Exception):
 
 
 class WakeWordDetector:
-    """Enerji kapısı + Whisper ile beslenen ses bloklarında uyandırma sözcüğünü arar.
+    """Konuşma kapısı (Vosk ya da enerji eşiği) + Whisper ile ses bloklarında uyandırma sözcüğünü arar.
 
-    Whisper SÜREKLİ çalışmaz: yalnızca enerji eşiği aşılıp konuşma
-    algılandığında ve konuşmanın bittiğine karar verildiğinde, biriken
-    sesin TAMAMI üzerinde bir kez çalıştırılır (bkz. modül dokümantasyonu).
+    Whisper SÜREKLİ çalışmaz: yalnızca konuşma kapısı "konuşma var"
+    deyip konuşmanın bittiğine karar verildiğinde, biriken sesin TAMAMI
+    üzerinde bir kez çalıştırılır (bkz. modül dokümantasyonu). Konuşma
+    kapısı `vosk_model_path` verilmişse Vosk'un ürettiği metnin boş olup
+    olmadığına bakar; verilmemişse ya da Vosk kurulamazsa eski davranışa,
+    ham enerji eşiğine düşülür (bkz. `_ensure_vosk`, `_is_speech`).
 
     Args:
         wake_words: Kabul edilecek sözcük varyantları (küçük harf).
@@ -115,8 +142,15 @@ class WakeWordDetector:
             "int8" en az RAM'i kullanır ve en hızlı çalışır.
         fuzzy_threshold: Bulanık eşleşme eşiği (0-1).
         energy_threshold: Bu genliğin (0-1, bkz. `voice.audio.rms_amplitude`)
-            altı sessizlik sayılır; Whisper yalnızca bu eşik aşıldığında
-            devreye girer.
+            altı sessizlik sayılır. Yalnızca Vosk yapılandırılmamışsa ya
+            da kurulamazsa kullanılan YEDEK kapıdır (bkz. modül notu
+            "NEDEN VOSK GERİ GELDİ").
+        vosk_model_path: Vosk konuşma-tanıma model KLASÖRÜ. `None` ise
+            (varsayılan) Vosk hiç kullanılmaz ve davranış eskisiyle
+            birebir aynı kalır (geri uyumluluk). Verilirse "konuşma var
+            mı?" kararı Vosk'un metin çıktısına dayanır — ama Vosk
+            uyandırma sözcüğünü TANIMAK için kullanılmaz, bkz. modül
+            dokümantasyonu.
         max_buffer_seconds: Kullanıcı hiç susmasa bile biriken ses bu
             süreyi (saniye) aşınca zorla tanımaya gönderilir.
         silence_blocks: Konuşma başladıktan sonra bu kadar ardışık sessiz
@@ -131,6 +165,7 @@ class WakeWordDetector:
         device: str = "cpu",
         fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
         energy_threshold: float = 0.06,
+        vosk_model_path: Path | None = None,
         max_buffer_seconds: float = 2.5,
         silence_blocks: int = 3,
     ) -> None:
@@ -147,6 +182,10 @@ class WakeWordDetector:
         self._hotwords = " ".join(self._wake_words)
 
         self._model = None  # lazy yüklenir, bkz. _ensure_model
+
+        self._vosk_model_path = vosk_model_path
+        self._vosk_recognizer = None  # lazy kurulur, bkz. _ensure_vosk
+        self._vosk_ready: bool | None = None  # None=henüz denenmedi, False=kullanılamıyor
 
         self._preroll: deque[bytes] = deque(maxlen=_PREROLL_BLOCKS)
         self._speech_blocks: list[bytes] = []
@@ -203,14 +242,79 @@ class WakeWordDetector:
         )
         return self._model
 
-    def feed(self, block: bytes) -> bool:
-        """Bir ses bloğunu enerji kapısından geçirir; uyandırma sözcüğü algılanırsa True döner.
+    def _ensure_vosk(self):
+        """Vosk tanıyıcısını ilk `feed()` çağrısında kurar (lazy, Whisper ile aynı desen).
 
-        Enerji eşiğin altında kalan bloklar Whisper'ı hiç tetiklemez, yalnızca
-        küçük bir ön-tampona eklenir (bkz. modül dokümantasyonu — "NEDEN
-        ÖN-TAMPON ŞART"). Enerji eşiği aşılınca konuşma başladı sayılır ve
-        ön-tampon dahil bloklar biriktirilir; `silence_blocks` kadar ardışık
-        sessiz blok gelene ya da `max_buffer_seconds` aşılana kadar birikim
+        `vosk_model_path` verilmemişse hiçbir şey yapmadan `None` döner —
+        yani Vosk paketine dosya başında da, burada da hiç dokunulmaz.
+        Model klasörü yoksa/bozuksa ya da `vosk` paketi kurulu değilse
+        HATA FIRLATILMAZ: bir uyarı loglanır ve akış kalıcı olarak enerji
+        eşiğine düşer (bkz. modül dokümantasyonu "NEDEN VOSK GERİ GELDİ").
+
+        Returns:
+            Kurulu bir `vosk.KaldiRecognizer` örneği, ya da Vosk
+            yapılandırılmamışsa/kurulamıyorsa `None`.
+        """
+
+        if self._vosk_model_path is None:
+            return None
+
+        if self._vosk_recognizer is not None or self._vosk_ready is False:
+            return self._vosk_recognizer
+
+        try:
+            from vosk import KaldiRecognizer, Model, SetLogLevel  # lazy import
+
+            SetLogLevel(-1)  # Vosk'un ayrıntılı konsol çıktısını sustur
+            model = Model(str(self._vosk_model_path))
+            self._vosk_recognizer = KaldiRecognizer(model, SAMPLE_RATE)
+            self._vosk_ready = True
+        except Exception as exc:  # noqa: BLE001 - paket/model/disk kaynaklı her hata
+            logger.warning(
+                "Vosk konuşma kapısı kurulamadı (%s); enerji eşiğine düşülüyor.",
+                exc,
+            )
+            self._vosk_ready = False
+            self._vosk_recognizer = None
+
+        return self._vosk_recognizer
+
+    def _is_speech(self, block: bytes) -> bool:
+        """Bir ses bloğunda gerçek konuşma olup olmadığına karar verir.
+
+        Vosk yapılandırılmışsa (bkz. `vosk_model_path`) karar onun metin
+        çıktısına dayanır: blok `AcceptWaveform`'a verilir; tümce
+        tamamlandıysa `Result()`, tamamlanmadıysa `PartialResult()`
+        içindeki metin BOŞ DEĞİLSE "konuşma var" sayılır. Vosk yoksa ya
+        da kurulamadıysa (bkz. `_ensure_vosk`) eski davranışa, ham enerji
+        eşiğine düşülür.
+
+        ÖNEMLİ — Vosk'un rolü SINIRLI: burada okunan metin ("artemis" mi
+        dedi mi?) HİÇ SORULMAZ, yalnızca metnin varlığına bakılır. Sözcüğü
+        tanımak hâlâ tamamen `_recognize()` üzerinden Whisper'a aittir
+        (bkz. modül dokümantasyonu, "NEDEN VOSK SÖZCÜĞÜ TANIMAK İÇİN
+        KULLANILMIYOR").
+        """
+
+        recognizer = self._ensure_vosk()
+        if recognizer is not None:
+            if recognizer.AcceptWaveform(block):
+                text = json.loads(recognizer.Result()).get("text", "")
+            else:
+                text = json.loads(recognizer.PartialResult()).get("partial", "")
+            return bool(text.strip())
+
+        return rms_amplitude(block) >= self._energy_threshold
+
+    def feed(self, block: bytes) -> bool:
+        """Bir ses bloğunu konuşma kapısından geçirir; uyandırma sözcüğü algılanırsa True döner.
+
+        Konuşma kapısı olmayan (kapının "konuşma yok" dediği) bloklar
+        Whisper'ı hiç tetiklemez, yalnızca küçük bir ön-tampona eklenir
+        (bkz. modül dokümantasyonu — "NEDEN ÖN-TAMPON ŞART"). Kapı
+        "konuşma var" deyince konuşma başladı sayılır ve ön-tampon dahil
+        bloklar biriktirilir; `silence_blocks` kadar ardışık konuşmasız
+        blok gelene ya da `max_buffer_seconds` aşılana kadar birikim
         sürer. O noktada biriken sesin TAMAMI Whisper'a verilir.
 
         Args:
@@ -225,8 +329,7 @@ class WakeWordDetector:
                 ortaya çıkar).
         """
 
-        amplitude = rms_amplitude(block)
-        is_speech = amplitude >= self._energy_threshold
+        is_speech = self._is_speech(block)
 
         if not self._speech_started:
             if not is_speech:
