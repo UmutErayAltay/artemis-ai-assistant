@@ -98,6 +98,13 @@ class Settings(BaseModel):
         tts_provider: Sesli okumanın nereden yapılacağı; `stt_provider`
             ile aynı üç değeri alır. "local" seçilirse cevap metni de
             dışarı çıkmaz.
+        command_gate_enabled: Duyulan metin tool seçimine gönderilmeden
+            önce "bu gerçekten bir komut mu?" diye ayrı bir ikili soruyla
+            süzülsün mü (varsayılan True). Kapatmak, uyandırma sözcüğü
+            gürültüyle tetiklendiğinde sıradan konuşmanın rastgele
+            eylemlere dönüşmesine izin verir (bkz.
+            `core/llm_client.py::is_actionable_command`). Karşılığı komut
+            başına ~1.5 saniyelik ek gecikmedir.
         stt_cloud_provider: Bulut konuşma tanımada hangi servisin
             kullanılacağı: "azure" (varsayılan) veya "groq". Seçilen
             servisin anahtarı yoksa yönlendirici zaten yerele düşer, bu
@@ -164,6 +171,7 @@ class Settings(BaseModel):
     # --- Hibrit (bulut/yerel) ses ayarları ---
     stt_provider: str = "auto"
     tts_provider: str = "auto"
+    command_gate_enabled: bool = True
     stt_cloud_provider: str = "azure"
     groq_model: str = "whisper-large-v3-turbo"
     edge_tts_voice: str = "tr-TR-EmelNeural"

@@ -308,6 +308,14 @@ class VoiceAssistant:
         self._overlay.set_heard(transcript)
         self._overlay.show_thinking("Düşünüyorum…")
 
+        # KOMUT KAPISI: her duyulan şey bir komut değildir. Uyandırma
+        # sözcüğü gürültüyle de tetiklenebiliyor ve sonrasında yakalanan
+        # sıradan bir konuşma, tool seçiminde rastgele bir eyleme
+        # dönüşüyordu (bkz. `llm_client.is_actionable_command`).
+        if self._settings.command_gate_enabled and not self._llm.is_actionable_command(transcript):
+            self._respond("Bir komut duymadım.")
+            return
+
         try:
             tool_calls = self._llm.get_tool_calls(self._system_prompt, transcript)
         except LLMResponseParseError:

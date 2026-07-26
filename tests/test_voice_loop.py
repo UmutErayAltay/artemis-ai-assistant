@@ -86,10 +86,21 @@ class FakeMicrophone:
 class FakeLLM:
     """`OllamaLLMClient` yerine geçer; sabit bir tool-call listesi döndürür."""
 
-    def __init__(self, tool_calls: list[dict[str, Any]] | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        tool_calls: list[dict[str, Any]] | None = None,
+        error: Exception | None = None,
+        is_command: bool = True,
+    ) -> None:
         self._tool_calls = tool_calls or []
         self._error = error
+        self._is_command = is_command
         self.prompts: list[str] = []
+        self.gate_inputs: list[str] = []
+
+    def is_actionable_command(self, user_input: str) -> bool:
+        self.gate_inputs.append(user_input)
+        return self._is_command
 
     def get_tool_calls(self, system_prompt: str, user_input: str) -> list[dict[str, Any]]:
         self.prompts.append(user_input)
@@ -605,3 +616,71 @@ def test_speakable_handles_multiple_paths_in_one_message() -> None:
     assert "kaynak.txt" in result
     assert "hedef.txt" in result
     assert ":\\" not in result
+
+
+# --------------------------------------------------------------------------
+# Komut kapısı — her duyulan şey bir komut değildir
+# --------------------------------------------------------------------------
+
+
+def test_command_gate_blocks_non_commands_before_any_tool_runs(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """GERÇEK ARIZA: "Sen kimsin?" masaüstünde example.txt oluşturuyordu.
+
+    Uyandırma sözcüğü gürültüyle tetiklenip sıradan bir konuşma
+    yakalandığında, tool seçimi bir tool üretmek ZORUNDA olduğu için
+    rastgele bir eyleme dönüşüyordu. Kapı bunu tool seçimine hiç
+    gitmeden durdurmalı.
+    """
+
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [{"tool": "filesystem.create_file", "arguments": {"name": "example.txt", "location": "desktop"}}],
+        is_command=False,
+    )
+    assistant, tts = _build_assistant(dispatcher, settings, overlay, llm, "Sen kimsin?")
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert llm.gate_inputs == ["Sen kimsin?"]
+    assert llm.prompts == [], "Komut olmayan girdi tool seçimine gitmemeliydi"
+    assert not (settings.desktop_path / "example.txt").exists(), "İstenmeyen dosya oluşturuldu"
+    assert tts.spoken == ["Bir komut duymadım."]
+
+
+def test_command_gate_lets_real_commands_through(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """Kapı gerçek komutları engellememelidir (aşırı koruma da bir arızadır)."""
+
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}],
+        is_command=True,
+    )
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "masaüstünde orbit klasörü oluştur")
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert llm.prompts == ["masaüstünde orbit klasörü oluştur"]
+    assert (settings.desktop_path / "Orbit").is_dir()
+
+
+def test_command_gate_can_be_disabled_from_settings(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """`command_gate_enabled: false` iken kapı hiç çalıştırılmamalı."""
+
+    settings.command_gate_enabled = False
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}],
+        is_command=False,  # kapı çalışsaydı engellerdi
+    )
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "orbit klasörü oluştur")
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert llm.gate_inputs == [], "Kapı kapalıyken çalıştırılmamalıydı"
+    assert (settings.desktop_path / "Orbit").is_dir()

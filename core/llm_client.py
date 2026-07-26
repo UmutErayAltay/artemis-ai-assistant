@@ -46,6 +46,41 @@ logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 
+_GATE_COMMAND = "KOMUT"
+_GATE_NOT_COMMAND = "KOMUT_DEGIL"
+
+_COMMAND_GATE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"karar": {"type": "string", "enum": [_GATE_COMMAND, _GATE_NOT_COMMAND]}},
+    "required": ["karar"],
+}
+
+_COMMAND_GATE_PROMPT = f"""Sen bir sesli asistanın filtresisin. Sana kullanıcının \
+mikrofonundan geçen bir metin verilecek. Görevin TEK bir şeye karar vermek: bu metin, \
+bilgisayarda bir işlem yapılmasını isteyen NET bir KOMUT mu?
+
+KOMUT = kullanıcı bilgisayardan somut bir şey yapmasını istiyor (uygulama aç/kapat, \
+dosya/klasör oluştur/sil/aç, site aç, ara, ekran görüntüsü, ses/parlaklık).
+
+{_GATE_NOT_COMMAND} = soru, sohbet, yarım/anlamsız cümle, arka planda konuşma, \
+başkasıyla konuşma, hangi işlem olduğu belirsiz istek.
+
+Şüphedeysen {_GATE_NOT_COMMAND} de."""
+"""Komut kapısının sistem promptu (bkz. `is_actionable_command`).
+
+Kasıtlı olarak TEK bir soru sorar ve yalnızca iki cevaba izin verir;
+şema kısıtı sayesinde model başka bir şey üretemez. "Şüphedeysen
+KOMUT_DEGIL de" satırı önemlidir: yanlış eylem yapmak, cevap vermemekten
+kötüdür."""
+
+MAX_PLAN_STEPS = 5
+"""Tek bir komuttan üretilebilecek en fazla tool çağrısı sayısı.
+
+Güvenlik sınırıdır (bkz. `_response_schema`): gürültülü/anlaşılamayan bir
+girdide model kaçağa geçip onlarca adımlık yıkıcı bir plan üretebiliyor.
+Gerçek bir sesli komut bu sayıyı pratikte aşmaz.
+"""
+
 _CORRECTION_MESSAGE = (
     "Bu çıktı geçerli değildi. YALNIZCA şu formatta, başka hiçbir açıklama "
     'olmadan bir JSON listesi döndür: [{"tool": "<tool_adı>", "arguments": {...}}]'
@@ -135,6 +170,65 @@ class OllamaLLMClient:
 
         assert last_error is not None  # döngü en az bir kez çalıştığı için garantili
         raise last_error
+
+    def is_actionable_command(self, user_input: str) -> bool:
+        """Verilen metnin gerçekten bir BİLGİSAYAR KOMUTU olup olmadığına karar verir.
+
+        NEDEN AYRI BİR ADIM — ölçülmüş bir arızanın çözümü:
+
+            Tool seçimi sırasında model bir tool üretmek ZORUNDADIR
+            (şema `minItems: 1`). Bu yüzden komut olmayan girdilerde
+            rastgele bir tool seçiyordu. Gerçek kullanımdan:
+
+                "Sen kimsin?"        -> masaüstünde example.txt oluşturdu
+                "Abi insanlarız ki?" -> dosya oluşturdu + tarayıcı açtı
+                (arka plan sohbeti)  -> 25 adımlık plan, içinde delete vardı
+
+            Prompt'a kural ve örnek eklemek yetmedi (llama3.1:8b ile 5/10),
+            daha büyük model de çözmedi (qwen2.5:14b ile 4/10 ve 10 kat
+            yavaş). Çünkü sorun bilgi eksikliği değil, modelin "hiçbir şey
+            yapma" seçeneğini seçmekte zorlanması.
+
+            Aynı modele TEK ve İKİLİ bir soru sorulduğunda ise sonuç
+            11/12 (soru başına ~1.4 sn). Küçük modeller ikili
+            sınıflandırmada, açık uçlu tool seçiminden çok daha iyidir —
+            bu yüzden karar ayrı bir çağrıya alındı.
+
+        Args:
+            user_input: Konuşmadan çevrilmiş ham metin.
+
+        Returns:
+            True ise metin bir komuttur ve tool seçimine geçilebilir.
+            Karar verilemezse (ağ/model hatası) True döner — kapı
+            AÇIK başarısız olur: kapının bozulması asistanı tamamen
+            kullanılamaz hale getirmemeli, yalnızca bu korumayı kaybeder.
+        """
+
+        import ollama  # lazy import
+
+        text = user_input.strip()
+        if not text:
+            return False
+
+        try:
+            response = ollama.chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": _COMMAND_GATE_PROMPT},
+                    {"role": "user", "content": text},
+                ],
+                format=_COMMAND_GATE_SCHEMA,
+                options={"temperature": 0},
+                keep_alive=self.keep_alive,
+            )
+            decision = json.loads(response["message"]["content"]).get("karar")
+        except Exception as exc:  # noqa: BLE001 - kapı bozulursa akış durmasın
+            logger.warning("Komut kapısı çalıştırılamadı, girdi komut sayılıyor: %s", exc)
+            return True
+
+        is_command = decision == _GATE_COMMAND
+        logger.info("Komut kapısı: %r -> %s", text, decision)
+        return is_command
 
     def _chat(self, messages: list[dict[str, str]]) -> tuple[str, list[dict[str, Any]] | None]:
         """Ollama'ya, sırayla farklı stratejiler deneyerek tek bir "tur" chat isteği atar.
@@ -254,6 +348,14 @@ class OllamaLLMClient:
                 "required": ["tool", "arguments"],
             },
             "minItems": 1,
+            # Bir sesli komut gerçekçi olarak en fazla birkaç adım sürer
+            # ("Chrome'u aç, GitHub'a git, ara" = 3). Bu sınır bir kalite
+            # tercihi değil, GÜVENLİK sınırıdır: anlaşılamayan/gürültülü bir
+            # girdide model kaçağa geçip uzun bir plan üretebiliyor. Gerçek
+            # bir olayda tek bir anlamsız cümle 25 tool çağrısı ürettti ve
+            # içinde `filesystem.delete` vardı. Grammar-constrained decoding
+            # sayesinde bu sınır bir talimat değil, fiziksel bir kısıttır.
+            "maxItems": MAX_PLAN_STEPS,
         }
 
     @staticmethod
