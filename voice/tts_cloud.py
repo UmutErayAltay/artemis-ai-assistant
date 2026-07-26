@@ -222,6 +222,18 @@ class EdgeTextToSpeech:
         "telefon gibi"/robotik yapar. Bu yüzden akışın kendi hızı
         korunup çağırana bildirilir.
 
+        ÖRNEKLERİ `to_ndarray()` İLE AL — `bytes(frame.planes[0])` İLE DEĞİL.
+        PyAV'ın düzlem (plane) tamponu hizalama nedeniyle gerçek ses
+        verisinden BÜYÜK olabilir; ham tamponu olduğu gibi çalmak, sonuna
+        anlamsız baytlar ekler ve bunlar hoparlörden CIZIRTI olarak duyulur.
+        Ölçüm (3.5 saniyelik bir cevapta):
+
+            bytes(planes[0]) -> 178752 bayt (3.72 sn)
+            to_ndarray()     -> 169344 bayt (3.53 sn)
+            fazlalık         ->   9408 bayt = %5.6 gürültü
+
+        `to_ndarray()` yalnızca gerçekten çözülmüş örnekleri döndürür.
+
         Returns:
             (pcm_baytlari, ornekleme_hizi) çifti.
         """
@@ -230,16 +242,19 @@ class EdgeTextToSpeech:
             raise ValueError("boş mp3 verisi")
 
         import av  # lazy import
+        import numpy as np  # lazy import
 
         container = av.open(io.BytesIO(mp3_bytes))
         source_rate = container.streams.audio[0].codec_context.sample_rate
         resampler = av.AudioResampler(format="s16", layout="mono", rate=source_rate)
 
-        pcm = bytearray()
+        blocks: list[bytes] = []
         for frame in container.decode(audio=0):
             for out in resampler.resample(frame):
-                pcm += bytes(out.planes[0])
-        return bytes(pcm), source_rate
+                # `.reshape(-1)`: mono kare (1, N) biçiminde gelir, düzleştirilir.
+                blocks.append(out.to_ndarray().reshape(-1).astype(np.int16).tobytes())
+
+        return b"".join(blocks), source_rate
 
     def _play(
         self,

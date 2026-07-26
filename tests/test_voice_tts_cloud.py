@@ -21,6 +21,15 @@ import pytest
 from voice.audio import SAMPLE_RATE
 from voice.tts_cloud import CloudTextToSpeechUnavailableError, EdgeTextToSpeech
 
+_ALIGNMENT_PADDING = b"\x7f\x7f" * 64
+"""PyAV'ın düzlem tamponuna eklediği hizalama dolgusunu taklit eder.
+
+Gerçek `frame.planes[0]` gerçek ses verisinden büyük olabilir; bu fazlalık
+çalınırsa hoparlörden CIZIRTI duyulur (ölçüldü: 3.5 sn'lik bir cevapta
+%5.6 çöp). Yüksek genlikli (0x7f7f) seçilmiştir ki sızması hâlinde
+testlerde sessizce kaybolmayıp gözle görülür bir fark yaratsın.
+"""
+
 _EDGE_NATIVE_SAMPLE_RATE = 24_000
 """Edge TTS'in gerçekte ürettiği örnekleme hızı (ölçüldü).
 
@@ -120,8 +129,21 @@ def _make_fake_av_module(corrupt_marker: bytes | None = None) -> types.ModuleTyp
             return self._data
 
     class _FakeOutFrame:
+        """Çözülmüş bir ses karesi.
+
+        `to_ndarray()` GERÇEK veriyi, `planes[0]` ise sonuna hizalama
+        DOLGUSU eklenmiş hâlini döndürür — gerçek PyAV davranışı budur ve
+        `EdgeTextToSpeech`'in `planes[0]` kullanmadığını kanıtlayan şey de
+        bu farktır. Dolgu çalınırsa hoparlörden cızırtı duyulur; bu yüzden
+        sahte nesne o tuzağı kasten kurar.
+        """
+
         def __init__(self, data: bytes) -> None:
-            self.planes = [_FakePlane(data)]
+            self._data = data
+            self.planes = [_FakePlane(data + _ALIGNMENT_PADDING)]
+
+        def to_ndarray(self):
+            return np.frombuffer(self._data, dtype=np.int16).reshape(1, -1)
 
     class _FakeFrame:
         def __init__(self, data: bytes) -> None:
@@ -478,3 +500,26 @@ def test_speak_inside_running_event_loop_raises_plain_runtime_error() -> None:
         asyncio.run(_call_speak_from_inside_a_running_loop())
 
     assert not isinstance(excinfo.value, CloudTextToSpeechUnavailableError)
+
+
+def test_decode_uses_real_samples_not_padded_plane_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CIZIRTI REGRESYONU: çözme, hizalama dolgusunu sese KATMAMALI.
+
+    Gerçek olay: `bytes(frame.planes[0])` kullanılıyordu. PyAV'ın düzlem
+    tamponu hizalama nedeniyle gerçek veriden büyük olabiliyor ve fazlalık
+    doğrudan hoparlöre gidip cızırtı olarak duyuluyordu. Ölçüm: 3.5
+    saniyelik bir cevapta 9408 bayt (%5.6) çöp.
+
+    Bu test, sahte karenin `planes[0]`'ına kasten dolgu koyar ve çözülmüş
+    PCM'in TAM OLARAK gerçek veri kadar olduğunu doğrular; kod `planes[0]`'a
+    geri dönerse test kırılır.
+    """
+
+    audio = _tone_block(0.05, sample_rate=_EDGE_NATIVE_SAMPLE_RATE)
+    monkeypatch.setitem(sys.modules, "av", _make_fake_av_module())
+
+    pcm, sample_rate = EdgeTextToSpeech._decode_mp3_to_pcm(audio)
+
+    assert sample_rate == _EDGE_NATIVE_SAMPLE_RATE
+    assert pcm == audio, "çözülen ses gerçek örneklerle birebir aynı olmalı"
+    assert _ALIGNMENT_PADDING not in pcm, "hizalama dolgusu sese sızmış (cızırtı sebebi)"
