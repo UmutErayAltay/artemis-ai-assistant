@@ -106,12 +106,12 @@ class Settings(BaseModel):
             ile aynı üç değeri alır. "local" seçilirse cevap metni de
             dışarı çıkmaz.
         command_gate_enabled: Duyulan metin tool seçimine gönderilmeden
-            önce "bu gerçekten bir komut mu?" diye ayrı bir ikili soruyla
+            önce "bu asistana yönelik mi?" diye ayrı bir ikili soruyla
             süzülsün mü (varsayılan True). Kapatmak, uyandırma sözcüğü
-            gürültüyle tetiklendiğinde sıradan konuşmanın rastgele
+            gürültüyle tetiklendiğinde arka plan konuşmasının rastgele
             eylemlere dönüşmesine izin verir (bkz.
-            `core/llm_client.py::is_actionable_command`). Karşılığı komut
-            başına ~1.5 saniyelik ek gecikmedir.
+            `core/llm_client.py::should_engage`). Karşılığı komut başına
+            ~1.5 saniyelik ek gecikmedir.
         stt_cloud_provider: Bulut konuşma tanımada hangi servisin
             kullanılacağı: "azure" (varsayılan) veya "groq". Seçilen
             servisin anahtarı yoksa yönlendirici zaten yerele düşer, bu

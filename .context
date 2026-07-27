@@ -265,6 +265,19 @@ YAPTIĞINA bakın.
 §9'daki güvencenin ilk iki katmanı işlemiyor. `think=False` ile ilgisi
 yok (doğrulandı). README §21b.
 
+### 6.11) Komut kapısı: "işlem mi" değil "asistana yönelik mi" (v3.3)
+`is_actionable_command` → `should_engage` oldu. Eski ikili kapı
+"KOMUT/KOMUT_DEGIL" diye ayırıyordu ve soruları da (`"sen kimsin?"`)
+tool seçimine hiç göndermeden engelliyordu — halbuki system_prompt.md
+tam o girdi için `assistant.reply` örneği içeriyordu. Üçe bölünmedi
+(komut/sohbet/gürültü): `assistant.reply` zaten normal tool seçiminden
+aynı yoldan çıkıyor, üçüncü kategori modele yalnızca belirsizlik katardı.
+
+Yeni sınır: **YÖNELİK** (işlem + soru + sohbet + belirsiz-ama-yönelik
+istek, tool seçimine gider) vs **GÜRÜLTÜ** (yarım cümle, arka plan
+konuşması, engellenir). Gerçek modelle 14/14 canlı doğrulama yapıldı
+(13 tam isabet, 1 zararsız sapma). Gerekçe README §23.
+
 ### 6.3) `location` tam yol kabul etmeye devam ediyor
 Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
 tam yol alabilmesi şemada belgelenmiş, bilinçli bir özellik.
@@ -296,19 +309,9 @@ araştırmaya girişilmesin diye kayıtlıdır.
    düzeltilebilir bir geri bildirim verir. (Belgelenmiş ama
    implemente edilmemiş bir vaat — ya yapılmalı ya docstring düzeltilmeli.)
 2. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
-   `mcp_plugin.py`, `voice/stt.py`, `voice/tts.py`. Hepsi aynı `BaseTool`
-   şablonuyla, çekirdeği bozmadan eklenebilir.
-3. **Komut kapısı ile sistem promptu aynı sözleşmeyi konuşmuyor.**
-   `prompts/system_prompt.md`, *"sen kimsin?"* için AÇIK bir örnek
-   içeriyor (`assistant.reply` → "Ben Artemis..."). Ama
-   `llm_client._COMMAND_GATE_PROMPT` "soru" kategorisini KOMUT DEĞİL
-   sayıp girdiyi LLM'e hiç ulaştırmıyor; kullanıcı *"Bir komut
-   duymadım."* duyuyor. Yani o örnek pratikte hiç çalışmıyor —
-   §5.1'deki hatanın aynı ailesi.
-   Kapı BİLEREK gevşetilmedi: kullanıcının açık isteği yanlış-pozitif
-   tetiklenmeyi AZALTMAKTI. Muhtemel çözüm kapıya üçüncü bir karar
-   eklemek (komut / sohbet / gürültü) ama bu ürün kararıdır ve
-   ölçülmeden yapılmamalı. (README §20f)
+   `mcp_plugin.py`. (`voice/stt.py`/`tts.py` YANLIŞ listelenmişti — ikisi
+   de zaten var, hibrit ses katmanının parçası.) Yeni plugin'ler aynı
+   `BaseTool` şablonuyla, çekirdeği bozmadan eklenebilir.
 4. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
    bitti, artık kullanılmıyor — yer gerekiyorsa
    `ollama rm gemma4:12b` ile silinebilir.

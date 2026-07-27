@@ -288,11 +288,43 @@ def test_command_gate_also_disables_thinking(monkeypatch: pytest.MonkeyPatch) ->
 
     def _fake_chat(model, messages, format=None, options=None, keep_alive=None, think=None, **extra):
         received["think"] = think
-        return {"message": {"content": '{"karar": "komut"}'}}
+        return {"message": {"content": '{"karar": "YONELIK"}'}}
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
     monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
 
-    OllamaLLMClient(model="fake-model").is_actionable_command("masaustunde klasor olustur")
+    OllamaLLMClient(model="fake-model").should_engage("masaustunde klasor olustur")
     assert received["think"] is False
+
+
+def test_gate_engages_for_questions_not_only_actions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REGRESYON (README §20f): kapı yalnızca İŞLEMLERİ değil, asistana
+
+    yönelik SORU/SOHBETİ de tool seçimine göndermeli. Eski ikili kapı
+    "komut mu?" diye soruyordu ve "sen kimsin?" gibi soruları
+    KOMUT_DEGIL sayıp tool seçimine hiç ulaştırmıyordu — halbuki
+    `prompts/system_prompt.md` bu girdi için AÇIK bir `assistant.reply`
+    örneği içeriyor. Sınır artık "işlem mi" değil "asistana yönelik mi";
+    bu testte modelin YONELIK dediği bir soru True dönmeli.
+    """
+
+    import types
+
+    fake_ollama = types.ModuleType("ollama")
+    fake_ollama.chat = lambda **kw: {"message": {"content": '{"karar": "YONELIK"}'}}
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    assert OllamaLLMClient(model="fake-model").should_engage("sen kimsin?") is True
+
+
+def test_gate_rejects_background_noise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gerçek gürültü (asistana yönelik olmayan arka plan konuşması) hâlâ engellenmeli."""
+
+    import types
+
+    fake_ollama = types.ModuleType("ollama")
+    fake_ollama.chat = lambda **kw: {"message": {"content": '{"karar": "GURULTU"}'}}
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    assert OllamaLLMClient(model="fake-model").should_engage("bilmiyorum ya öyle bir şey işte") is False

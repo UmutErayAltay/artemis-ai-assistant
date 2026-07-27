@@ -60,32 +60,53 @@ logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}|\[.*\]", re.DOTALL)
 
-_GATE_COMMAND = "KOMUT"
-_GATE_NOT_COMMAND = "KOMUT_DEGIL"
+_GATE_ENGAGE = "YONELIK"
+_GATE_NOISE = "GURULTU"
 
 _COMMAND_GATE_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "properties": {"karar": {"type": "string", "enum": [_GATE_COMMAND, _GATE_NOT_COMMAND]}},
+    "properties": {"karar": {"type": "string", "enum": [_GATE_ENGAGE, _GATE_NOISE]}},
     "required": ["karar"],
 }
 
 _COMMAND_GATE_PROMPT = f"""Sen bir sesli asistanın filtresisin. Sana kullanıcının \
-mikrofonundan geçen bir metin verilecek. Görevin TEK bir şeye karar vermek: bu metin, \
-bilgisayarda bir işlem yapılmasını isteyen NET bir KOMUT mu?
+mikrofonundan geçen bir metin verilecek. Görevin TEK bir şeye karar vermek: bu metin \
+ASİSTANA YÖNELİK mi, yoksa asistanın hiç karışmaması gereken bir GÜRÜLTÜ mü?
 
-KOMUT = kullanıcı bilgisayardan somut bir şey yapmasını istiyor (uygulama aç/kapat, \
-dosya/klasör oluştur/sil/aç, site aç, ara, ekran görüntüsü, ses/parlaklık).
+{_GATE_ENGAGE} = kullanıcı açıkça asistanla konuşuyor: bir İŞLEM istiyor (uygulama \
+aç/kapat, dosya/klasör oluştur/sil/aç, site aç, ara, ekran görüntüsü, ses/parlaklık), \
+bir SORU soruyor ("sen kimsin?"), SOHBET ediyor ("teşekkürler") ya da isteği \
+BELİRSİZ ama yine de açıkça asistana söylenmiş ("bir şeyler aç", "evi kapat").
 
-{_GATE_NOT_COMMAND} = soru, sohbet, yarım/anlamsız cümle, arka planda konuşma, \
-başkasıyla konuşma, hangi işlem olduğu belirsiz istek.
+{_GATE_NOISE} = yarım/anlamsız cümle, arka planda konuşma, başkasıyla konuşma — \
+asistana söylendiği belli bile değil.
 
-Şüphedeysen {_GATE_NOT_COMMAND} de."""
-"""Komut kapısının sistem promptu (bkz. `is_actionable_command`).
+Şüphedeysen {_GATE_NOISE} de."""
+"""Komut kapısının sistem promptu (bkz. `should_engage`).
 
-Kasıtlı olarak TEK bir soru sorar ve yalnızca iki cevaba izin verir;
-şema kısıtı sayesinde model başka bir şey üretemez. "Şüphedeysen
-KOMUT_DEGIL de" satırı önemlidir: yanlış eylem yapmak, cevap vermemekten
-kötüdür."""
+Kasıtlı olarak TEK bir soru sorar ve yalnızca iki cevaba izin verir; şema
+kısıtı sayesinde model başka bir şey üretemez. "Şüphedeysen GURULTU de"
+satırı önemlidir: rastgele bir tool seçmek, sessiz kalmaktan kötüdür.
+
+NEDEN "KOMUT mu?" DEĞİL "ASİSTANA YÖNELİK Mİ?" (v3.3, README §20f):
+    Önceki sürüm burada KOMUT/KOMUT_DEGIL diye ayırıyordu ve "soru,
+    sohbet"i de KOMUT_DEGIL sayıp tool seçimine hiç göndermiyordu.
+    Sonuç: "sen kimsin?" -> "Bir komut duymadım." — halbuki
+    `prompts/system_prompt.md` bu GİRDİ İÇİN AÇIK bir örnek içeriyor
+    (assistant.reply -> "Ben Artemis..."). Aynı kırık sınır "evi kapat"
+    ve "sosyal medyayı aç" örneklerini de vuruyordu (o örneklerde de
+    system_prompt.md açıkça assistant.reply ile netleştirici bir soru
+    bekliyor). Yani sınır YANLIŞ yerdeydi: "işlem mi" değil, "asistana
+    yönelik mi" olmalıydı.
+
+NEDEN ÜÇE BÖLÜNMEDİ (komut / sohbet / gürültü):
+    `assistant.reply` sıradan bir tool gibi normal tool seçiminden
+    çıkıyor (bkz. system_prompt.md kural 3) — yani "işlem" ile "sohbet"
+    downstream'de AYNI yola gidiyor, hiçbir davranış farkı yok. Bu
+    ayrımı kapıya taşımak, modele üçüncü belirsiz bir kategori
+    ekleyip yalnızca doğruluğu düşürürdü: küçük modeller ikili
+    sınıflandırmada çok daha iyi (aşağıdaki not, 11/12). Gerçek ayrım
+    tek bir yerde gerekli: asistana yönelik mi, değil mi."""
 
 MAX_PLAN_STEPS = 5
 """Tek bir komuttan üretilebilecek en fazla tool çağrısı sayısı.
@@ -185,14 +206,14 @@ class OllamaLLMClient:
         assert last_error is not None  # döngü en az bir kez çalıştığı için garantili
         raise last_error
 
-    def is_actionable_command(self, user_input: str) -> bool:
-        """Verilen metnin gerçekten bir BİLGİSAYAR KOMUTU olup olmadığına karar verir.
+    def should_engage(self, user_input: str) -> bool:
+        """Verilen metnin ASİSTANA YÖNELİK olup olmadığına karar verir.
 
         NEDEN AYRI BİR ADIM — ölçülmüş bir arızanın çözümü:
 
             Tool seçimi sırasında model bir tool üretmek ZORUNDADIR
-            (şema `minItems: 1`). Bu yüzden komut olmayan girdilerde
-            rastgele bir tool seçiyordu. Gerçek kullanımdan:
+            (şema `minItems: 1`). Bu yüzden asistana yönelik olmayan
+            girdilerde rastgele bir tool seçiyordu. Gerçek kullanımdan:
 
                 "Sen kimsin?"        -> masaüstünde example.txt oluşturdu
                 "Abi insanlarız ki?" -> dosya oluşturdu + tarayıcı açtı
@@ -208,13 +229,20 @@ class OllamaLLMClient:
             sınıflandırmada, açık uçlu tool seçiminden çok daha iyidir —
             bu yüzden karar ayrı bir çağrıya alındı.
 
+        SINIR "KOMUT MU" DEĞİL "YÖNELİK Mİ" (v3.3): bkz.
+        `_COMMAND_GATE_PROMPT` üzerindeki not — bu metot bir dönem
+        `is_actionable_command` adıyla ikili "komut/komut değil" sorusu
+        soruyordu ve "sen kimsin?" gibi soruları da bloke ediyordu.
+
         Args:
             user_input: Konuşmadan çevrilmiş ham metin.
 
         Returns:
-            True ise metin bir komuttur ve tool seçimine geçilebilir.
-            Karar verilemezse (ağ/model hatası) True döner — kapı
-            AÇIK başarısız olur: kapının bozulması asistanı tamamen
+            True ise metin asistana yöneliktir ve tam tool seçimine
+            geçilebilir (işlem de olsa, `assistant.reply` gerektiren bir
+            soru/sohbet de olsa — ikisi de aynı yoldan geçer). Karar
+            verilemezse (ağ/model hatası) True döner — kapı AÇIK
+            başarısız olur: kapının bozulması asistanı tamamen
             kullanılamaz hale getirmemeli, yalnızca bu korumayı kaybeder.
         """
 
@@ -238,12 +266,12 @@ class OllamaLLMClient:
             )
             decision = json.loads(response["message"]["content"]).get("karar")
         except Exception as exc:  # noqa: BLE001 - kapı bozulursa akış durmasın
-            logger.warning("Komut kapısı çalıştırılamadı, girdi komut sayılıyor: %s", exc)
+            logger.warning("Komut kapısı çalıştırılamadı, girdi yönelik sayılıyor: %s", exc)
             return True
 
-        is_command = decision == _GATE_COMMAND
+        engage = decision == _GATE_ENGAGE
         logger.info("Komut kapısı: %r -> %s", text, decision)
-        return is_command
+        return engage
 
     def _chat(self, messages: list[dict[str, str]]) -> tuple[str, list[dict[str, Any]] | None]:
         """Ollama'ya, sırayla farklı stratejiler deneyerek tek bir "tur" chat isteği atar.

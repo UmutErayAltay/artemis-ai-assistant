@@ -312,11 +312,13 @@ class VoiceAssistant:
         self._overlay.set_heard(transcript)
         self._overlay.show_thinking("Düşünüyorum…")
 
-        # KOMUT KAPISI: her duyulan şey bir komut değildir. Uyandırma
+        # KOMUT KAPISI: her duyulan şey asistana yönelik değildir. Uyandırma
         # sözcüğü gürültüyle de tetiklenebiliyor ve sonrasında yakalanan
-        # sıradan bir konuşma, tool seçiminde rastgele bir eyleme
-        # dönüşüyordu (bkz. `llm_client.is_actionable_command`).
-        if self._settings.command_gate_enabled and not self._llm.is_actionable_command(transcript):
+        # arka plan konuşması, tool seçiminde rastgele bir eyleme
+        # dönüşüyordu (bkz. `llm_client.should_engage`). Sınır "komut mu"
+        # değil "yönelik mi" olduğu için sorular ve sohbet de buradan
+        # geçer — onları `assistant.reply` karşılar (v3.3, README §20f).
+        if self._settings.command_gate_enabled and not self._llm.should_engage(transcript):
             self._respond("Bir komut duymadım.")
             return
 

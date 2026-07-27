@@ -1446,3 +1446,45 @@ yükseltildiğinde sessizce geçersizleşebilir. §18'in gerekçesi §19
 tarafından çürütülmüştü ama üç sürüm boyunca kimse geri dönüp bakmadı.
 Bir şeyi "neden eklediğimizi" yazmak, ancak o gerekçeyi periyodik olarak
 sınarsak işe yarar.
+
+---
+
+## 23) Komut kapısı: sınır "komut mu" değil "asistana yönelik mi" olmalıydı (v3.3)
+
+§20f'de açık bırakılan çelişki çözüldü: *"Sen kimsin?"* → **"Bir komut
+duymadım."** Sebep, `is_actionable_command`'ın ikili sorusunun yanlış
+yerden ayırmasıydı — "bu bir İŞLEM mi?" diye soruyordu ve "soru, sohbet"i
+de KOMUT_DEGIL sayıp tool seçimine hiç göndermiyordu. Halbuki
+`prompts/system_prompt.md` tam bu girdi için açık bir örnek içeriyordu
+(`assistant.reply` → *"Ben Artemis..."*). Aynı kırık sınır, fark
+edilmeden, `"evi kapat"` ve `"sosyal medyayı aç"` örneklerini de
+vuruyordu — ikisi de system_prompt.md'de açıkça netleştirici bir soru
+bekliyor ama kapı onları da önceden eliyordu.
+
+**Üçe bölme (komut/sohbet/gürültü) yerine sınır kaydırıldı.** İlk
+planlanan çözüm kapıya üçüncü bir karar eklemekti, ama bu gereksiz
+olurdu: `assistant.reply` normal tool seçiminden **aynı yoldan** çıkıyor
+(system_prompt.md kural 3), yani "işlem" ile "sohbet" downstream'de HİÇ
+farklı davranmıyor. Kapıya üçüncü bir kategori eklemek modele yalnızca
+belirsizlik katardı — küçük modeller ikili sınıflandırmada ölçülmüş
+biçimde daha iyi (`should_engage` docstring'i: 11/12). Doğru ayrım tek
+yerde gerekliydi: **asistana yönelik mi, değil mi.**
+
+`is_actionable_command` → `should_engage` oldu. Yeni sınır:
+
+- **YÖNELİK** (tool seçimine gider): işlem, soru, sohbet, belirsiz ama
+  açıkça asistana söylenmiş istek ("bir şeyler aç").
+- **GÜRÜLTÜ** (engellenir): yarım/anlamsız cümle, arka planda konuşma,
+  başkasıyla konuşma — asistana söylendiği belli bile değil.
+
+Gerçek modelle (gemma4:e4b) canlı doğrulama, 14 örnekten 13'ünde
+beklenen kategoriye düştü; tek "sapma" (`"Abi insanlarız ki?"` →
+GÜRÜLTÜ) aslında zararsız, çünkü system_prompt.md'nin kendi örneği bile
+o girdiyi *"Bunu anlayamadım, tekrar eder misiniz?"* diye cevaplıyor —
+iki davranış da aynı anlama geliyor, yalnızca söylenen cümle farklı.
+Gecikme değişmedi (~1 sn).
+
+**Ders**: bir güvenlik kapısını daraltırken sınırı nereye çizdiğinizi
+downstream davranışa göre seçin. "Komut/komut değil" doğal bir ayrım
+gibi görünüyordu ama gerçek ayrım "tool seçimine gitsin mi" idi — ve
+`assistant.reply`'ın var oluşu bu ikisini birbirinden ayırıyordu.

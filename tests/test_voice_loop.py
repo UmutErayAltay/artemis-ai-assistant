@@ -90,17 +90,17 @@ class FakeLLM:
         self,
         tool_calls: list[dict[str, Any]] | None = None,
         error: Exception | None = None,
-        is_command: bool = True,
+        engage: bool = True,
     ) -> None:
         self._tool_calls = tool_calls or []
         self._error = error
-        self._is_command = is_command
+        self._engage = engage
         self.prompts: list[str] = []
         self.gate_inputs: list[str] = []
 
-    def is_actionable_command(self, user_input: str) -> bool:
+    def should_engage(self, user_input: str) -> bool:
         self.gate_inputs.append(user_input)
-        return self._is_command
+        return self._engage
 
     def get_tool_calls(self, system_prompt: str, user_input: str) -> list[dict[str, Any]]:
         self.prompts.append(user_input)
@@ -623,12 +623,12 @@ def test_speakable_handles_multiple_paths_in_one_message() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_command_gate_blocks_non_commands_before_any_tool_runs(
+def test_command_gate_blocks_background_noise_before_any_tool_runs(
     dispatcher: ToolDispatcher, settings: Settings
 ) -> None:
-    """GERÇEK ARIZA: "Sen kimsin?" masaüstünde example.txt oluşturuyordu.
+    """Asistana yönelik olmayan arka plan konuşması tool seçimine hiç gitmemeli.
 
-    Uyandırma sözcüğü gürültüyle tetiklenip sıradan bir konuşma
+    Uyandırma sözcüğü gürültüyle tetiklenip arka plan konuşması
     yakalandığında, tool seçimi bir tool üretmek ZORUNDA olduğu için
     rastgele bir eyleme dönüşüyordu. Kapı bunu tool seçimine hiç
     gitmeden durdurmalı.
@@ -637,16 +637,43 @@ def test_command_gate_blocks_non_commands_before_any_tool_runs(
     overlay = FakeOverlay()
     llm = FakeLLM(
         [{"tool": "filesystem.create_file", "arguments": {"name": "example.txt", "location": "desktop"}}],
-        is_command=False,
+        engage=False,
+    )
+    metin = "Ve henüz şimdi bunun bu modelleri test ediyorlar biliyorsunuz"
+    assistant, tts = _build_assistant(dispatcher, settings, overlay, llm, metin)
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert llm.gate_inputs == [metin]
+    assert llm.prompts == [], "Asistana yönelik olmayan girdi tool seçimine gitmemeliydi"
+    assert not (settings.desktop_path / "example.txt").exists(), "İstenmeyen dosya oluşturuldu"
+    assert tts.spoken == ["Bir komut duymadım."]
+
+
+def test_command_gate_lets_questions_through_to_assistant_reply(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """REGRESYON (README §20f): "Sen kimsin?" artık tool seçimine ULAŞMALI.
+
+    Eski ikili kapı "komut mu?" diye soruyordu ve soruları da
+    KOMUT_DEGIL sayıp engelliyordu — halbuki `prompts/system_prompt.md`
+    tam bu girdi için `assistant.reply` örneği veriyor. Kapının sınırı
+    artık "işlem mi" değil "asistana yönelik mi" olduğundan, sorular da
+    (gürültü değil) tool seçimine gitmeli; oradan `assistant.reply`
+    seçilir.
+    """
+
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [{"tool": "assistant.reply", "arguments": {"message": "Ben Artemis."}}],
+        engage=True,
     )
     assistant, tts = _build_assistant(dispatcher, settings, overlay, llm, "Sen kimsin?")
 
     assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
 
-    assert llm.gate_inputs == ["Sen kimsin?"]
-    assert llm.prompts == [], "Komut olmayan girdi tool seçimine gitmemeliydi"
-    assert not (settings.desktop_path / "example.txt").exists(), "İstenmeyen dosya oluşturuldu"
-    assert tts.spoken == ["Bir komut duymadım."]
+    assert llm.prompts == ["Sen kimsin?"], "Asistana yönelik soru tool seçimine gitmeliydi"
+    assert tts.spoken == ["Ben Artemis."]
 
 
 def test_command_gate_lets_real_commands_through(
@@ -657,7 +684,7 @@ def test_command_gate_lets_real_commands_through(
     overlay = FakeOverlay()
     llm = FakeLLM(
         [{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}],
-        is_command=True,
+        engage=True,
     )
     assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "masaüstünde orbit klasörü oluştur")
 
@@ -676,7 +703,7 @@ def test_command_gate_can_be_disabled_from_settings(
     overlay = FakeOverlay()
     llm = FakeLLM(
         [{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}],
-        is_command=False,  # kapı çalışsaydı engellerdi
+        engage=False,  # kapı çalışsaydı engellerdi
     )
     assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "orbit klasörü oluştur")
 
