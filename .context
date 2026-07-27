@@ -282,6 +282,24 @@ konuşması, engellenir). Gerçek modelle 14/14 canlı doğrulama yapıldı
 Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
 tam yol alabilmesi şemada belgelenmiş, bilinçli bir özellik.
 
+### 6.12) Argüman şeması artık doğrulanıyor — ama standart kütüphaneyle DEĞİL (v3.4)
+`InvalidToolArgumentsError` tanımlıydı, dispatcher onu yakalıyordu, ama
+hiçbir yerde fırlatılmıyordu — ölü bir güvenlik ağıydı. Eksik zorunlu
+argüman ham `KeyError`e düşüp "Beklenmeyen hata: 'target'" olarak
+görünüyordu. `core/dispatcher.py::_validate_arguments` bunu tool
+çalışmadan ÖNCE, onay kontrolünden de ÖNCE yakalar.
+
+`jsonschema` paketi ortamda kurulu (mcp'nin dolaylı bağımlılığı) ama
+BİLEREK kullanılmadı: STRICT bir doğrulayıcı `"50"` (string) değerini
+asla `integer` saymaz, oysa tool'lar zaten `int(arguments["level"])` ile
+bunu tolere ediyor. Standart kütüphane kullansaydım doğrulama
+tool'lardan daha katı olur, önceden çalışan çağrıları kırardı. Onun
+yerine aynı toleransı uygulayan ~90 satırlık özel bir doğrulayıcı
+yazıldı (`_type_matches`). Gerekçe README §24.
+
+**Ders**: bir doğrulama katmanı eklerken onu var olan davranıştan DAHA
+katı yapmak da bir regresyondur.
+
 ## 6.6) Bu makineye özgü donanım notları (KOD HATASI DEĞİL)
 
 Aşağıdakiler Artemis'in hatası değildir; ileride "bu tool bozuk" diye
@@ -299,20 +317,14 @@ araştırmaya girişilmesin diye kayıtlıdır.
 
 ## 7) Bilinen boşluklar / sıradaki işler
 
-1. **Argüman şeması doğrulanmıyor.** `models/tool_models.py` docstring'i
-   "dispatcher argümanları bu modeller üzerinden doğrulayabilir" diyor
-   ama dispatcher yalnızca `ToolCall` zarfını doğruluyor — tool'un
-   `get_arguments_schema()`'sına karşı doğrulama YOK. Eksik zorunlu
-   argüman, tool'un içinde ham `KeyError` olup dispatcher'ın genel
-   yakalayıcısına düşüyor ve kullanıcı "Beklenmeyen hata: 'target'"
-   görüyor. Merkezi bir doğrulama, hem bu mesajı düzeltir hem LLM'e
-   düzeltilebilir bir geri bildirim verir. (Belgelenmiş ama
-   implemente edilmemiş bir vaat — ya yapılmalı ya docstring düzeltilmeli.)
-2. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
+1. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
    `mcp_plugin.py`. (`voice/stt.py`/`tts.py` YANLIŞ listelenmişti — ikisi
    de zaten var, hibrit ses katmanının parçası.) Yeni plugin'ler aynı
-   `BaseTool` şablonuyla, çekirdeği bozmadan eklenebilir.
-4. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
+   `BaseTool` şablonuyla, çekirdeği bozmadan eklenebilir. (Artemis-worker
+   ajanı şu an mouse_keyboard + browser üzerinde çalışıyor; mcp ayrı.)
+2. **Planner'da adımlar arası veri akışı yok** — bilinçli bir sınırlamaydı
+   (§6.2) ama geri açılması planlanıyor (bkz. bu oturumdaki görev listesi).
+3. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
    bitti, artık kullanılmıyor — yer gerekiyorsa
    `ollama rm gemma4:12b` ile silinebilir.
 

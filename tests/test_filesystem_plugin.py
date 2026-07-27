@@ -114,15 +114,18 @@ def test_open_missing_target_fails_and_never_touches_startfile(
 
 
 def test_open_without_required_target_argument_fails_gracefully(dispatcher: ToolDispatcher) -> None:
-    """Dispatcher, argümanları `get_arguments_schema()`'ya karşı doğrulamaz;
-    eksik zorunlu anahtar tool içinde KeyError'a düşer. Bunu dispatcher'ın
-    genel `except Exception` bloğu güvenli, `success=False` bir ToolResult'a
-    çevirmeli — süreç çökmemeli (bkz. core/dispatcher.py `dispatch`).
+    """Eksik zorunlu anahtar artık tool'a hiç ulaşmadan, merkezi doğrulamada
+    yakalanır (bkz. `core/dispatcher.py::_validate_arguments`, README §24).
+    Eskiden bu tool içinde ham bir `KeyError`e düşüp dispatcher'ın genel
+    `except Exception` bloğuna yakalanıyordu — süreç çökmüyordu ama kullanıcı
+    "Beklenmeyen hata: 'target'" gibi anlaşılmaz bir mesaj görüyordu.
     """
 
     result = dispatcher.dispatch({"tool": "filesystem.open", "arguments": {}})
 
     assert result.success is False
+    assert "target" in result.message
+    assert "Beklenmeyen hata" not in result.message
 
 
 def test_open_rejects_absolute_target_outside_location(

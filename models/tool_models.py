@@ -2,9 +2,11 @@
 
 LLM'den gelen ham JSON çıktısı ile Python tarafındaki tool execution
 katmanı arasındaki "sözleşmeyi" (contract) bu modeller temsil eder.
-Dispatcher, LLM'in ürettiği veriyi çalıştırmadan önce bu modeller
-üzerinden otomatik olarak doğrulayabilir (validation) — elle yazılmış
-if/else kontrolleri yerine merkezi ve tekrarsız bir doğrulama sağlar.
+`ToolCall` yalnızca zarfı (`tool`/`arguments` alanlarının var olduğunu)
+doğrular — argümanların İÇERİĞİNİN ilgili tool'un
+`get_arguments_schema()`'sına uyup uymadığı burada DEĞİL,
+`core/dispatcher.py::_validate_arguments`'ta, tek ve merkezi bir yerde
+kontrol edilir (bkz. o modülün dokümantasyonu, README §24).
 """
 
 from __future__ import annotations

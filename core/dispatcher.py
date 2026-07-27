@@ -24,6 +24,102 @@ from models.tool_models import ToolCall, ToolResult
 logger = logging.getLogger(__name__)
 
 
+def _type_matches(value: Any, expected_type: str) -> bool:
+    """Bir değerin, şemadaki JSON Schema tipiyle uyumlu olup olmadığını kontrol eder.
+
+    Standart bir JSON Schema doğrulayıcısı (örn. `jsonschema` paketi)
+    BİLEREK kullanılmadı: o paket `"50"` (string) değerini asla bir
+    `integer` saymaz, ama bu projedeki tool'ların `execute()` metotları
+    zaten TOLERANSLI dönüşüm yapıyor (bkz. `WindowsSetBrightnessTool`:
+    `int(arguments["level"])`). Model küçük/yerel olduğu için sayısal bir
+    alanı string üretmesi olası bir hata sınıfı; doğrulama tool'ların
+    kendisinden daha KATI olursa, önceden sorunsuz çalışan çağrılar
+    burada gereksiz yere reddedilir. Asıl yakalanması gereken hata EKSİK
+    ya da KÖKTEN YANLIŞ TÜR (örn. bir listenin geldiği yerde string),
+    sayısal-string ayrımı değil.
+    """
+
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return True
+        if isinstance(value, str):
+            try:
+                int(value)
+            except ValueError:
+                return False
+            return True
+        return False
+    if expected_type == "number":
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, str):
+            try:
+                float(value)
+            except ValueError:
+                return False
+            return True
+        return False
+    if expected_type == "boolean":
+        if isinstance(value, bool):
+            return True
+        return isinstance(value, str) and value.strip().lower() in ("true", "false")
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    return True  # bilinmeyen bir tip bildirimi: kontrol dışı bırak, gelecekte kırılmasın
+
+
+def _validate_arguments(tool_name: str, arguments: dict[str, Any], schema: dict[str, Any]) -> None:
+    """`arguments`ı tool'un `get_arguments_schema()`'sına göre doğrular.
+
+    NEDEN BURADA, HER TOOL'UN `execute()`'UNDA DEĞİL: onay mantığı gibi
+    bu da merkezi bir sorumluluktur (bkz. CLAUDE.md — "Onay mantığı
+    yalnızca dispatcher'da yaşar" ilkesinin doğrulama karşılığı).
+    Öncesinde bu kontrol HİÇ yoktu: `InvalidToolArgumentsError` tanımlıydı
+    ama hiçbir yerde fırlatılmıyordu (README §24). Eksik zorunlu argüman,
+    tool'un içinde ham bir `KeyError` olup dispatcher'ın genel
+    yakalayıcısına düşüyor ve kullanıcı "Beklenmeyen hata: 'target'" gibi
+    anlaşılmaz bir mesaj görüyordu.
+
+    Raises:
+        InvalidToolArgumentsError: Zorunlu bir alan eksikse, bir alanın
+            türü şemayla uyuşmuyorsa ya da bir `enum` alanına listede
+            olmayan bir değer verilmişse.
+    """
+
+    required = schema.get("required", [])
+    missing = [key for key in required if key not in arguments]
+    if missing:
+        raise InvalidToolArgumentsError(tool_name, f"eksik zorunlu argüman(lar): {', '.join(missing)}")
+
+    properties = schema.get("properties", {})
+    for key, value in arguments.items():
+        prop_schema = properties.get(key)
+        if prop_schema is None:
+            continue  # şemada olmayan fazladan alan: tool zaten kullanmayacak, zararsız
+
+        expected_type = prop_schema.get("type")
+        if expected_type and not _type_matches(value, expected_type):
+            raise InvalidToolArgumentsError(
+                tool_name,
+                f"'{key}' alanı {expected_type} türünde olmalı, {type(value).__name__} geldi",
+            )
+
+        enum = prop_schema.get("enum")
+        if enum is not None and value not in enum:
+            options = ", ".join(str(o) for o in enum)
+            raise InvalidToolArgumentsError(
+                tool_name, f"'{key}' alanı şunlardan biri olmalı: {options} (gelen: {value!r})"
+            )
+
+
 class ToolDispatcher:
     """LLM'den gelen ToolCall'ları çalıştıran merkezi orkestratör.
 
@@ -80,6 +176,7 @@ class ToolDispatcher:
             raise ToolNotFoundError(call.tool)
 
         tool = tool_cls()
+        _validate_arguments(call.tool, call.arguments, tool.get_arguments_schema())
 
         is_dangerous = (
             tool.danger_level == DangerLevel.CONFIRM_REQUIRED

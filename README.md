@@ -1488,3 +1488,43 @@ Gecikme değişmedi (~1 sn).
 downstream davranışa göre seçin. "Komut/komut değil" doğal bir ayrım
 gibi görünüyordu ama gerçek ayrım "tool seçimine gitsin mi" idi — ve
 `assistant.reply`'ın var oluşu bu ikisini birbirinden ayırıyordu.
+
+---
+
+## 24) Argüman şeması artık gerçekten doğrulanıyor (v3.4)
+
+`.context` §7'de uzun süredir açık bir madde vardı: `models/tool_models.py`
+docstring'i *"dispatcher argümanları bu modeller üzerinden
+doğrulayabilir"* diyordu ama bu bir vaatti, gerçekleşmiyordu.
+`InvalidToolArgumentsError` tanımlıydı, dispatcher onu YAKALIYORDU, ama
+hiçbir yerde FIRLATILMIYORDU — yani ölü bir güvenlik ağıydı.
+
+Sonuç: eksik zorunlu bir argüman (`filesystem.open` çağrısında `target`
+unutulması gibi), tool'un içinde ham bir `KeyError` olup dispatcher'ın
+genel `except Exception` bloğuna düşüyor ve kullanıcı *"Beklenmeyen
+hata: 'target'"* gibi anlaşılmaz bir mesaj görüyordu. Süreç çökmüyordu
+ama hatanın NEREDEN geldiği belli değildi.
+
+**Çözüm `core/dispatcher.py::_validate_arguments`** — onay mantığı gibi
+TEK bir merkezi yerde yaşıyor, her tool kendi kontrolünü yazmıyor.
+Tool çalışmadan ÖNCE, tehlike/onay kontrolünden de ÖNCE çalışır (bozuk
+bir tehlikeli çağrı, kullanıcıya boş argümanla "??? dosyasını silmek
+istiyor musunuz" diye sormamalı).
+
+**Standart bir JSON Schema doğrulayıcısı (`jsonschema` paketi) BİLEREK
+kullanılmadı.** O paket ortamda zaten kurulu (mcp'nin dolaylı
+bağımlılığı) ve `jsonschema.validate()` ile tek satırda yazılabilirdi —
+ama STRICT: `"50"` (string) değerini asla bir `integer` saymaz. Bu
+projedeki tool'lar zaten TOLERANSLI (`WindowsSetBrightnessTool`:
+`int(arguments["level"])`), çünkü küçük/yerel bir modelin sayısal bir
+alanı string üretmesi olası bir hata sınıfı. Standart kütüphaneyi
+kullansaydım, doğrulama tool'ların KENDİSİNDEN daha katı olurdu ve
+önceden sorunsuz çalışan çağrılar reddedilirdi. Bunun yerine ~90
+satırlık, projeye özgü ve aynı toleransı uygulayan bir doğrulayıcı
+yazıldı (`_type_matches`): eksik alan / enum dışı değer / kökten yanlış
+tür (liste yerine string gibi) yakalanır, sayısal-string ayrımı
+tool'ların zaten tolere ettiği gibi tolere edilir.
+
+**Ders**: bir güvenlik/doğruluk katmanı eklerken, onu var olan
+davranıştan DAHA katı yapmak da bir regresyondur — "doğru" olmak,
+projenin geri kalanıyla aynı tolerans sözleşmesini konuşmayı gerektirir.
