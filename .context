@@ -156,6 +156,27 @@ BOZULDU ("distrodoge", "stamiac"); 15 adda en iyi sonuç alındı. Ayrıca
 **Ders**: bu alandaki değişiklikleri ölçmeden eklemeyin — sezgiye uyan
 bir "iyileştirme" sessizce zarar verebilir.
 
+### 5.6) Varsayılan model hiç çalışmıyordu (etiket eksikti)
+`config/config.yaml` ve `config/settings.py`, modeli `"llama3.1"` diye
+etiketsiz yazıyordu. Ollama bunu `llama3.1:latest` diye çözer; kurulu
+olan ise `llama3.1:8b` idi. Sonuç, sebebi okunmayan bir
+`ConnectionError`'dı. İnteraktif model seçimi bunu maskelediği için uzun
+süre görünmedi. İkisi de tam etikete çevrildi;
+`tests/test_config_model.py` etiketsiz ad yazılmasını engelliyor.
+
+**Ders**: model adını `ollama list` çıktısından birebir kopyalayın.
+
+### 5.7) Duman testi YANLIŞ modeli sınıyordu
+`scripts/smoke_voice.py` `modeller[0]` ile kurulu ilk modeli alıyordu.
+`ollama list` en son indirileni başa koyduğu için test, asistanın
+gerçekte çalıştıracağı modeli değil rastgele bir modeli sınıyordu —
+yeşil sonuç hiçbir şey kanıtlamıyordu. Artık
+`get_settings().ollama_model` kullanıyor.
+
+**Ders**: bir test, üretimde kullanılan yapılandırmayı sınamıyorsa
+geçmesi bilgi taşımaz. (Ayrıca: `Settings()` config.yaml'ı OKUMAZ,
+yalnızca sınıf varsayılanlarını döndürür — doğrusu `get_settings()`.)
+
 ## 6) Verilmiş kararlar (yeniden tartışmadan önce buraya bakın)
 
 ### 6.1) `skills/` çerçevesi kurulmayacak
@@ -186,6 +207,37 @@ kural asimetriktir: **yalnızca net bir onay duyulursa devam edilir**;
 sessizlik/anlaşılmayan cevap/zaman aşımı/mikrofon hatası = RED. Bunu
 "hayır duyarsam dururum" şeklinde çevirmeyin — yanlış anlaşılan bir
 "hayır" işlemi ÇALIŞTIRIRDI.
+
+### 6.7) Sesten metne çevirme LLM'e DEVREDİLMEYECEK (v3.0)
+Gemma4 "audio" yeteneği bildirir ve Ollama, WAV baytlarını **`images`
+alanından** kabul eder (belgelenmemiş ama gerçek — Ollama PR #16585).
+Yani "ara STT adımını silelim" yolu fiziksel olarak AÇIKTIR ve
+yanlışlıkla seçilebilir. Ölçüldü:
+
+| Yol | Türkçe | İngilizce |
+|---|---|---|
+| faster-whisper large-v3-turbo | **0.39 sn**, kusursuz | **0.36 sn**, kusursuz |
+| `gemma4:12b` ses | 8.2 sn, halüsinasyon | 52.4 sn, transkribe etmedi |
+| `gemma4:e4b` ses | her denemede farklı çöp | *"Oh no, no, no."* |
+
+`gemma4:e4b`'nin ses regresyonu Ollama'da açık kayıt (#16584).
+`gemma4:12b` sesi ANLADI ama yazıya dökmedi, CEVAPLADI — Gemma'nın ses
+kulesi transkripsiyon için eğitilmemiş. Aynı WAV'ları faster-whisper
+üçünde de kusursuz çözdü, yani dosyalar sağlamdı.
+
+**Karar**: STT faster-whisper'da kalır. Gerekçe README §20.
+Bekçi: `tests/test_config_model.py`.
+
+### 6.8) Tool seçiminde düşünme modu KAPALI (v3.0)
+`core/llm_client.py` `think=False` gönderir. Ollama, düşünme yeteneği
+olan modellerde bu alan yoksa düşünmeyi varsayılan olarak AÇAR ve model
+her komutta boşuna token yakar. Ölçüm: `gemma4:e4b` 4.14 → **1.17 sn**,
+`qwen3.5:4b` 4.57 → **1.07 sn**, doğruluk her ikisinde de 10/10
+(değişmedi). Düşünmeyen modeller alanı yok sayar, koşulsuz gönderilir.
+
+Varsayılan model artık **`gemma4:e4b`**: 10/10 doğruluk, 1.17 sn ve
+diskte 9.6 GB görünse de MatFormer sayesinde bellekte 3.3 GB — 6 GB'lık
+GPU'ya %100 yerleşiyor.
 
 ### 6.3) `location` tam yol kabul etmeye devam ediyor
 Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
@@ -220,13 +272,20 @@ araştırmaya girişilmesin diye kayıtlıdır.
 2. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
    `mcp_plugin.py`, `voice/stt.py`, `voice/tts.py`. Hepsi aynı `BaseTool`
    şablonuyla, çekirdeği bozmadan eklenebilir.
-3. **Gerçek Ollama ile uçtan uca doğrulama yapılmadı.** Tüm testler sahte
-   `ollama.chat` ile çalışıyor. Özellikle §5.1'deki dizi-şema
-   düzeltmesinin GERÇEK bir modelde çok adımlı plan ürettirip
-   ürettirmediği, `python main.py --chat` ile doğrulanmalı. Ollama
-   kurulu (v0.32.1) ama testler sırasında çalışmıyordu.
-4. **Repo'da hiç commit yok.** Tüm dosyalar untracked; `.gitignore`
-   hazır ve doğru (log/db hariç tutuluyor).
+3. **Komut kapısı ile sistem promptu aynı sözleşmeyi konuşmuyor.**
+   `prompts/system_prompt.md`, *"sen kimsin?"* için AÇIK bir örnek
+   içeriyor (`assistant.reply` → "Ben Artemis..."). Ama
+   `llm_client._COMMAND_GATE_PROMPT` "soru" kategorisini KOMUT DEĞİL
+   sayıp girdiyi LLM'e hiç ulaştırmıyor; kullanıcı *"Bir komut
+   duymadım."* duyuyor. Yani o örnek pratikte hiç çalışmıyor —
+   §5.1'deki hatanın aynı ailesi.
+   Kapı BİLEREK gevşetilmedi: kullanıcının açık isteği yanlış-pozitif
+   tetiklenmeyi AZALTMAKTI. Muhtemel çözüm kapıya üçüncü bir karar
+   eklemek (komut / sohbet / gürültü) ama bu ürün kararıdır ve
+   ölçülmeden yapılmamalı. (README §20f)
+4. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
+   bitti, artık kullanılmıyor — yer gerekiyorsa
+   `ollama rm gemma4:12b` ile silinebilir.
 
 ## 8) Güncelleme notu
 

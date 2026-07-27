@@ -30,6 +30,20 @@ küçük/yerel modeller talimatlara %100 sadık kalmayabildiği için tek bir
 
 Ayrıca tüm denemelerde `temperature=0` kullanılır (tool-calling
 belirleyici/deterministic olmalı, yaratıcılık gerekmez).
+
+DÜŞÜNME MODU KAPALI (`think=False`): Ollama, düşünme yeteneği olan
+modellerde (gemma4, qwen3.5, gpt-oss...) bu alan gönderilmezse varsayılan
+olarak `think=True` uygular. Tool seçimi düşünme gerektirmeyen bir
+sınıflandırma işidir; model cevaptan önce boşuna token yakar ve
+kullanıcı bunu doğrudan bekleme süresi olarak hisseder. Ölçüm (10 gerçek
+Türkçe sesli komut, sıcak model, RTX 4050):
+
+    gemma4:e4b   4.14 sn -> 1.17 sn   doğruluk 10/10 (değişmedi)
+    qwen3.5:4b   4.57 sn -> 1.07 sn   doğruluk 10/10 (değişmedi)
+
+Yani ~3.5 kat hızlanma, doğruluktan hiçbir şey kaybetmeden. Düşünme
+yeteneği OLMAYAN modeller (llama3.1, phi4-mini, qwen2.5) `think=False`
+alanını sorunsuz kabul edip yok sayar, bu yüzden koşulsuz gönderilir.
 """
 
 from __future__ import annotations
@@ -220,6 +234,7 @@ class OllamaLLMClient:
                 format=_COMMAND_GATE_SCHEMA,
                 options={"temperature": 0},
                 keep_alive=self.keep_alive,
+                think=False,
             )
             decision = json.loads(response["message"]["content"]).get("karar")
         except Exception as exc:  # noqa: BLE001 - kapı bozulursa akış durmasın
@@ -257,6 +272,7 @@ class OllamaLLMClient:
                     messages=messages,
                     options={"temperature": 0},
                     keep_alive=self.keep_alive,
+                    think=False,
                     **extra,
                 )
             except Exception as exc:  # noqa: BLE001 - ollama/model bu stratejiyi desteklemeyebilir

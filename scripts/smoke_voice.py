@@ -33,7 +33,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from config.settings import Settings  # noqa: E402
+from config.settings import Settings, get_settings  # noqa: E402
 from core.dispatcher import ToolDispatcher  # noqa: E402
 from core.llm_client import OllamaLLMClient  # noqa: E402
 from core.ollama_manager import (  # noqa: E402
@@ -147,7 +147,17 @@ def main() -> int:
         print("HATA: Hiç Ollama modeli kurulu değil.")
         return 1
 
-    model = modeller[0]
+    # Yapılandırmadaki model varsa ONU kullan. Burada körlemesine
+    # `modeller[0]` alınıyordu; `ollama list` en son indirileni başa
+    # koyduğu için duman testi, asistanın gerçekte çalıştıracağı modeli
+    # değil rastgele bir modeli sınıyordu — yani yeşil sonuç hiçbir şey
+    # kanıtlamıyordu.
+    # `get_settings()` — `Settings()` DEĞİL: ikincisi config.yaml'ı hiç
+    # okumaz, yalnızca sınıftaki varsayılanları döndürür.
+    yapilandirilan = get_settings().ollama_model
+    model = yapilandirilan if yapilandirilan in modeller else modeller[0]
+    if model != yapilandirilan:
+        print(f"UYARI: yapılandırmadaki {yapilandirilan!r} kurulu değil, {model!r} kullanılıyor.")
     print(f"Model: {model}")
 
     gecici = Path(tempfile.mkdtemp(prefix="artemis_smoke_"))

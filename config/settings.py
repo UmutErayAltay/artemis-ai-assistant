@@ -147,7 +147,11 @@ class Settings(BaseModel):
         / "memory"
         / "artemis_memory.db"
     )
-    ollama_model: str = "llama3.1"
+    # Etiket AÇIKÇA yazılır: Ollama, etiketsiz bir adı `:latest` diye
+    # çözer ve o etiket kurulu değilse asistan sebebi anlaşılmayan bir
+    # bağlantı hatasıyla düşer (buradaki değer bir dönem "llama3.1" idi,
+    # kurulu olan ise "llama3.1:8b").
+    ollama_model: str = "gemma4:e4b"
     use_native_tool_calling: bool = False
     ollama_keep_alive: str = "1m"
     dangerous_tools: list[str] = Field(default_factory=list)

@@ -1197,3 +1197,153 @@ Kullanıcı isteği: *"Dediklerimi Artemis yazısının altında gösterse daha
 iyi olabilir."* Döküm artık başlığın hemen altında, tırnak içinde ve
 **cevaptan ayrı bir satırda** duruyor; Artemis konuşurken de görünür
 kalır. Asistanın yanlış anladığı ancak böyle fark edilir.
+
+---
+
+## 20) Ses doğrudan modele verilebilir mi? — ölçüm ve karar (v3.0)
+
+Kullanıcı isteği açıktı: *"gemma4:e4b modelini kullanıcam ve bu modelin
+içinde doğrudan ses işleme var. Aradaki sesten metine çevirme işlemini
+iptal edelim."* Fikir mantıklıydı — bir aşamayı silmek her zaman
+cazip. Ama bu, kod yazmadan ÖNCE ölçülmesi gereken bir iddiaydı.
+
+### 20a) Ollama'da ses gerçekten hangi kapıdan giriyor?
+
+İlk deneme başarısız oldu ve YANLIŞ sonuca götürüyordu: `/api/chat`'e
+`audio` diye bir alan gönderdim, HTTP 200 geldi, model *"Lütfen ses
+kaydını paylaşın"* dedi. Alan sessizce yok sayılmıştı. Ollama'nın kendi
+dokümanı da *"audio input is not supported through the /api/chat
+endpoint"* diyordu.
+
+Buna rağmen `ollama show gemma4:e4b` çıktısı `audio` yeteneğini
+bildiriyordu — yani doküman ile model çelişiyordu. Çelişkiyi CLI'ı
+deneyerek çözdüm: `ollama run gemma4:e4b "... dosya.wav"` çalıştı ve
+**"Added audio"** yazdı. Kaynağa bakınca sebep göründü
+(`cmd/interactive.go`):
+
+```go
+case ".wav":
+    fmt.Fprintf(os.Stderr, "Added audio '%s'\n", nfp)
+default:
+    fmt.Fprintf(os.Stderr, "Added image '%s'\n", nfp)
+}
+imgs = append(imgs, data)   // ikisi de AYNI listeye gider
+```
+
+Yani ses, ayrı bir alandan değil **`images` alanından** gönderiliyor;
+sunucu WAV/MP3'ü sihirli baytlarından tanıyor. Ollama'nın kendi PR'ı
+(#16585) bunu doğruluyor: *"audio support via the `images` field is
+currently undocumented"*. **Ders: bir özelliğin yokluğunu dokümana
+bakarak değil, deneyerek kanıtlayın.**
+
+### 20b) Yol açıktı — ama sonuç kullanılamazdı
+
+Doğru alanla ölçüm (Piper ile üretilmiş temiz konuşma, 16 kHz mono):
+
+| Yol | Türkçe | İngilizce |
+|---|---|---|
+| **faster-whisper large-v3-turbo** | **0.39 sn**, kusursuz | **0.36 sn**, kusursuz |
+| `gemma4:12b` ses | 8.2 sn, halüsinasyon | 52.4 sn, transkribe etmedi |
+| `gemma4:e4b` ses | `[noise]` / `लह लह` / `어어어` | *"Oh no, no, no."* |
+
+`gemma4:e4b`'nin ses çıktısı her denemede FARKLI bir çöptü. Bu, Ollama'da
+açık bir kayıt olarak zaten biliniyor (#16584: *"gemma4:e4b audio
+transcription regression... hallucinated output"*) ve `think:false` ile
+de düzelmiyor.
+
+`gemma4:12b` daha iyisini yaptı ama beklenen şeyi değil: İngilizce
+örnekte *"To create a folder named 'Orbit' on your desktop, you can
+use..."* dedi — yani sesi **anladı**, ama yazıya dökmedi, **cevapladı**.
+Türkçe örnekte "orbit" kelimesini duyup gezegen yörüngeleri üzerine
+nutuk attı. Gemma'nın ses kulesi transkripsiyon için değil, sesi anlayıp
+konuşma üretmek için eğitilmiş.
+
+Aynı WAV dosyalarını faster-whisper üçünde de kusursuz çözdü — yani
+dosyalar sağlamdı, sorun modeldeydi.
+
+**Karar: sesten metne çevirme faster-whisper'da kalır.** Bir aşamayı
+silmek, o aşamayı 20–145 kat yavaş ve yanlış bir şeyle değiştirmeye
+değmez. Bu yol fiziksel olarak AÇIK olduğu için (`images` alanı WAV
+kabul eder) yanlışlıkla seçilebilir; `tests/test_config_model.py` bunu
+bekçiliyor.
+
+### 20c) Asıl kazanç başka yerdeydi: düşünme modu
+
+Ses yolu kapanınca `gemma4:e4b` yine de değerlendirildi — bu sefer
+**beyin** olarak, yani tool seçen model olarak. 10 gerçek Türkçe sesli
+komutla ölçüldü:
+
+| Model | Doğruluk | Gecikme (ort) |
+|---|---|---|
+| `llama3.1:8b` | 10/10 | 1.90 sn |
+| `gemma4:e4b` | 10/10 | **4.14 sn** |
+| `qwen3.5:4b` | 10/10 | **4.57 sn** |
+
+Yeni modeller ESKİSİNDEN YAVAŞTI. Sebep, `core/llm_client.py`'ın
+`think` alanını hiç göndermemesiydi: Ollama, düşünme yeteneği olan
+modellerde bu alan yoksa varsayılan olarak düşünmeyi AÇAR. Tool seçimi
+düşünme gerektirmeyen bir sınıflandırma işi olduğundan model, her
+komutta boşuna token yakıyordu.
+
+`think=False` eklendikten sonra:
+
+| Model | Doğruluk | Gecikme (ort) |
+|---|---|---|
+| `gemma4:e4b` | 10/10 | **1.17 sn** (4.14'ten) |
+| `qwen3.5:4b` | 10/10 | **1.07 sn** (4.57'den) |
+
+~3.5 kat hızlanma, doğruluktan hiçbir şey kaybetmeden. Düşünme yeteneği
+OLMAYAN modeller (`llama3.1`, `phi4-mini`, `qwen2.5`) bu alanı sorunsuz
+kabul edip yok sayar, bu yüzden koşulsuz gönderilir.
+
+`gemma4:e4b` diskte 9.6 GB görünür ama MatFormer mimarisi sayesinde
+bellekte 3.3 GB'a sığar ve 6 GB'lık bir GPU'ya **%100 yerleşir**
+(`ollama ps` ile doğrulandı) — varsayılan model artık bu.
+
+### 20d) Yolda bulunan sessiz hata: varsayılan model hiç çalışmıyordu
+
+`config/config.yaml` içinde `ollama_model: "llama3.1"` yazılıydı. Ollama
+etiketsiz bir adı `llama3.1:latest` diye çözer; kurulu olan ise
+`llama3.1:8b` idi. Yani yapılandırmadaki varsayılan model, "model yok"
+gibi okunmayan bir `ConnectionError` üretiyordu. Arıza yalnızca
+interaktif model seçimi atlandığında ortaya çıktığı için uzun süre
+görünmedi.
+
+Aynı hata `config/settings.py`'daki varsayılanda da vardı. İkisi de tam
+etikete çevrildi; `tests/test_config_model.py` artık etiketsiz bir ad
+yazılmasını engelliyor.
+
+### 20e) `scripts/smoke_voice.py` yanlış modeli sınıyordu
+
+Duman testi `modeller[0]` ile **kurulu ilk modeli** alıyordu. `ollama
+list` en son indirileni başa koyduğu için, test asistanın gerçekte
+çalıştıracağı modeli değil rastgele bir modeli sınıyordu — yani yeşil
+sonucu hiçbir şey kanıtlamıyordu. Bu, `gemma4:12b` indirildiği anda
+görüldü: test sessizce ona geçmişti.
+
+Artık `get_settings().ollama_model` kullanılıyor; o model kurulu
+değilse test bunu UYARI olarak yazdırıp devam ediyor. (Dikkat:
+`Settings()` config.yaml'ı okumaz, yalnızca sınıf varsayılanlarını
+döndürür — doğrusu `get_settings()`.)
+
+### 20f) Açık kalan çelişki: komut kapısı ile sistem promptu aynı şeyi söylemiyor
+
+Duman testinde *"Sen kimsin?"* girdisi **"Bir komut duymadım."** cevabını
+aldı. Sebep bir hata değil, iki bileşenin farklı sözleşme konuşması:
+
+- `prompts/system_prompt.md` bu girdi için AÇIK bir örnek içerir:
+  `assistant.reply` ile *"Ben Artemis, bilgisayarınızı sesle yönetmenize
+  yardım ediyorum."*
+- `core/llm_client.py::_COMMAND_GATE_PROMPT` ise "soru" kategorisini
+  KOMUT DEĞİL sayar ve girdiyi LLM'e hiç ulaştırmaz.
+
+Yani sistem promptundaki o örnek pratikte hiç çalışmıyor. Bu, README
+§16a'daki hatanın aynı ailesinden: iki katman aynı sözleşmeyi
+konuşmuyor.
+
+Kapı BİLEREK gevşetilmedi. Kullanıcının açık isteği *"Açılış kelimesi
+çok farklı şeylerle de tetikleniyor bunu da biraz özelleştir."*
+olduğundan, kapıyı sorulara açmak yanlış-pozitifleri geri getirme riski
+taşır. Doğru çözüm muhtemelen kapıya üçüncü bir karar eklemektir
+(komut / sohbet / gürültü), ama bu bir ürün kararıdır ve ölçülmeden
+yapılmamalıdır — bu yüzden kayda geçirilip bırakıldı.

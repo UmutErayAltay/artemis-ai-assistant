@@ -245,3 +245,54 @@ def test_keep_alive_is_passed_to_ollama_chat(monkeypatch: pytest.MonkeyPatch) ->
     client = OllamaLLMClient(model="fake-model", keep_alive="2m")
     client.get_raw_response("sistem promptu", "Orbit'i ac")
     assert received["keep_alive"] == "2m"
+
+
+def test_thinking_is_disabled_on_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REGRESYON: `think=False` her tool-seçim isteğine gitmeli.
+
+    Ollama, düşünme yeteneği olan modellerde bu alan gönderilmezse
+    varsayılan olarak düşünmeyi AÇIK kabul eder. Tool seçimi düşünme
+    gerektirmeyen bir sınıflandırma işi olduğundan bu, doğruluğa hiçbir
+    şey katmadan gecikmeyi ~3.5 katına çıkarır (ölçüm için bkz.
+    `core/llm_client.py` modül dokümantasyonu) — ve kullanıcı bunu
+    doğrudan bekleme süresi olarak hisseder.
+    """
+
+    import types
+
+    received = {}
+
+    def _fake_chat(model, messages, options=None, keep_alive=None, think=None, **extra):
+        received["think"] = think
+        return {"message": {"content": '{"tool": "filesystem.open", "arguments": {"target": "Orbit"}}'}}
+
+    fake_ollama = types.ModuleType("ollama")
+    fake_ollama.chat = _fake_chat
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    OllamaLLMClient(model="fake-model").get_raw_response("sistem promptu", "Orbit'i ac")
+    assert received["think"] is False
+
+
+def test_command_gate_also_disables_thinking(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Komut kapısı da her duyulan cümlede çalışır; orada da düşünme kapalı olmalı.
+
+    Kapı, uyandırma sonrası duyulan HER cümle için çağrılır. Burada
+    unutulan bir `think` alanı, gecikmeyi tool seçiminden bile önce
+    geri getirir.
+    """
+
+    import types
+
+    received = {}
+
+    def _fake_chat(model, messages, format=None, options=None, keep_alive=None, think=None, **extra):
+        received["think"] = think
+        return {"message": {"content": '{"karar": "komut"}'}}
+
+    fake_ollama = types.ModuleType("ollama")
+    fake_ollama.chat = _fake_chat
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    OllamaLLMClient(model="fake-model").is_actionable_command("masaustunde klasor olustur")
+    assert received["think"] is False

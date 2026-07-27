@@ -2,11 +2,27 @@
 # Burada tanımlanmayan alanlar için config/settings.py::Settings
 # sınıfındaki varsayılanlar kullanılır.
 
-ollama_model: "llama3.1"
+ollama_model: "gemma4:e4b"
 # Not: `python main.py --chat` artık başlangıçta kurulu modelleri
 # listeleyip interaktif seçim sunuyor (core/ollama_manager.py); bu alan
 # yalnızca ileride eklenecek interaktif olmayan/otomasyon senaryoları
 # için bir yedek (fallback) değerdir.
+#
+# ETİKET TAM YAZILMALI. Buraya "llama3.1" yazılıydı; Ollama bunu
+# `llama3.1:latest` diye çözüyor, kurulu olan ise `llama3.1:8b` idi —
+# yani varsayılan sessizce ConnectionError veriyordu. `ollama list`
+# çıktısındaki adı birebir kopyalayın.
+#
+# gemma4:e4b neden: 10 gerçek Türkçe sesli komutta 10/10 doğru tool
+# seçti ve `think=False` ile ortalama 1.17 sn sürdü (bkz.
+# core/llm_client.py modül dokümantasyonu). Diskte 9.6 GB görünse de
+# MatFormer mimarisi sayesinde bellekte 3.3 GB'a sığar ve 6 GB'lık bir
+# GPU'ya %100 yerleşir.
+#
+# DİKKAT — gemma4'ün ses girdisi bu iş için KULLANILMAZ: model "audio"
+# yeteneği bildirse de Ollama'nın ses yolu transkripsiyonda çöp üretiyor
+# (ölçüm ve gerekçe: README, "Ses doğrudan modele verilebilir mi?").
+# Sesten metne çevirme faster-whisper'da kalır.
 
 # True yaparsanız Ollama'nın native tools=[...] (function-calling) mekanizması
 # denenir; modeliniz desteklemiyorsa otomatik olarak metin+şema tabanlı
