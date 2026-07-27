@@ -164,3 +164,140 @@ def test_step_result_indices_are_sequential(dispatcher: ToolDispatcher) -> None:
 
     assert [step.index for step in results] == [1, 2, 3]
     assert [step.tool_name for step in results] == ["filesystem.create_folder"] * 3
+
+
+# --------------------------------------------------------------------------
+# Adımlar arası veri akışı — `{{step_N.alan}}` referansları (v3.5)
+#
+# Önceki tasarımda ("v1", bkz. modül dokümantasyonu) adımlar arasında HİÇ
+# veri aktarımı yoktu; her adımın argümanları LLM tarafından baştan,
+# tahmin ederek üretiliyordu. Bu testler, bir adımın GERÇEK çıktısının
+# (örn. oluşturulan klasörün mutlak yolu) sonraki bir adıma referansla
+# aktarılabildiğini doğrular.
+# --------------------------------------------------------------------------
+
+
+def test_step_reference_resolves_to_previous_step_real_data(
+    dispatcher: ToolDispatcher, tmp_path: Path
+) -> None:
+    """"Rapor klasörü oluştur, içine notlar.txt koy" — LLM ikinci adımda
+    klasörün TAM YOLUNU tahmin etmek zorunda kalmamalı, 1. adımın gerçek
+    çıktısına referans verebilmeli.
+    """
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [
+        {"tool": "filesystem.create_folder", "arguments": {"name": "Rapor"}},
+        {
+            "tool": "filesystem.create_file",
+            "arguments": {"name": "notlar.txt", "location": "{{step_1.path}}"},
+        },
+    ]
+    results = planner.execute_plan(plan)
+
+    assert all(step.result.success for step in results)
+    assert (tmp_path / "Rapor" / "notlar.txt").exists()
+    # StepResult'ta ÇÖZÜLMÜŞ gerçek yol görünmeli, yer tutucu değil.
+    assert results[1].arguments["location"] == str(tmp_path / "Rapor")
+
+
+def test_step_reference_resolves_before_confirmation_so_user_sees_real_value(
+    dispatcher: ToolDispatcher, tmp_path: Path
+) -> None:
+    """GÜVENLİK: tehlikeli bir adıma referansla gelen argüman, onay
+    diyaloğuna YER TUTUCU değil ÇÖZÜLMÜŞ gerçek değerle ulaşmalı —
+    aksi halde onay yalnızca güvenlik HİSSİ verir (bkz. CLAUDE.md).
+    """
+
+    received: list[dict] = []
+
+    def _recording_confirm(tool_name: str, arguments: dict) -> bool:
+        received.append(dict(arguments))
+        return True
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_recording_confirm)
+
+    plan = [
+        {"tool": "filesystem.create_file", "arguments": {"name": "hedef.txt"}},
+        {"tool": "filesystem.delete", "arguments": {"target": "{{step_1.path}}"}},
+    ]
+    planner.execute_plan(plan)
+
+    assert len(received) == 1
+    assert received[0]["target"] == str(tmp_path / "hedef.txt")
+    assert "{{step_1.path}}" not in received[0]["target"]
+
+
+def test_step_reference_to_failed_step_fails_cleanly(dispatcher: ToolDispatcher) -> None:
+    """Başarısız bir adıma referans, ham bir KeyError/None DEĞİL, anlaşılır
+    bir hata üretmeli — ve plan orada durmalı (stop_on_failure varsayılanı)."""
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [
+        {"tool": "filesystem.open", "arguments": {"target": "olmayan-klasor"}},  # başarısız
+        {"tool": "filesystem.create_file", "arguments": {"name": "x.txt", "location": "{{step_1.path}}"}},
+    ]
+    results = planner.execute_plan(plan)
+
+    assert len(results) == 1  # ikinci adıma hiç sıra gelmedi
+    assert results[0].result.success is False
+
+
+def test_step_reference_to_missing_field_fails_cleanly(dispatcher: ToolDispatcher, tmp_path: Path) -> None:
+    """`filesystem.search`'ün `data`'sında `path` yok (`matches` var) —
+    var olmayan bir alana referans anlaşılır bir hatayla durmalı."""
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [
+        {"tool": "filesystem.search", "arguments": {"query": "rapor"}},
+        {"tool": "filesystem.create_file", "arguments": {"name": "x.txt", "location": "{{step_1.path}}"}},
+    ]
+    results = planner.execute_plan(plan)
+
+    assert len(results) == 2
+    assert results[0].result.success is True
+    assert results[1].result.success is False
+    assert "path" in results[1].result.message
+
+
+def test_step_reference_to_nonexistent_step_fails_cleanly(dispatcher: ToolDispatcher) -> None:
+    """Var olmayan (örn. henüz çalışmamış ya da hiç yok) bir adıma referans reddedilmeli."""
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [
+        {"tool": "filesystem.create_file", "arguments": {"name": "x.txt", "location": "{{step_5.path}}"}},
+    ]
+    results = planner.execute_plan(plan)
+
+    assert len(results) == 1
+    assert results[0].result.success is False
+
+
+def test_step_reference_to_self_or_future_step_is_rejected(dispatcher: ToolDispatcher) -> None:
+    """Bir adım KENDİSİNE ya da henüz çalışmamış bir adıma referans veremez."""
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [
+        {"tool": "filesystem.create_folder", "arguments": {"name": "{{step_1.path}}"}},
+    ]
+    results = planner.execute_plan(plan)
+
+    assert len(results) == 1
+    assert results[0].result.success is False
+
+
+def test_literal_value_that_looks_unrelated_is_untouched(dispatcher: ToolDispatcher) -> None:
+    """Normal bir argüman değeri (referans SÖZDİZİMİNE uymayan) hiç dokunulmadan geçmeli."""
+
+    planner = TaskPlanner(dispatcher, confirm_callback=_always_confirm)
+
+    plan = [{"tool": "filesystem.create_folder", "arguments": {"name": "step_1.path ile ilgili değil"}}]
+    results = planner.execute_plan(plan)
+
+    assert results[0].result.success is True
+    assert results[0].arguments["name"] == "step_1.path ile ilgili değil"

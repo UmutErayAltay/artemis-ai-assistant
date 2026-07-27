@@ -1528,3 +1528,44 @@ tool'ların zaten tolere ettiği gibi tolere edilir.
 **Ders**: bir güvenlik/doğruluk katmanı eklerken, onu var olan
 davranıştan DAHA katı yapmak da bir regresyondur — "doğru" olmak,
 projenin geri kalanıyla aynı tolerans sözleşmesini konuşmayı gerektirir.
+
+---
+
+## 25) Adımlar arası veri akışı: `{{step_N.alan}}` referansları (v3.5)
+
+v1'den beri bilinçli bir sınırlama vardı (`core/planner.py` modül
+dokümantasyonu): adımlar arasında veri aktarımı yoktu. "Rapor klasörü
+oluştur ve içine notlar.txt koy" gibi bir komutta, ikinci adımın
+`location`'ı LLM tarafından TAHMİN edilmek zorundaydı — model klasörün
+tam yolunu (`C:\Users\...\Desktop\Rapor`) önceden bilemeyeceği için ya
+yanlış bir yol uydururdu ya da `"desktop"` yazıp `filesystem.create_file`
+dosyayı klasörün İÇİNE değil masaüstüne doğrudan koyardı.
+
+**Tasarım kararı — neden "önceki adımı bekleyip sonrakini yeniden
+üret" YAPILMADI:** Bu, adım başına ayrı bir LLM çağrısı gerektirirdi
+(yavaş — mevcut tool seçimi zaten ~1-2 sn) ve modelin ara sonucu okuyup
+akıl yürütmesini gerektirirdi; küçük/yerel modeller bunda güvenilir
+değil (bkz. §20/§21'deki ölçülmüş kanıt). Bunun yerine model TÜM
+adımları TEK seferde, `{{step_N.alan}}` biçiminde REFERANS YER
+TUTUCULARIYLA üretir; gerçek değer yalnızca ÇALIŞMA ZAMANINDA,
+`core/planner.py::_resolve_step_references` tarafından önceki adımın
+GERÇEK `ToolResult.data`'sından okunarak yerleştirilir. Model hiçbir
+zaman bir dosya yolu uydurmaz — yalnızca "N. adımın `path` alanı" der.
+
+Şema değişmedi (`arguments` zaten serbest-formatlı bir JSON objesi,
+bkz. `_response_schema`); yalnızca `prompts/system_prompt.md`'ye kural
+8 ve bir örnek eklendi. Gerçek modelle (gemma4:e4b) canlı doğrulama: 3
+farklı klasör/dosya adıyla 3/3 doğru sözdizimi üretti, sadece ezber
+yapmadı — genelleşti. Uçtan uca dispatcher/planner ile de doğrulandı:
+dosya gerçekten oluşan klasörün İÇİNE yazıldı.
+
+**Güvenlik notu:** referans çözümlemesi, onay diyaloğundan ÖNCE yapılır.
+`filesystem.delete`'in `target`'ı `{{step_1.path}}` olsa bile, kullanıcı
+onay ekranında yer tutucuyu değil ÇÖZÜLMÜŞ gerçek yolu görür — aksi
+halde "onay NEYİ onayladığını göstermek zorunda" ilkesi (README §16b)
+ihlal edilirdi.
+
+Hata durumları anlaşılır mesajlarla kapatıldı: kendine/ileriye referans,
+başarısız bir adıma referans, var olmayan bir alana (`filesystem.
+search`'ün `matches`'i gibi) referans — hepsi tool hiç çalıştırılmadan,
+net bir Türkçe mesajla `success=False` döner.

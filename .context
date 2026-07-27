@@ -185,12 +185,16 @@ zincirleme işini yapıyor; sabit skill'ler ikinci ve gereksiz bir yol
 olurdu. Tam gerekçe ve **hangi iki koşulda geri açılacağı**
 `skills/README.md`'de.
 
-### 6.2) Adımlar arası veri aktarımı eklenmedi
-"1. adımın çıktısını 2. adıma argüman ver" (örn. "ekran görüntüsü al ve
-şu klasöre taşı") desteklenmiyor. Gerekçe: küçük yerel modellerin
-adım-bağımlı akıl yürütmeyi güvenilir yapabildiği HENÜZ gözlemlenmedi.
-Eklenecekse doğru yer `TaskPlanner` (skills değil) ve önce modelin bunu
-gerçekten becerdiği doğrulanmalı — varsayımla değil.
+### 6.2) Adımlar arası veri aktarımı — GERİ AÇILDI (v3.5)
+ESKİ KARAR (artık geçersiz): "1. adımın çıktısını 2. adıma argüman ver"
+desteklenmiyordu. v3.5'te açıldı ama modelin "ara sonucu bekleyip akıl
+yürütmesi" ile DEĞİL: model TÜM adımları tek seferde, `{{step_N.alan}}`
+yer tutucularıyla üretir; gerçek değer yalnızca çalışma zamanında
+`_resolve_step_references` tarafından yerleştirilir — model hiçbir
+zaman bir yol/değer uydurmaz. Gerçek modelle (gemma4:e4b) 3/3 doğru
+sözdizimi + uçtan uca dispatcher doğrulaması yapıldı (varsayımla değil).
+Gerekçe ve güvenlik notu (onay diyaloğu ÇÖZÜLMÜŞ değeri görür, yer
+tutucuyu değil) README §25.
 
 ### 6.4) Sesli asistanda İKİ ayrı tanıma motoru (v2.0)
 Uyandırma sözcüğü gün boyu çalıştığı için en ucuz motor (Vosk küçük
@@ -317,14 +321,12 @@ araştırmaya girişilmesin diye kayıtlıdır.
 
 ## 7) Bilinen boşluklar / sıradaki işler
 
-1. **Eksik plugin'ler**: `browser_plugin.py`, `mouse_keyboard_plugin.py`,
-   `mcp_plugin.py`. (`voice/stt.py`/`tts.py` YANLIŞ listelenmişti — ikisi
-   de zaten var, hibrit ses katmanının parçası.) Yeni plugin'ler aynı
-   `BaseTool` şablonuyla, çekirdeği bozmadan eklenebilir. (Artemis-worker
-   ajanı şu an mouse_keyboard + browser üzerinde çalışıyor; mcp ayrı.)
-2. **Planner'da adımlar arası veri akışı yok** — bilinçli bir sınırlamaydı
-   (§6.2) ama geri açılması planlanıyor (bkz. bu oturumdaki görev listesi).
-3. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
+1. **`mcp_plugin.py` eksik.** `browser_plugin.py`/`mouse_keyboard_plugin.py`
+   eklendi (artemis-worker ajanı, bu oturumda) — sırasıyla `browser.*`
+   (6 tool, OS seviyesi klavye kısayolları — CDP/Selenium değil, sayfa
+   içeriği okunamaz) ve `mouse_keyboard.*` (5 tool). MCP protokol
+   istemcisi gerektirdiği için mekanik değil, ayrı bir tasarım işi.
+2. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
    bitti, artık kullanılmıyor — yer gerekiyorsa
    `ollama rm gemma4:12b` ile silinebilir.
 
