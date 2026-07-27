@@ -127,14 +127,32 @@ wake_word_model_size: "tiny"
 # olarak yukarıdaki yerel modellere (faster-whisper/Piper) düşülür; asistan
 # bu durumda da çalışmaya devam eder (bkz. voice/router.py).
 
-# Konuşma tanımanın nereden yapılacağı: "auto" (varsayılan — önce bulut,
-# hata/internet yoksa otomatik yerele düşer), "cloud" (yalnızca bulut;
-# başarısız olursa dürüstçe hata verir), "local" (yalnızca yerel — ses
-# HİÇBİR yere gönderilmez).
-stt_provider: "auto"
+# Konuşma tanımanın nereden yapılacağı: "auto" (önce bulut, hata/internet
+# yoksa otomatik yerele düşer), "cloud" (yalnızca bulut; başarısız olursa
+# dürüstçe hata verir), "local" (yalnızca yerel — ses HİÇBİR yere
+# gönderilmez).
+#
+# "local" SEÇİLDİ — çünkü bulutun var olma gerekçesi ölçüldüğünde çürüdü.
+# Bulut STT, yerel model CPU'da küçük bir modelken eklenmişti; GPU +
+# large-v3-turbo'ya geçtikten sonra ölçüm (8 cümle, Edge TTS nöral Türkçe
+# ses) şunu verdi:
+#
+#     yerel  6/8 birebir   ort 0.43 sn
+#     azure  4/8 birebir   ort 1.01 sn
+#
+# Azure tam da eklenme sebebinde kaybetti: "League of Legends'ı aç" ->
+# "League of legendsage", "GitHub'ı aç" -> "Githubu'ı". Yani "auto" modu
+# her komutta önce daha yavaş VE daha yanlış olan yolu deniyordu.
+# Yan fayda: ses artık makineden hiç çıkmıyor. Gerekçe README §22.
+stt_provider: "local"
 
 # Sesli okumanın nereden yapılacağı; stt_provider ile aynı üç değeri alır.
 # "local" seçilirse cevap metni de dışarı çıkmaz.
+#
+# Burası "auto" KALIYOR: bulut TTS'i Microsoft Edge TTS ve API ANAHTARI
+# İSTEMİYOR. Yerel Piper'a göre belirgin biçimde daha doğal — kullanıcının
+# "geri konuştuğu ses çok robotik" şikâyetinin çözümü buydu. Yani STT
+# buluttan çıkarıldı diye TTS'i de çıkarmaya gerek yok; ikisi bağımsız.
 tts_provider: "auto"
 
 # Bulut konuşma tanımada hangi servis kullanılacak: "azure" veya "groq".

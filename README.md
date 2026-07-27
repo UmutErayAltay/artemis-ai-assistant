@@ -1404,3 +1404,45 @@ ve akış son çareye düşüyor. `think=False` değişikliğinin bununla ilgisi
 YOK (ayrıca doğrulandı: gpt-oss düşünmeyi zaten yok sayıyor, üç ayarda
 da aynı çıktıyı veriyor). Çok adımlı işler için gpt-oss:20b düşünülecekse
 önce bu çözülmeli.
+
+---
+
+## 22) Bulut STT'ye hâlâ gerek var mı? — gerekçe çürüdü (v3.2)
+
+Kullanıcı sordu: *"azure speech e gerek var mı?"* Sorunun kendisi
+haklıydı, çünkü bulut STT'nin gerekçesi (§18) şuydu: *"belirgin biçimde
+daha doğru, özellikle yabancı özel isimlerde"*. O cümle, yerel model
+**CPU'da küçük bir modelken** yazılmıştı. Sonra §19'da GPU'ya ve
+`large-v3-turbo`'ya geçildi — ama gerekçeye geri dönülüp bakılmadı.
+
+Ölçüm (8 Türkçe komut, Edge TTS nöral sesiyle üretildi; Piper'ın sentetik
+telaffuzu İngilizce özel isimleri bozduğu için adil bir sınav olmazdı):
+
+| | Doğruluk | Gecikme |
+|---|---|---|
+| **yerel** (faster-whisper large-v3-turbo, GPU) | **6/8** | **0.43 sn** |
+| Azure Speech (bulut) | 4/8 | 1.01 sn |
+
+Azure, tam da **eklenme sebebinde** kaybetti:
+
+| Söylenen | yerel | Azure |
+|---|---|---|
+| "League of Legends'ı aç" | ✓ | ✗ `League of legendsage` |
+| "GitHub'ı aç ve ekran görüntüsü al" | ✓ | ✗ `Githubu'ı aç...` |
+| "Visual Studio Code'u aç" | ✗ `Code Watch` | ✗ `kodeva` |
+
+Yani `stt_provider: "auto"` her komutta önce **daha yavaş VE daha yanlış**
+olan yolu deniyordu. `"local"` yapıldı.
+
+Kazançlar: komut başına ~0.6 sn, iki tanıma hatası, bir API anahtarı
+bağımlılığı ve bir gizlilik riski (ses artık makineden hiç çıkmıyor).
+
+**TTS bundan etkilenmez.** Bulut TTS'i Microsoft Edge TTS'tir ve API
+anahtarı İSTEMEZ; Piper'a göre belirgin biçimde daha doğal olduğu için
+(`tts_provider: "auto"`) olduğu gibi bırakıldı. STT ile TTS bağımsızdır.
+
+**Ders**: bir bileşenin gerekçesi, altındaki başka bir bileşen
+yükseltildiğinde sessizce geçersizleşebilir. §18'in gerekçesi §19
+tarafından çürütülmüştü ama üç sürüm boyunca kimse geri dönüp bakmadı.
+Bir şeyi "neden eklediğimizi" yazmak, ancak o gerekçeyi periyodik olarak
+sınarsak işe yarar.
