@@ -43,4 +43,17 @@ def build_tool_manifest_json() -> str:
     """
 
     manifest = build_tool_manifest()
-    return json.dumps([m.model_dump() for m in manifest], ensure_ascii=False, indent=2)
+    entries = [m.model_dump() for m in manifest]
+
+    # `danger_level` prompttan ÇIKARILIR: onayı `core/dispatcher.py`
+    # uygular, modelin bilmesine gerek yoktur ve her tool için fazladan
+    # token harcar (bkz. `prompts/system_prompt.md` — model yalnızca
+    # doğru tool çağrısını üretmekle sorumlu).
+    for entry in entries:
+        entry.pop("danger_level", None)
+
+    # Girintisiz ve boşluksuz: bu metin her istekte modele gönderilir,
+    # girinti yalnızca token harcar. İnsan okunabilirliği burada
+    # gerekmiyor — geliştirici manifesti `build_tool_manifest()` ile
+    # nesne olarak inceleyebilir.
+    return json.dumps(entries, ensure_ascii=False, separators=(",", ":"))

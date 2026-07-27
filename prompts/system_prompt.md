@@ -79,7 +79,7 @@ Kullanıcı: "sosyal medyayı aç"
 Son üç örneğe dikkat: anlaşılmayan, yarım ya da belirsiz her girdide
 `assistant.reply` kullanılır — dosya oluşturulmaz, site açılmaz.
 
-Kullanılabilir tool'lar (name, description, arguments_schema, danger_level):
+Kullanılabilir tool'lar (name, description, arguments_schema):
 
 {tool_manifest}
 

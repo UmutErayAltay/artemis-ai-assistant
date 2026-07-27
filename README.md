@@ -1126,6 +1126,71 @@ yönlendirilir — gerçek masaüstüne dokunulmaz.
   cevap   : Bir komut duymadım.     ← komut kapısı çalışıyor
 ```
 
+### o) Uyandırma sıkılaştırıldı ve prompt %58 küçüldü (v2.9)
+
+Kullanıcı: *"Açılış kelimesi çok farklı şeylerle de tetikleniyor."*
+
+#### Ölçüm önce, düzeltme sonra
+
+Log'daki "yanlış" uyanmaların çoğu aslında yanlış DEĞİLDİ: kullanıcı
+gerçekten "Artemis" demiş (cevap gelmediği için tekrar tekrar), etrafındaki
+gürültü de kayda girmiş. Tek gerçek yanlış pozitif **`temiz`** sözcüğüydü —
+bulanık benzerlik 0.833, eşik 0.82. Kıl payı geçiyordu.
+
+Dört düzeltme, hepsi ölçümle:
+
+1. **`vad_filter=True`** — asıl kazanç. Whisper tiny gürültüde kelime
+   UYDURUR; ölçüldü: ortam gürültüsünden `'Hızlı, hızlı, hızlı'` üretti.
+   Silero VAD ile konuşma olmayan kısım tanımaya hiç girmiyor → çıktı `''`.
+2. **`no_speech_prob` kapısı** — model kendi şüphesini bildiriyor:
+   gürültüde 0.59, gerçek konuşmada 0.11. 0.40 üstü segmentler yok sayılıyor.
+3. **Noktalama temizliği** — gerçek bir hata: Whisper çıktıya nokta
+   ekliyor ve nokta sözcüğe YAPIŞIK geldiği için benzerliği düşürüyordu
+   (`'arteniz'` 0.857 → `'arteniz.'` 0.800, eşiğin altına iniyor). Yani
+   asistan doğru duyduğu hâlde yalnızca nokta yüzünden uyanmıyordu.
+4. **Eşik 0.82 → 0.85**, tahminle değil veriyle:
+
+   | | uyanmalı | uyanmamalı |
+   |---|---|---|
+   | 0.82 | 9/9 | 1/17 geçiyor (`temiz`) |
+   | **0.85** | **9/9** | **0/17** |
+   | 0.86+ | 8/9 (`arteniz` kaybediliyor) | 0/17 |
+
+**Gerçek mikrofonla doğrulama**: 10 saniye ortam gürültüsü → **sıfır
+yanlış uyanma**; "Artemis" → uyanıyor; "temiz" → uyanmıyor.
+
+#### Prompt iki kez gönderiliyordu (4.8x hızlanma)
+
+Gecikme ölçüldüğünde darboğaz beklenen yerde değildi:
+
+| Aşama | Süre | Pay |
+|---|---|---|
+| STT (GPU large-v3-turbo) | 1.02 sn | %10 |
+| Komut kapısı | 1.86 sn | %18 |
+| **LLM tool seçimi** | **7.32 sn** | **%72** |
+
+Sebep bir hataydı: `{tool_manifest}` yer tutucusu şablonun GELİŞTİRİCİ
+BAŞLIĞINDA da örnek olarak geçiyordu ve `str.replace()` tüm eşleşmeleri
+değiştirdiği için **tool listesi prompta iki kez basılıyordu**.
+
+```
+şablon 4.023 + manifest 8.915  ->  beklenen ~12.900 karakter
+gerçekte üretilen              ->        21.823 karakter
+```
+
+Üç düzeltme:
+- Geliştirici başlığı artık tamamen atılıyor (modele hitap etmeyen metin).
+- Manifest girintisiz basılıyor (girinti yalnızca token harcar).
+- `danger_level` prompttan çıkarıldı — onayı dispatcher uygular, modelin
+  bilmesine gerek yok.
+
+**Sonuç: 21.823 → 9.198 karakter (%58 küçülme), tool seçimi 7.32 → 1.51
+saniye (4.8 kat), doğruluk korunuyor (6/7).**
+
+Regresyon testi eklendi: manifest prompta tam olarak BİR KEZ girmeli ve
+prompt bir üst sınırı aşmamalı — bu sınır bir kalite tercihi değil,
+gecikme bütçesidir.
+
 ### g) Arayüz: ne dediğiniz artık ekranda kalıyor
 
 Kullanıcı isteği: *"Dediklerimi Artemis yazısının altında gösterse daha

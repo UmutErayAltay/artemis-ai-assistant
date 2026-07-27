@@ -97,8 +97,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_WAKE_WORDS = ("artemis", "artemiz", "arte mis", "art emis", "hartemis")
 """Varsayılan kabul edilen varyantlar. `config.yaml::wake_words` ile değiştirilebilir."""
 
-DEFAULT_FUZZY_THRESHOLD = 0.82
-"""Bulanık eşleşme eşiği (0-1). Düşürmek yanlış uyanmaları artırır."""
+DEFAULT_FUZZY_THRESHOLD = 0.85
+"""Bulanık eşleşme eşiği (0-1). ÖLÇÜLEREK seçildi, tahminle değil.
+
+Bu makinede Whisper tiny'nin gerçek çıktıları ve ayırt edilmesi gereken
+Türkçe sözcükler (noktalama temizlendikten sonra):
+
+    UYANMALI    'artemis' 1.000   'artemiz' 1.000   'arteniz' 0.857
+    UYANMAMALI  'temiz'   0.833   'artık'   0.667   'tenis'   0.667
+
+0.82 (eski değer) `temiz` sözcüğünü kabul ediyordu — kullanıcının
+log'undaki tek gerçek yanlış uyanma buydu. 0.86 ve üstü ise `arteniz`
+gibi makul çevirileri kaybediyor. 0.85 ikisini de doğru tarafta bırakır.
+"""
+
+_PUNCTUATION_TO_STRIP = ".,!?;:…\"'()[]{}"
+"""Bulanık eşleştirmeden önce sözcüklerden atılan noktalama.
+
+Whisper çıktıya noktalama ekler ve bu, sözcüğe YAPIŞIK geldiği için
+benzerlik oranını düşürür — ölçüldü: 'arteniz' 0.857 iken 'arteniz.'
+0.800'e düşüyor ve eşiğin altında kalıyor. Yani asistan, doğru duyduğu
+hâlde yalnızca nokta yüzünden uyanmıyordu.
+"""
+
+MAX_NO_SPEECH_PROB = 0.40
+"""Whisper'ın "burada konuşma yok" olasılığı bu değeri aşarsa çıktı yok sayılır.
+
+Whisper tiny gürültüde kelime UYDURUR (ölçüldü: ortam gürültüsünden
+'Hızlı, hızlı, hızlı' üretti). Ama kendi güvensizliğini de bildirir:
+
+    ortam gürültüsü : no_speech_prob 0.59
+    gerçek "Artemis": no_speech_prob 0.11
+
+Bu eşik, modelin kendi şüphesini uyandırma kararına dahil eder."""
 
 _COMBINING_DOT_ABOVE = "̇"
 
@@ -434,8 +465,26 @@ class WakeWordDetector:
                 # Atlanırsa Whisper tiny özel isimlerde sık sık yakın-ses bir
                 # kelimeye savrulur.
                 hotwords=self._hotwords,
+                # Silero VAD ile konuşma OLMAYAN kısımlar tanımaya hiç
+                # girmez. Whisper tiny gürültüde kelime uydurur; ölçüldü:
+                #     vad_filter=False -> ortam gürültüsünden 'Hızlı, hızlı, hızlı'
+                #     vad_filter=True  -> ''
+                # Yanlış uyanmaların en büyük kaynağı buydu.
+                vad_filter=True,
             )
-            text = "".join(segment.text for segment in segments).strip()
+            kept: list[str] = []
+            for segment in segments:
+                # Modelin KENDİ şüphesini de hesaba kat: gürültüde
+                # no_speech_prob 0.59, gerçek konuşmada 0.11 ölçüldü.
+                if getattr(segment, "no_speech_prob", 0.0) > MAX_NO_SPEECH_PROB:
+                    logger.debug(
+                        "Segment yok sayıldı (no_speech_prob=%.2f): %r",
+                        segment.no_speech_prob,
+                        segment.text,
+                    )
+                    continue
+                kept.append(segment.text)
+            text = "".join(kept).strip()
         except Exception as exc:  # noqa: BLE001 - donanım/kütüphane kaynaklı her hata
             raise WakeWordUnavailableError(
                 f"Uyandırma sözcüğü tanınamadı (device={self._device}, "
@@ -471,7 +520,14 @@ class WakeWordDetector:
             if wake_word in normalized:
                 return True
 
-        for token in normalized.split():
+        for raw_token in normalized.split():
+            # Noktalama MUTLAKA atılır: sözcüğe yapışık bir nokta benzerlik
+            # oranını belirgin biçimde düşürüyor ve doğru duyulmuş bir
+            # uyandırmayı eşiğin altına itiyordu (bkz. `_PUNCTUATION_TO_STRIP`).
+            token = raw_token.strip(_PUNCTUATION_TO_STRIP)
+            if not token:
+                continue
+
             for wake_word in self._wake_words:
                 similarity = difflib.SequenceMatcher(None, token, wake_word).ratio()
                 if similarity >= self._fuzzy_threshold:
