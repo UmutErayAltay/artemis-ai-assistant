@@ -1615,3 +1615,98 @@ promptu 13.533 karakter (§16'daki 14.000 karakter sınırına ~470 karakter
 kaldı). `mcp_plugin.py` (hâlâ eksik, bkz. §7) veya başka bir plugin
 eklendiğinde bu sınır aşılabilir; o noktada ya sınır yükseltilmeli ya
 manifest daha da sıkıştırılmalı (örn. `description` alanları kısaltılarak).
+
+---
+
+## 27) `mcp_plugin.py`: dinamik MCP tool'larını statik registry'ye bağlamak (v3.7)
+
+Task 4'ten bilerek ayrılmıştı (§26): MCP (Model Context Protocol)
+sunucuları, `browser`/`mouse_keyboard` gibi şablon takip eden bir iş
+değil, gerçek bir mimari çelişki içeriyordu.
+
+### 27a) Çelişki: statik registry vs dinamik keşif
+
+Her Artemis tool'u `@register_tool` ile İMPORT ZAMANINDA, statik olarak
+`TOOL_REGISTRY`'e kaydedilir; sistem promptunun manifest'i de bu sabit
+registry'den üretilir. MCP sunucuları ise tool'larını ÇALIŞMA
+ZAMANINDA, sunucuya bağlanıp `list_tools()` çağırarak açıklar. LLM bir
+tool'u yalnızca manifest'te görürse isteyebilir, manifest de yalnızca
+bir kez üretilir — yani keşif "tembel" (ilk kullanımda) olsaydı, MCP
+tool'ları LLM'e hiç görünmezdi (tavuk-yumurta sorunu).
+
+**Çözüm:** MCP sunucuları, bu modül import edilirken (yani `load_plugins()`
+sırasında, uygulama başlarken) bir kez keşfedilir ve her keşfedilen tool
+için `_make_mcp_tool_class` DİNAMİK olarak gerçek bir `BaseTool` alt
+sınıfı üretip normal registry'e kaydeder. Bunun ötesinde dispatcher,
+planner (zincir referansları dahil) ve manifest üretimi hiçbir özel
+durum eklenmeden çalışır — bir MCP tool'u, sistemin geri kalanı için
+sıradan bir Artemis tool'undan AYIRT EDİLEMEZ. Bu, "yeni bir mixin/ara
+sınıf eklemek yerine composition" ilkesinin (CLAUDE.md) doğal bir
+uzantısı: MCP'ye özel kod yalnızca "dinamik olanı statiğe çevir"
+adaptöründe yaşıyor, geri kalan hiçbir katmana sızmıyor.
+
+### 27b) Varsayılan sıfır I/O — bu depo herkese açık
+
+`config.yaml::mcp_servers` varsayılan olarak BOŞ liste. Boşken bu
+modülün import edilmesi hiçbir ağ/süreç I/O'su yapmaz (`mcp` paketi
+bile içe aktarılmaz) — bu, test paketinin (her test dosyası
+`load_plugins()` çağırır) hızlı ve sunucusuz kalmasını garanti eder.
+Bir kullanıcı sunucu eklerse, o sunucuya bağlanma denemesi kısa bir
+zaman aşımıyla (varsayılan 5 sn) ve `try/except` ile sarılıdır: yanıt
+vermeyen/bozuk BİR sunucu diğer sunucuların veya tüm uygulamanın
+açılışını KİLİTLEMEZ/ÇÖKERTMEZ, yalnızca o sunucunun tool'ları eksik
+kalır ve bir uyarı loglanır. Bu üç iddia da gerçek bir alt süreçle
+ölçüldü (mock değil): bozuk komut → 0 tool, çökmez; 0.001 sn zaman
+aşımı → 0 tool, çökmez; bozuk + çalışan sunucu birlikte → yalnızca
+çalışanın tool'ları kaydedilir.
+
+### 27c) Güven modeli: kaynağın güvenilirliği, işlemin geri alınabilirliğinden ayrı bir risk ekseni
+
+Projedeki mevcut `danger_level` ayrımı "işlem geri alınabilir mi"
+eksenine göre çizili (delete/shutdown/... → CONFIRM_REQUIRED). MCP
+tool'ları YENİ bir risk ekseni taşıyor: bir MCP sunucusu Artemis'in
+kendi yazdığı/denetlediği kod DEĞİLDİR, üçüncü taraf bir süreçtir.
+Bu yüzden bir sunucu `config.yaml`'da `trusted: true` işaretlenmedikçe
+tool'ları `CONFIRM_REQUIRED` kaydedilir (uçtan uca doğrulandı: ölçüm,
+mock değil). `trusted: true` verilirse `SAFE` olur.
+
+### 27d) v1 kapsamı — bilerek yalnızca stdio
+
+MCP'nin `sse`/`streamable_http`/`websocket` taşımaları da var, ama bu
+proje SDK'nın yalnızca `stdio` (yerel süreç, `npx ...`/`python -m ...`)
+taşımasını destekliyor. Gerekçe: stdio, gerçek dünyadaki MCP
+sunucularının büyük çoğunluğunun çalışma şekli; uzak/HTTP sunucular
+ayrı bir kimlik-doğrulama/gizli-anahtar yönetimi ister (Groq/Azure
+anahtarlarıyla aynı desen) ve hiçbir kullanıcı bunu istemedi —
+hipotetik bir ihtiyaç için şimdiden eklenmedi (CLAUDE.md: "don't design
+for hypothetical future requirements"). Aynı desen izlenerek ileride
+eklenebilir.
+
+### 27e) Testler GERÇEK bir alt süreç kullanır, mock değil
+
+`tests/fixtures/mcp_echo_server.py`, `FastMCP` ile yazılmış GERÇEK,
+bağımsız bir stdio MCP sunucusudur (üç basit tool: `echo`, `add`,
+`always_fails`). Testler bunu gerçekten başlatıp gerçek keşif+çağrı
+turu yapar — sahte bir `ClientSession` bu mimarinin asıl riskli
+kısmındaki (süreç yönetimi, senkron/asenkron köprü, protokol çevirisi)
+hataların çoğunu göstermezdi. Round-trip ~1.1 sn; alt süreç sızıntısı
+olmadığı `psutil` ile doğrulandı.
+
+**Önemli izolasyon notu:** `TOOL_REGISTRY` süreç genelinde paylaşılan
+bir global'dir. MCP testleri kaydettikleri tool'ları test sonunda
+MUTLAKA temizler (`_deregister`) — aksi halde `test_prompt_builder.py`'nin
+14.000 karakter sınırını (gerçek tool'lar zaten 13.533 karakterde,
+§26) yanlışlıkla şişirip ALAKASIZ bir testi flaky biçimde kırabilirdi.
+Bu, geliştirirken gerçekten yaşanıp düzeltildi.
+
+20 yeni test (tümü geçiyor). Tam paket artık **393 test**, 18.6 sn (MCP
+alt süreç testleri hariç önceki ~5 sn'ye ek ~13 sn — kabul edilebilir,
+gerçek entegrasyon güveninin karşılığı).
+
+`mcp>=1.20` `requirements.txt`'e eklendi (bu geliştirme ortamında
+dolaylı olarak zaten kuruluydu — ilgisiz bir küresel araçtan geliyordu,
+projeye ait değildi; artık açıkça bağımlılık olarak listelendi).
+
+CLAUDE.md, .context §7 madde 1'de "eksik" diye işaretlenmiş üç
+plugin'in üçü de artık tamam: `browser_plugin.py`, `mouse_keyboard_plugin.py`
+(§26), `mcp_plugin.py` (bu bölüm).

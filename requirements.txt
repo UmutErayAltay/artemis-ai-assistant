@@ -46,3 +46,11 @@ nvidia-cudnn-cu12 ; sys_platform == "win32"
 # değişken ortam gürültüsünde çalışmadığı için geri eklendi
 # (bkz. voice/wake_word.py modül dokümantasyonu).
 vosk>=0.3.45
+
+# --- MCP (Model Context Protocol) sunucuları (plugins/mcp_plugin.py) ---
+# Resmî Anthropic MCP Python SDK'sı. `config.yaml::mcp_servers` boş
+# (varsayılan) olduğu sürece bu paket İÇE AKTARILMAZ bile — lazy import
+# (bkz. plugin dokümantasyonu). Yine de burada AÇIKÇA listelenir: dolaylı
+# olarak zaten kurulu görünse bile (bazı geliştirme ortamlarında başka
+# araçlar üzerinden gelebilir), fresh bir kurulumda garanti olması için.
+mcp>=1.20

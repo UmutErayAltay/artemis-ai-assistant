@@ -193,6 +193,28 @@ cloud_timeout_seconds: 15.0
 # beklerdi ve asistan kullanılamaz hale gelirdi (bkz. voice/router.py).
 cloud_failure_cooldown_seconds: 60.0
 
+# --- MCP (Model Context Protocol) sunucuları ---
+# VARSAYILAN BOŞ: hiçbir sunucuya bağlanılmaz, bu bölüm hiçbir I/O
+# yapmaz (bkz. plugins/mcp_plugin.py modül dokümantasyonu). Bir sunucu
+# eklerseniz, tool'ları keşfedilip normal bir Artemis tool'u gibi
+# (`mcp.<name>.<tool_adı>`) kaydedilir.
+#
+# GÜVENLİK: bu depo HERKESE AÇIKTIR. Bir MCP sunucusu ARTEMİS'İN KENDİ
+# YAZDIĞI KOD DEĞİLDİR — üçüncü taraf bir süreçtir ve `command`'ı
+# çalıştırdığınız her şeyi yapabilir. `trusted: true` VERMEDİĞİNİZ
+# sürece o sunucunun tool'ları CONFIRM_REQUIRED kaydedilir (her
+# çağrıda onay istenir). Yalnızca GERÇEKTEN GÜVENDİĞİNİZ bir komut
+# ekleyin.
+mcp_servers: []
+# Örnek (denemeden önce `command`'in güvendiğiniz bir şey olduğundan
+# emin olun):
+# mcp_servers:
+#   - name: "everything"
+#     command: "npx"
+#     args: ["-y", "@modelcontextprotocol/server-everything"]
+#     trusted: false
+#     timeout_seconds: 5.0
+
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.
 # Anahtarlar yalnızca şu üç kaynaktan, bu sırayla okunur:

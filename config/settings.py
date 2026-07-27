@@ -19,6 +19,40 @@ from pydantic import BaseModel, Field
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 
+class MCPServerConfig(BaseModel):
+    """Tek bir MCP (Model Context Protocol) sunucusunun bağlantı bilgisi.
+
+    v1 kapsamı BİLEREK yalnızca stdio (yerel süreç) taşımasıyla
+    sınırlıdır — MCP sunucularının büyük çoğunluğu (`npx ...`, `python -m
+    ...`) bu şekilde çalışır. Uzak/HTTP sunucular (SSE, kimlik doğrulama
+    gerektirir) ayrı bir gizli-anahtar yönetimi ister; bu proje şu anda
+    hiçbir kullanıcıdan böyle bir ihtiyaç görmedi, bu yüzden eklenmedi
+    (bkz. `plugins/mcp_plugin.py` modül dokümantasyonu).
+
+    Attributes:
+        name: Sunucunun kısa, dosya-sistemi-dostu adı. Kayıtlı tool
+            adlarının önekini oluşturur (`mcp.<name>.<tool_adı>`).
+        command: Çalıştırılacak komut (örn. "npx", "python").
+        args: Komuta geçirilecek argümanlar.
+        env: Alt sürece eklenecek ek ortam değişkenleri.
+        trusted: True ise bu sunucunun tool'ları `DangerLevel.SAFE`
+            kaydedilir; False (varsayılan) ise `CONFIRM_REQUIRED` —
+            bir MCP sunucusu Artemis'in kendi yazdığı/denetlediği kod
+            DEĞİLDİR, üçüncü taraf bir süreçtir (bkz. plugin
+            dokümantasyonu, GÜVENLİK bölümü).
+        timeout_seconds: Sunucuya bağlanıp tool listesini almak için
+            tanınan azami süre. Yanıt vermeyen/bozuk bir sunucu, tüm
+            uygulamanın açılışını KİLİTLEMEMELİDİR.
+    """
+
+    name: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    trusted: bool = False
+    timeout_seconds: float = 5.0
+
+
 class Settings(BaseModel):
     """Artemis'in çalışması için gereken tüm ayarlar.
 
@@ -135,6 +169,11 @@ class Settings(BaseModel):
             iken tek çağırma yoludur. Kısayol başka bir uygulama
             tarafından kullanılıyorsa Artemis kısayolsuz çalışmaya devam
             eder (bkz. `ui/hotkey.py`).
+        mcp_servers: Bağlanılacak MCP sunucularının listesi (varsayılan
+            BOŞ — hiçbir sunucuya bağlanılmaz, `plugins/mcp_plugin.py`
+            içe aktarılması hiçbir I/O yapmaz). Her girdi keşfedilip
+            normal bir Artemis tool'u gibi kaydedilir; bkz.
+            `MCPServerConfig` ve `plugins/mcp_plugin.py`.
     """
 
     desktop_path: Path = Field(default_factory=lambda: Path.home() / "Desktop")
@@ -195,6 +234,9 @@ class Settings(BaseModel):
     edge_tts_pitch: str = "+0Hz"
     cloud_timeout_seconds: float = 15.0
     cloud_failure_cooldown_seconds: float = 60.0
+
+    # --- MCP (Model Context Protocol) sunucuları ---
+    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
 
 
 SECRETS_PATH = Path(__file__).resolve().parent / "secrets.yaml"

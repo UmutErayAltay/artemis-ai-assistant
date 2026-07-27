@@ -117,11 +117,15 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
 
 ## Bilinen sınırlamalar (bilerek eklenmedi, şaşırma)
 
-- Plan adımları arasında veri aktarımı yok (bkz. `core/planner.py`
-  modül dokümantasyonu).
+- Plan adımları arasında veri aktarımı `{{step_N.alan}}` referanslarıyla
+  VAR (v3.5) — model bir yolu tahmin etmez, yalnızca "N. adımın X alanı"
+  der; gerçek değer çalışma zamanında yerleştirilir (bkz. `core/planner.py`
+  modül dokümantasyonu, README §25).
 - `plugins/browser_plugin.py`, `plugins/mouse_keyboard_plugin.py`,
-  `plugins/mcp_plugin.py`, ses katmanı (`voice/stt.py`/`tts.py`) henüz yok.
-  (`plugins/web_plugin.py` eklendi: `web.search` + `web.open_url`.)
+  `plugins/mcp_plugin.py` VAR (v3.6/v3.7). MCP v1 yalnızca stdio
+  taşımasını destekler, `config.yaml::mcp_servers` boş olduğu sürece
+  sıfır I/O yapar (README §27). Ses katmanı (`voice/stt.py`/`voice/tts.py`)
+  de VAR, hibrit bulut/yerel mimarinin parçası.
 - `skills/` klasörü **bilinçli olarak boş** — bu artık açık bir soru
   değil, verilmiş bir karar: `core/planner.py::TaskPlanner` zaten
   tool zincirleme işini yapıyor, ayrı bir skills çerçevesi ikinci ve
