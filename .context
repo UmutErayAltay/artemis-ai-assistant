@@ -239,6 +239,32 @@ Varsayılan model artık **`gemma4:e4b`**: 10/10 doğruluk, 1.17 sn ve
 diskte 9.6 GB görünse de MatFormer sayesinde bellekte 3.3 GB — 6 GB'lık
 GPU'ya %100 yerleşiyor.
 
+### 6.9) Model seçilirken ölçüt SKOR DEĞİL, hatanın yönü (v3.1)
+20 zor senaryoda (bozuk ASR + belirsiz istekler) `gemma4:e4b` ve
+`qwen3.5:4b` aynı skoru aldı (18/20) ama fark hata türündeydi:
+
+| Model | Skor | Gecikme | Tehlikeli hata |
+|---|---|---|---|
+| **`gemma4:e4b`** | 18/20 | 1.19 sn | **0** |
+| `qwen3.5:4b` | 18/20 | 1.07 sn | 1 (adres uydurdu) |
+| `llama3.1:8b` | 17/20 | 1.73 sn | 2 |
+| `qwen2.5:14b` | 16/20 | 7.45 sn | 0 (6x yavaş) |
+| `phi4-mini` | 12/20 | 0.78 sn | 5 |
+| `gpt-oss:20b` | 0/20 | — | şemayla çalışmıyor |
+
+`phi4-mini`, *"Evi kapat"*'ı `windows.shutdown` sandı — yalnızca
+`CONFIRM_REQUIRED` olduğu için bilgisayar kapanmadı. Sesli asistanda
+yanlış duyma kaçınılmaz olduğundan "emin değilsem dokunmam" diyen model
+tercih edilir. Gerekçe README §21.
+
+**Ders**: model kıyaslarken doğru sayısına değil, YANLIŞLARIN NE
+YAPTIĞINA bakın.
+
+### 6.10) `gpt-oss:20b` bu mimariyle kullanılamaz
+`format` verildiği anda boş içerik dönüyor (hem şema hem `json`), yani
+§9'daki güvencenin ilk iki katmanı işlemiyor. `think=False` ile ilgisi
+yok (doğrulandı). README §21b.
+
 ### 6.3) `location` tam yol kabul etmeye devam ediyor
 Sertleştirme yalnızca `target`/`name` argümanına uygulandı. `location`'ın
 tam yol alabilmesi şemada belgelenmiş, bilinçli bir özellik.

@@ -1347,3 +1347,60 @@ olduğundan, kapıyı sorulara açmak yanlış-pozitifleri geri getirme riski
 taşır. Doğru çözüm muhtemelen kapıya üçüncü bir karar eklemektir
 (komut / sohbet / gürültü), ama bu bir ürün kararıdır ve ölçülmeden
 yapılmamalıdır — bu yüzden kayda geçirilip bırakıldı.
+
+---
+
+## 21) Hangi model ana model olmalı? — ayırt eden kıyas (v3.1)
+
+§20c'deki kıyas ise yaramamıştı: üç model de 10/10 yaptı. Hepsinin
+geçtiği bir sınav hangisinin daha iyi olduğunu söylemez. İkinci kıyas
+GERÇEK arızalardan derlendi — Whisper'ın yanlış duyduğu bozuk girdiler
+(`"Dis jordaç"`, `"league of legends such"`), bilerek belirsiz
+bırakılmış istekler ve çok adımlı komutlar (20 senaryo).
+
+| Model | Skor | Gecikme | Tehlikeli hata |
+|---|---|---|---|
+| **`gemma4:e4b`** | 18/20 | 1.19 sn | **0** |
+| `qwen3.5:4b` | 18/20 | 1.07 sn | 1 |
+| `llama3.1:8b` | 17/20 | 1.73 sn | 2 |
+| `qwen2.5:14b` | 16/20 | 7.45 sn | 0 (ama 6x yavaş) |
+| `phi4-mini` | 12/20 | 0.78 sn | 5 |
+| `gpt-oss:20b` | 0/20 | — | şemayla çalışmıyor (§21b) |
+
+**Asıl ölçüt skor değil, hatanın YÖNÜ.** `gemma4:e4b`'nin iki hatası da
+"anlamadım" demek, yani güvenli yön. Diğer hızlı modellerin hepsi en az
+bir kez yanlış yöne hata yaptı:
+
+- `qwen3.5:4b` → *"bilmemne sitesini aç"* için **gerçekten bir adres
+  uydurup açtı**. Sistem promptu kural 4 bunu açıkça yasaklıyor.
+- `llama3.1:8b` → *"bir şeyler aç"* gibi bomboş bir cümleye uygulama
+  başlattı; *"hava durumuna bak"* için adres uydurdu.
+- `phi4-mini` → *"Evi kapat"*'ı **`windows.shutdown`** diye yorumladı.
+  Yalnızca `CONFIRM_REQUIRED` olduğu için bilgisayar kapanmadı.
+
+Sesli asistanda yanlış duyma KAÇINILMAZ olduğundan, "emin değilsem
+dokunmam" diyen model, "emin değilken bilgisayarı kapatan" modelden
+iyidir. Varsayılan `gemma4:e4b` bu yüzden korundu — ses yeteneği yüzünden
+değil (o yol §20'de elendi), **hata yaparken zarar vermediği için**.
+
+Ortak başarısızlık: `"Dis jordaç"` girdisini ALTI modelin hiçbiri
+çözemedi. Bu bir LLM sorunu değil — Whisper kelimeyi parçalıyor. Çözüm
+yeri `plugins/_app_resolver.py` ve `hotwords`, model değil.
+
+### 21b) `gpt-oss:20b` bu mimariyle çalışmıyor
+
+Model, `format` parametresi verildiği anda **boş içerik** döndürüyor —
+hem şema-kısıtlı modda hem `format="json"` modunda. Yalnızca hiçbir
+kısıtlama olmadan cevap veriyor:
+
+| Strateji | `gpt-oss:20b` | `gemma4:e4b` |
+|---|---|---|
+| şema-kısıtlı | `''` | geçerli JSON |
+| `format="json"` | `''` | JSON |
+| kısıtsız | düz metin | düz metin |
+
+Yani §9'daki 4 katmanlı güvencenin ilk iki katmanı bu modelde işlemiyor
+ve akış son çareye düşüyor. `think=False` değişikliğinin bununla ilgisi
+YOK (ayrıca doğrulandı: gpt-oss düşünmeyi zaten yok sayıyor, üç ayarda
+da aynı çıktıyı veriyor). Çok adımlı işler için gpt-oss:20b düşünülecekse
+önce bu çözülmeli.
