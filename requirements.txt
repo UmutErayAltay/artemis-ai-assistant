@@ -26,10 +26,12 @@ edge-tts>=6.1            # bulut TTS; Microsoft, API anahtarı GEREKTİRMEZ (voi
 av>=11.0                 # Edge'in döndürdüğü mp3'ü PCM'e çevirir; PyAV (voice/tts_cloud.py)
 
 # --- Sonraki fazlarda plugin eklendikçe eklenecek (henüz kullanılmıyor) ---
-# keyboard          # mouse_keyboard_plugin.py
-# mouse             # mouse_keyboard_plugin.py
 # openai-whisper    # voice/stt.py
 # piper-tts         # voice/tts.py  (veya pyttsx3)
+
+# Not: mouse_keyboard_plugin.py ve browser_plugin.py implemente edildi;
+# ayrı "keyboard"/"mouse" paketlerine ihtiyaç duymadılar — yukarıdaki
+# pyautogui/pywin32/psutil (windows_plugin.py için zaten eklenmiş) yeterli.
 
 # --- GPU hızlandırma (opsiyonel, yalnızca NVIDIA ekran kartı varsa) ---
 # CUDA Toolkit'in tamamını kurmaya GEREK YOK; faster-whisper'ın (CTranslate2)

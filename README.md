@@ -1569,3 +1569,49 @@ Hata durumları anlaşılır mesajlarla kapatıldı: kendine/ileriye referans,
 başarısız bir adıma referans, var olmayan bir alana (`filesystem.
 search`'ün `matches`'i gibi) referans — hepsi tool hiç çalıştırılmadan,
 net bir Türkçe mesajla `success=False` döner.
+
+---
+
+## 26) `mouse_keyboard` ve `browser` plugin'leri (v3.6)
+
+CLAUDE.md'de "henüz yok" diye işaretlenmiş iki plugin eklendi
+(artemis-worker ajanına delege edildi — mekanik, şablon takip eden iş):
+
+- **`plugins/mouse_keyboard_plugin.py`** (5 tool): `move_mouse`, `click`,
+  `type_text`, `press_key`, `scroll`. `pyautogui` ile doğrudan ekrana
+  girdi gönderir. Koordinatlar `pyautogui.size()`'a karşı sınır
+  doğrulamasından geçer; `move_mouse`/`click` başarıyı `pyautogui.
+  position()` ile GERÇEK imleç konumunu okuyup doğrular (koşulsuz
+  `success=True` yasağına uyum).
+- **`plugins/browser_plugin.py`** (6 tool): `new_tab`, `close_tab`,
+  `go_back`, `go_forward`, `refresh`, `switch_tab`. `web_plugin.py`'den
+  farkı: yeni URL AÇMAZ, halihazırda açık bir tarayıcı penceresini
+  kontrol eder. Kasıtlı olarak mekanik kaldı — CDP/Selenium/WebDriver
+  DEĞİL, işletim sistemi seviyesinde standart klavye kısayolları
+  (`ctrl+t`, `ctrl+w`, `alt+left`...). Sayfa içeriği okuma/DOM erişimi
+  gerektiren ihtiyaçlar bilinçli olarak kapsam dışı — o, ayrı bir
+  protokol istemcisi gerektiren `mcp_plugin.py`'nin işi.
+
+**Güvenlik doğrulaması (browser):** kısayollar yalnızca ön planda
+GERÇEKTEN bir tarayıcı varsa (ya da açık pencereler arasında bulunup öne
+getirilebiliyorsa) gönderilir; bulunamazsa kısayol hiç gönderilmeden
+dürüstçe `success=False` döner. Bu olmasaydı örn. `browser.close_tab`,
+kullanıcının o an kullandığı BAŞKA bir uygulamaya (`Ctrl+W`) gidip
+istenmeyen bir şeyi kapatabilirdi.
+
+**`danger_level` kararı — hepsi `SAFE`:** projedeki SAFE/CONFIRM_REQUIRED
+eşiği "geri alınabilirlik"e göre çizili (delete/shutdown/restart/format/
+registry/service). Bir tıklama/tuş basışı/kısayol KENDİSİ geri alınamaz
+bir sistem işlemi değil — tıpkı zaten SAFE olan `windows.close_app`'ın
+(bir uygulamayı kapatması) örneğinde olduğu gibi. `browser.close_tab`
+bile çoğu tarayıcıda `Ctrl+Shift+T` ile geri açılabilir.
+
+49 yeni test (21 + 28), tamamı `pyautogui`/`win32gui`/`win32process`/
+`psutil` monkeypatch'li — gerçek ekran/girdi etkisi yok. Tüm paket artık
+**373 test**.
+
+**Not — tool manifest bütçesi dolmaya yaklaşıyor:** 32 tool ile sistem
+promptu 13.533 karakter (§16'daki 14.000 karakter sınırına ~470 karakter
+kaldı). `mcp_plugin.py` (hâlâ eksik, bkz. §7) veya başka bir plugin
+eklendiğinde bu sınır aşılabilir; o noktada ya sınır yükseltilmeli ya
+manifest daha da sıkıştırılmalı (örn. `description` alanları kısaltılarak).

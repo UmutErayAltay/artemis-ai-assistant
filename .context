@@ -5,8 +5,8 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v2.9 (uyandırma sıkılaştırma + prompt optimizasyonu).
-Sürüm geçmişi için `README.md` bölüm 16-19.
+Son güncelleme: v3.6 (mouse_keyboard/browser plugin'leri).
+Sürüm geçmişi için `README.md` bölüm 16-26.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -54,7 +54,7 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Tool sözleşmesi | `core/tool_base.py` | ✅ `BaseTool` + `ToolContext` DI |
 | Kayıt/keşif | `core/plugin_loader.py` | ✅ `@register_tool`, otomatik `pkgutil` taraması |
 | Giriş kapısı | `core/dispatcher.py` | ✅ tek nokta; onay kontrolü artık argümanları da taşıyor |
-| Çok adımlı yürütme | `core/planner.py` | ✅ sıralı; adımlar arası veri aktarımı YOK (§6.2) |
+| Çok adımlı yürütme | `core/planner.py` | ✅ sıralı; `{{step_N.alan}}` referanslarıyla veri aktarımı VAR (§6.2, v3.5) |
 | LLM istemcisi | `core/llm_client.py` | ✅ 4 katmanlı JSON güvencesi; şema artık **dizi** (§5.1) |
 | Prompt üretimi | `core/prompt_builder.py` | ✅ manifest otomatik enjekte (`.replace`, `.format` değil) |
 | Ollama yaşam döngüsü | `core/ollama_manager.py` | ✅ otomatik başlat/durdur, model seçimi, RAM yönetimi |
@@ -64,6 +64,8 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Plugin: Windows | `plugins/windows_plugin.py` | ✅ 12 tool, testli |
 | Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
 | Plugin: app resolver | `plugins/_app_resolver.py` | ✅ registry + kısayol fuzzy-match, testli |
+| Plugin: mouse/klavye | `plugins/mouse_keyboard_plugin.py` | ✅ 5 tool, testli (v3.6) |
+| Plugin: tarayıcı kontrolü | `plugins/browser_plugin.py` | ✅ 6 tool, OS seviyesi kısayollar, testli (v3.6) |
 | `skills/` | — | ⛔ bilinçli boş, karar verildi (§6.1) |
 | Arayüz (overlay) | `ui/overlay.py` | ✅ PyQt6, Siri benzeri, 4 durum, sese tepkili dalga formu |
 | Arayüz (kısayol/tepsi) | `ui/hotkey.py`, `ui/tray.py` | ✅ Windows global hotkey + tepsi simgesi |
@@ -75,12 +77,15 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Ses: bulut-yerel geçişi | `voice/router.py` | ✅ dene-ve-düş + soğuma |
 | Ses: orkestrasyon | `core/voice_loop.py` | ✅ durum makinesi + geri besleme koruması |
 | Model indirme | `scripts/setup_voice.py` | ✅ stdlib-only, ~60MB (yalnızca Piper) |
-| Browser / Mouse-Keyboard / MCP | — | ❌ henüz yok |
+| MCP | — | ❌ henüz yok (§7 madde 1) |
 
-**Toplam 21 tool**: `filesystem.*` (6), `windows.*` (12), `web.*` (2),
-`assistant.reply` (1 — modelin "hiçbir şey yapma" seçeneği, bkz. §5.7).
+**Toplam 32 tool**: `filesystem.*` (6), `windows.*` (12), `web.*` (2),
+`mouse_keyboard.*` (5), `browser.*` (6), `assistant.reply` (1 — modelin
+"hiçbir şey yapma" seçeneği, bkz. §5.7). Sistem promptu bununla 13.533
+karakter — `test_prompt_contains_tools_and_stays_compact`'ın 14.000
+sınırına ~470 karakter kaldı (README §26 notu, yeni tool eklerken dikkat).
 
-Test durumu: **304 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
+Test durumu: **373 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
 4 kırık). Devre dışı ikisi `@pytest.mark.disruptive` işaretli
 (`windows.lock`, `windows.set_volume`) — gerçek makineyi etkiledikleri
 için varsayılan `pytest`'te ÇALIŞMAZLAR; bilinçli çalıştırmak için
