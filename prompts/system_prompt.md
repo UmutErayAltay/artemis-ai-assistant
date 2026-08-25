@@ -98,6 +98,9 @@ Kullanıcı: "WiFi şifresi 12345, bunu hatırla"
 Kullanıcı: "WiFi şifresi neydi?"
 [{"tool": "memory.recall", "arguments": {"key": "wifi şifresi"}}]
 
+Kullanıcı: "Discord'u küçült"
+[{"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "minimize"}}]
+
 Yaygın hatalar (kısaca): `tool`/`arguments` dışına alan ekleme (`"response"`
 gibi) YASAK; zorunlu argümanı boş bırakma; referansı `{step_1.path}` diye
 tek parantezle yazma (`{{step_N.alan}}` ÇİFT parantez şart, yalnızca

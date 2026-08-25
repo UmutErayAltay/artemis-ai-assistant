@@ -1810,3 +1810,45 @@ tool'ları üzerinden) sınanıyordu; yeni kullanıcıya-açık sorumluluk
 
 Yeni tool'lar promptu 14.820 → 16.010 karaktere çıkardı (37 tool),
 geçici 18.000 sınırının hâlâ altında (§28b).
+
+---
+
+## 30) `windows.arrange_window`: minimize/maximize/restore/snap (v3.11)
+
+Pencere yönetiminde yalnızca `focus_window`/`list_windows` vardı;
+küçültme/büyütme/yarım-ekran (snap) yoktu. Beş ayrı tool yerine TEK
+tool + `position` enum (`browser.switch_tab`'ın `direction` enum
+deseni izlendi) — her yeni tool sistem promptu bütçesine ekleniyor
+(§26/§28b), enum konsolidasyonu bunu tek manifest girdisinde tutar.
+
+`WindowsFocusWindowTool`'daki `EnumWindows` + başlık eşleştirme mantığı
+ÜÇÜNCÜ kez tekrarlanacaktı (windows.close_app, browser_plugin.py'nin
+`_focus_any_browser_window`'ından sonra) — bu kez inline bırakılmadı,
+`_find_window_by_title` ortak yardımcısına çıkarıldı (`plugins/
+_app_resolver.py`'nin "ortak yardımcı" deseniyle tutarlı) ve
+`focus_window` de bunu kullanacak şekilde yeniden yazıldı.
+
+**Snap, görev çubuğunu HARİÇ tutan çalışma alanını kullanır**
+(`win32api.GetMonitorInfo(...)['Work']`, `['Monitor']` DEĞİL) — aksi
+halde pencerenin alt kenarı görev çubuğunun arkasına gizlenirdi.
+Küçültülmüş bir pencere önce eski haline getirilir, sonra taşınır
+(küçük bir pencereyi taşımak/boyutlandırmak görünmez bir sonuç verirdi).
+
+**Koşulsuz `success=True` yasağı burada da uygulandı:** `ShowWindow`/
+`MoveWindow` bir İSTEK gönderir, pencere yöneticisi reddedebilir (bazı
+uygulamalar küçültülmeyi engeller). `GetWindowPlacement`/`GetWindowRect`
+ile GERÇEK durum okunup doğrulanır.
+
+**Test yazarken bulunan ölçüm hatası:** Windows API'sinde `ShowWindow`'a
+verilen KOMUT (`SW_MINIMIZE=6`) ile `GetWindowPlacement`'ın döndürdüğü
+SONUÇ DURUMU (`SW_SHOWMINIMIZED=2`) FARKLI sabitlerdir — yalnızca
+maximize/showmaximized değeri tesadüfen aynıdır (3). İlk yazılan sahte
+`win32gui`, `ShowWindow`'a gelen komut değerini doğrudan durum olarak
+saklıyordu; bu, tool'un KENDİ doğrulama mantığını (doğru olduğu halde)
+yanlış-negatif kırdı. Testler çalıştırılıp hata mesajı okunarak
+yakalandı — kodun kendisi değil, fake'in gerçekçiliği düzeltildi.
+
+`windows.focus_window` bu değişiklikle İLK KEZ test edildi (daha önce
+hiç testi yoktu). Toplam 9 yeni test (3 focus_window + 6 arrange_window,
+tamamı sahte `win32gui`/`win32con`/`win32api`, gerçek pencere hiç
+açılmaz/taşınmaz). 438 test, prompt 16.010 → 16.416 karakter (38 tool).

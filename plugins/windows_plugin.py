@@ -524,6 +524,32 @@ class WindowsListWindowsTool(BaseTool):
         return ToolResult(success=True, message=f"{len(titles)} pencere bulundu.", data={"windows": titles})
 
 
+def _find_window_by_title(title_query: str) -> int | None:
+    """Başlığında `title_query` (küçük/büyük harf duyarsız) geçen İLK
+    görünür pencerenin `hwnd`'ini bulur.
+
+    `WindowsFocusWindowTool` ve `WindowsArrangeWindowTool` arasında
+    paylaşılan ortak arama mantığı — üçüncü kullanımda (bkz.
+    `plugins/_app_resolver.py`'nin "ortak yardımcı" deseni) inline
+    tekrardan buraya çıkarıldı.
+
+    Returns:
+        Eşleşen pencerenin `hwnd`'i; hiçbiri bulunamazsa None.
+    """
+
+    import win32gui
+
+    query = title_query.lower()
+    match: dict[str, int] = {}
+
+    def _find(hwnd: int, _extra: Any) -> None:
+        if win32gui.IsWindowVisible(hwnd) and query in win32gui.GetWindowText(hwnd).lower():
+            match.setdefault("hwnd", hwnd)
+
+    win32gui.EnumWindows(_find, None)
+    return match.get("hwnd")
+
+
 @register_tool
 class WindowsFocusWindowTool(BaseTool):
     """Başlığı verilen sorguyla eşleşen ilk pencereyi öne getirir."""
@@ -542,17 +568,115 @@ class WindowsFocusWindowTool(BaseTool):
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         import win32gui
 
-        query = arguments["title_query"].lower()
-        match: dict[str, int] = {}
+        title_query = arguments["title_query"]
+        hwnd = _find_window_by_title(title_query)
+        if hwnd is None:
+            return ToolResult(success=False, message=f"'{title_query}' ile eşleşen pencere bulunamadı.")
 
-        def _find(hwnd: int, _extra: Any) -> None:
-            if win32gui.IsWindowVisible(hwnd) and query in win32gui.GetWindowText(hwnd).lower():
-                match.setdefault("hwnd", hwnd)
+        win32gui.SetForegroundWindow(hwnd)
+        return ToolResult(success=True, message=f"'{title_query}' penceresi öne getirildi.")
 
-        win32gui.EnumWindows(_find, None)
 
-        if "hwnd" not in match:
-            return ToolResult(success=False, message=f"'{arguments['title_query']}' ile eşleşen pencere bulunamadı.")
+@register_tool
+class WindowsArrangeWindowTool(BaseTool):
+    """Bir pencereyi küçültür/büyütür/eski haline getirir ya da ekranın
+    yarısına yerleştirir (snap).
 
-        win32gui.SetForegroundWindow(match["hwnd"])
-        return ToolResult(success=True, message=f"'{arguments['title_query']}' penceresi öne getirildi.")
+    Beş ayrı tool yerine TEK tool + `position` enum (bkz. `browser.
+    switch_tab`'ın `direction` enum deseni): her yeni tool sistem
+    promptu bütçesine ekleniyor (README §26/§28b), enum konsolidasyonu
+    bunu tek bir manifest girdisinde tutar.
+    """
+
+    name = "windows.arrange_window"
+    description = "Bir pencereyi küçültür, büyütür, eski haline getirir veya ekranın yarısına yerleştirir."
+    danger_level = DangerLevel.SAFE
+
+    def get_arguments_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "title_query": {"type": "string", "description": "Pencere başlığında aranacak metin."},
+                "position": {
+                    "type": "string",
+                    "enum": ["minimize", "maximize", "restore", "snap_left", "snap_right"],
+                },
+            },
+            "required": ["title_query", "position"],
+        }
+
+    def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+        import win32con
+        import win32gui
+
+        title_query = arguments["title_query"]
+        position = arguments["position"]
+
+        hwnd = _find_window_by_title(title_query)
+        if hwnd is None:
+            return ToolResult(success=False, message=f"'{title_query}' ile eşleşen pencere bulunamadı.")
+
+        if position == "minimize":
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+        elif position == "maximize":
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+        elif position == "restore":
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        elif position in ("snap_left", "snap_right"):
+            error = _snap_window(hwnd, position)
+            if error is not None:
+                return ToolResult(success=False, message=error)
+        else:
+            return ToolResult(success=False, message=f"Geçersiz konum: '{position}'.")
+
+        # Koşulsuz success=True yasak: `ShowWindow`/`MoveWindow` İSTEK
+        # gönderir ama pencere yöneticisi reddedebilir (örn. bazı
+        # uygulamalar küçültülmeyi engeller); GERÇEK durumu
+        # `GetWindowPlacement` ile okuyup doğrula.
+        show_cmd = win32gui.GetWindowPlacement(hwnd)[1]
+        if position == "minimize" and show_cmd != win32con.SW_SHOWMINIMIZED:
+            return ToolResult(success=False, message="Pencere küçültülemedi (uygulama reddetmiş olabilir).")
+        if position == "maximize" and show_cmd != win32con.SW_SHOWMAXIMIZED:
+            return ToolResult(success=False, message="Pencere büyütülemedi.")
+
+        labels = {
+            "minimize": "küçültüldü",
+            "maximize": "büyütüldü",
+            "restore": "eski haline getirildi",
+            "snap_left": "ekranın soluna yerleştirildi",
+            "snap_right": "ekranın sağına yerleştirildi",
+        }
+        return ToolResult(success=True, message=f"'{title_query}' penceresi {labels[position]}.")
+
+
+def _snap_window(hwnd: int, position: str) -> str | None:
+    """Pencereyi, bulunduğu monitörün çalışma alanının (görev çubuğu
+    HARİÇ) sol ya da sağ yarısına yerleştirir.
+
+    Returns:
+        Hata mesajı (başarısızsa), başarılıysa None.
+    """
+
+    import win32api
+    import win32con
+    import win32gui
+
+    monitor = win32api.MonitorFromWindow(hwnd, win32con.MONITOR_DEFAULTTONEAREST)
+    work_left, work_top, work_right, work_bottom = win32api.GetMonitorInfo(monitor)["Work"]
+    half_width = (work_right - work_left) // 2
+    height = work_bottom - work_top
+    x = work_left if position == "snap_left" else work_left + half_width
+
+    # Küçültülmüşse önce eski haline getir — küçük bir pencereyi
+    # taşımak/boyutlandırmak anlamsız/görünmez bir sonuç verirdi.
+    if win32gui.GetWindowPlacement(hwnd)[1] == win32con.SW_SHOWMINIMIZED:
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+    win32gui.MoveWindow(hwnd, x, work_top, half_width, height, True)
+
+    # Doğrulama: pencere gerçekten hedeflenen yarıya mı gitti (birkaç
+    # pikselllik pencere-çerçevesi payı toleransla).
+    left, top, right, _bottom = win32gui.GetWindowRect(hwnd)
+    if abs(left - x) > 20 or abs((right - left) - half_width) > 40:
+        return "Pencere taşınamadı ya da beklenen konuma ulaşmadı."
+    return None

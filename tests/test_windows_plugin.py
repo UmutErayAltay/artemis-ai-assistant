@@ -419,3 +419,204 @@ def test_list_windows_returns_data(dispatcher: ToolDispatcher) -> None:
     result = dispatcher.dispatch({"tool": "windows.list_windows", "arguments": {}})
     assert result.success is True
     assert "windows" in result.data
+
+
+# --- windows.focus_window / windows.arrange_window ---
+#
+# win32gui/win32con/win32api sahte modüllerle değiştirilir (bkz.
+# test_send_graceful_close_* deseni) - gerçek bir pencere hiç
+# açılmaz/taşınmaz, platformdan bağımsız çalışır.
+
+
+class _FakeWindow:
+    """Sahte bir Windows penceresinin durumu (görünürlük, başlık,
+    ShowWindow/MoveWindow'un etkilediği alanlar)."""
+
+    def __init__(self, title: str, visible: bool = True) -> None:
+        self.title = title
+        self.visible = visible
+        self.show_cmd = 1  # SW_SHOWNORMAL
+        self.rect = (0, 0, 800, 600)
+
+
+def _install_fake_win32_for_window_management(
+    monkeypatch: pytest.MonkeyPatch, windows: dict
+) -> dict:
+    """focus_window/arrange_window için gerçekçi, DURUMLU bir sahte
+    win32gui/win32con/win32api kurar: ShowWindow/MoveWindow çağrıları
+    windows sözlüğündeki durumu GERÇEKTEN değiştirir,
+    GetWindowPlacement/GetWindowRect o güncel durumu okur - tool'un
+    "gerçekten uygulandı mı" doğrulamasını (koşulsuz success=True yasağı)
+    anlamlı biçimde sınayabilmek için.
+
+    Returns:
+        Çağrıları kaydeden listeler sözlüğü, test asertleri için.
+    """
+
+    import types
+
+    calls = {"foreground": [], "show": [], "move": []}
+
+    fake_win32gui = types.ModuleType("win32gui")
+    fake_win32gui.IsWindowVisible = lambda hwnd: windows[hwnd].visible
+    fake_win32gui.GetWindowText = lambda hwnd: windows[hwnd].title
+    fake_win32gui.EnumWindows = lambda callback, extra: [callback(h, extra) for h in windows]
+    fake_win32gui.SetForegroundWindow = lambda hwnd: calls["foreground"].append(hwnd)
+    fake_win32gui.GetWindowPlacement = lambda hwnd: (0, windows[hwnd].show_cmd, (0, 0), (0, 0), windows[hwnd].rect)
+    fake_win32gui.GetWindowRect = lambda hwnd: windows[hwnd].rect
+
+    # ShowWindow'a verilen KOMUT (SW_MINIMIZE=6) ile GetWindowPlacement'ın
+    # döndürdüğü SONUÇ DURUMU (SW_SHOWMINIMIZED=2) GERÇEK Windows API'sinde
+    # FARKLI sabitlerdir (yalnızca MAXIMIZE/SHOWMAXIMIZED değeri tesadüfen
+    # aynı, 3). Fake bu eşlemeyi doğru yapmazsa tool'un kendi doğrulama
+    # mantığını (koşulsuz success=True yasağı) yanlış-negatif kırar.
+    _command_to_resulting_state = {6: 2, 3: 3, 9: 1}  # MINIMIZE/MAXIMIZE/RESTORE -> gerçek durum
+
+    def _show_window(hwnd, cmd):
+        calls["show"].append((hwnd, cmd))
+        windows[hwnd].show_cmd = _command_to_resulting_state.get(cmd, cmd)
+
+    def _move_window(hwnd, x, y, w, h, repaint):
+        calls["move"].append((hwnd, x, y, w, h))
+        windows[hwnd].rect = (x, y, x + w, y + h)
+        windows[hwnd].show_cmd = 1  # taşındıktan sonra "normal" kabul edilir
+
+    fake_win32gui.ShowWindow = _show_window
+    fake_win32gui.MoveWindow = _move_window
+
+    fake_win32con = types.ModuleType("win32con")
+    fake_win32con.SW_MINIMIZE = 6
+    fake_win32con.SW_MAXIMIZE = 3
+    fake_win32con.SW_RESTORE = 9
+    fake_win32con.SW_SHOWMINIMIZED = 2
+    fake_win32con.SW_SHOWMAXIMIZED = 3
+    fake_win32con.SW_SHOWNORMAL = 1
+    fake_win32con.MONITOR_DEFAULTTONEAREST = 2
+
+    fake_win32api = types.ModuleType("win32api")
+    fake_win32api.MonitorFromWindow = lambda hwnd, flag: "sahte-monitor"
+    fake_win32api.GetMonitorInfo = lambda monitor: {"Work": (0, 0, 1920, 1032)}
+
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+    monkeypatch.setitem(sys.modules, "win32con", fake_win32con)
+    monkeypatch.setitem(sys.modules, "win32api", fake_win32api)
+
+    return calls
+
+
+def test_focus_window_brings_matching_window_to_foreground(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    windows = {1: _FakeWindow("Discord"), 2: _FakeWindow("Not Defteri")}
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch({"tool": "windows.focus_window", "arguments": {"title_query": "discord"}})
+
+    assert result.success is True
+    assert calls["foreground"] == [1]
+
+
+def test_focus_window_no_match_fails_without_touching_anything(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch({"tool": "windows.focus_window", "arguments": {"title_query": "olmayan"}})
+
+    assert result.success is False
+    assert calls["foreground"] == []
+
+
+def test_focus_window_ignores_invisible_windows(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Gizli Pencere", visible=False)}
+    _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch({"tool": "windows.focus_window", "arguments": {"title_query": "gizli"}})
+
+    assert result.success is False
+
+
+def test_arrange_window_minimize(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "minimize"}}
+    )
+
+    assert result.success is True
+    assert calls["show"] == [(1, 6)]  # SW_MINIMIZE
+
+
+def test_arrange_window_maximize(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "maximize"}}
+    )
+
+    assert result.success is True
+    assert windows[1].show_cmd == 3  # SW_SHOWMAXIMIZED
+
+
+def test_arrange_window_no_match_fails(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "olmayan", "position": "minimize"}}
+    )
+
+    assert result.success is False
+
+
+def test_arrange_window_snap_left_uses_work_area_not_full_screen(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Görev çubuğu HARİÇ çalışma alanı kullanılmalı (tam ekran değil) -
+    sahte GetMonitorInfo'daki Work (0,0,1920,1032) bununla sınanır."""
+
+    windows = {1: _FakeWindow("Discord")}
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "snap_left"}}
+    )
+
+    assert result.success is True
+    hwnd, x, y, w, h = calls["move"][0]
+    assert (x, y, w, h) == (0, 0, 960, 1032)  # 1920/2, görev çubuğu hariç yükseklik
+
+
+def test_arrange_window_snap_right(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "snap_right"}}
+    )
+
+    assert result.success is True
+    hwnd, x, y, w, h = calls["move"][0]
+    assert x == 960  # ekranın sağ yarısı
+
+
+def test_arrange_window_snap_restores_minimized_window_first(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Küçültülmüş bir pencere doğrudan taşınamaz/boyutlandırılamaz -
+    snap önce onu eski haline getirmeli, sonra yerleştirmeli."""
+
+    windows = {1: _FakeWindow("Discord")}
+    windows[1].show_cmd = 2  # SW_SHOWMINIMIZED
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "snap_left"}}
+    )
+
+    assert result.success is True
+    assert (1, 9) in calls["show"]  # SW_RESTORE
+    assert len(calls["move"]) == 1

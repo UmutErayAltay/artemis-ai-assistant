@@ -5,9 +5,8 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.10 (memory.remember/recall/forget; devam eden
-geliştirme planının Faz 0-2'si). Sürüm geçmişi için `README.md`
-bölüm 16-29.
+Son güncelleme: v3.11 (windows.arrange_window; devam eden geliştirme
+planının Faz 0-3'ü). Sürüm geçmişi için `README.md` bölüm 16-30.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -63,7 +62,7 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Hafıza | `memory/context_memory.py` | ✅ SQLite k-v; `location: "last"` + `fact:` namespace'i (v3.10), testli |
 | Plugin: hafıza | `plugins/memory_plugin.py` | ✅ 3 tool (`remember`/`recall`/`forget`), testli (v3.10) |
 | Plugin: dosya sistemi | `plugins/filesystem_plugin.py` | ✅ 8 tool (v3.9: +rename/+move), testli, path-traversal'a karşı sertleştirilmiş |
-| Plugin: Windows | `plugins/windows_plugin.py` | ✅ 12 tool, testli |
+| Plugin: Windows | `plugins/windows_plugin.py` | ✅ 13 tool (v3.11: +arrange_window), testli |
 | Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
 | Plugin: app resolver | `plugins/_app_resolver.py` | ✅ registry + kısayol fuzzy-match, testli |
 | Plugin: mouse/klavye | `plugins/mouse_keyboard_plugin.py` | ✅ 5 tool, testli (v3.6) |
@@ -81,15 +80,15 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Model indirme | `scripts/setup_voice.py` | ✅ stdlib-only, ~60MB (yalnızca Piper) |
 | Plugin: MCP köprüsü | `plugins/mcp_plugin.py` | ✅ dinamik keşif → statik registry, testli (v3.7) |
 
-**Toplam 37 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (8,
-v3.9: +rename/+move), `windows.*` (12), `web.*` (2), `mouse_keyboard.*`
-(5), `browser.*` (6), `memory.*` (3, v3.10), `assistant.reply` (1). MCP
-tool'ları `config.yaml::mcp_servers` boş olduğu sürece SIFIR. Sistem
-promptu şu an ~16.010 karakter — eski 14.000 sınırı devam eden
-geliştirme planının (`windows.arrange_window` daha gelecek) tüm
-tool'larını geçirecek kadar GEÇİCİ olarak 18.000'e çekildi
-(`test_prompt_builder.py` docstring'i, README §28b) — bir model geri
-yüklenince gerçek gecikme ölçümüyle
+**Toplam 38 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (8,
+v3.9: +rename/+move), `windows.*` (13, v3.11: +arrange_window), `web.*`
+(2), `mouse_keyboard.*` (5), `browser.*` (6), `memory.*` (3, v3.10),
+`assistant.reply` (1). MCP tool'ları `config.yaml::mcp_servers` boş
+olduğu sürece SIFIR. Sistem promptu şu an ~16.416 karakter — eski
+14.000 sınırı devam eden geliştirme planının tüm tool'larını geçirecek
+kadar GEÇİCİ olarak 18.000'e çekildi (`test_prompt_builder.py`
+docstring'i, README §28b) — bir model geri yüklenince gerçek gecikme
+ölçümüyle
 KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
 Test durumu: **393 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
@@ -338,6 +337,19 @@ riskli noktasını (süreç yönetimi, sync/async köprü) gösterdi; ayrıca
 paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
+
+### 6.16) `windows.arrange_window`: fake win32'de komut≠durum hatası (v3.11)
+Windows API'sinde `ShowWindow`'a verilen KOMUT (`SW_MINIMIZE=6`) ile
+`GetWindowPlacement`'ın döndürdüğü SONUÇ DURUMU (`SW_SHOWMINIMIZED=2`)
+farklı sabitlerdir (yalnızca maximize/showmaximized tesadüfen aynı, 3).
+İlk yazılan test fake'i bunu ayırt etmiyordu, tool'un DOĞRU olan
+doğrulama mantığını yanlış-negatif kırdı. Kodun kendisi değil, fake'in
+gerçekçiliği düzeltildi. Gerekçe README §30.
+
+**Ders**: bir "koşulsuz success=True yasak" doğrulaması, ancak testteki
+sahte davranış GERÇEK API semantiğini doğru taklit ederse anlamlı bir
+sınav olur — fake'i yazarken de "gerçekten böyle mi çalışıyor" diye
+doğrulamak gerekir, salt "tool'u çağırınca bir şey dönsün" yetmez.
 
 ### 6.15) Hafıza `fact:` önekiyle namespace'lendi, ham set/get LLM'e açılmadı (v3.10)
 `memory.remember`/`recall`/`forget` eklendi ama `ContextMemory.set/get`
