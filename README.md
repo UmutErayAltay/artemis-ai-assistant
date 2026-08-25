@@ -1852,3 +1852,24 @@ yakalandı — kodun kendisi değil, fake'in gerçekçiliği düzeltildi.
 hiç testi yoktu). Toplam 9 yeni test (3 focus_window + 6 arrange_window,
 tamamı sahte `win32gui`/`win32con`/`win32api`, gerçek pencere hiç
 açılmaz/taşınmaz). 438 test, prompt 16.010 → 16.416 karakter (38 tool).
+
+---
+
+## 31) Medya tuşları: yeni kod yok, yalnızca dokümantasyon (v3.12)
+
+`pyautogui.KEYBOARD_KEYS` zaten `playpause`, `nexttrack`, `prevtrack`,
+`volumemute`, `volumeup`, `volumedown` içeriyordu (doğrulandı) — yani
+"müziği duraklat" gibi komutlar `mouse_keyboard.press_key` ile ZATEN
+çalışabiliyordu. Tek eksik modelin bunu BİLMESİYDİ: tool açıklaması
+hiç ima etmiyordu. `execute()`'a TEK SATIR bile dokunulmadı — yalnızca
+`description` genişletildi ve `prompts/system_prompt.md`'ye bir örnek
+eklendi. Regresyon testi: "playpause" gerçekten `pyautogui.press()`'e
+tek bir tuş olarak gidiyor mu, doğrulandı.
+
+Geliştirme planının Faz 0-4'ü tamamlandı: sistem promptu regresyonu
+düzeltildi, `filesystem.rename`/`move`, `memory.remember`/`recall`/
+`forget`, `windows.arrange_window`, medya tuşu dokümantasyonu. 439 test
+geçiyor, prompt 38 tool ile 16.776 karakter (geçici 18.000 sınırının
+altında). Sırada Faz 5 (test kapsamı: `plugin_loader.py`/`tool_base.py`)
+ve Faz 6 (gerçek modelle prompt bütçesi kesinleştirme — bir Ollama
+modeli geri yüklenmesini bekliyor).

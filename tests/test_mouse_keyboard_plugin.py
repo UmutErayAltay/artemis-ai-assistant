@@ -266,6 +266,21 @@ def test_press_key_rejects_empty_keys(dispatcher: ToolDispatcher, fake_pyautogui
     assert fake_pyautogui.calls == []
 
 
+def test_press_key_supports_media_keys_without_new_code(
+    dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui
+) -> None:
+    """REGRESYON KORUMASI (v3.12): `pyautogui.KEYBOARD_KEYS` medya
+    tuşlarını (`playpause` vb.) zaten içeriyor — bu tool'un tek satır
+    değişikliği "açıklamayı genişletmek"ti, `execute()` DOKUNULMADI.
+    Bu test, "müziği duraklat" gibi komutların gerçekten tek bir tuş
+    olarak `press` ile gönderildiğini doğrular."""
+
+    result = dispatcher.dispatch({"tool": "mouse_keyboard.press_key", "arguments": {"keys": "playpause"}})
+
+    assert result.success is True
+    assert ("press", ("playpause",), {}) in fake_pyautogui.calls
+
+
 # --- mouse_keyboard.scroll ----------------------------------------------------
 
 

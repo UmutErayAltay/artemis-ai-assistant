@@ -248,12 +248,22 @@ class KeyboardTypeTextTool(BaseTool):
 
 @register_tool
 class KeyboardPressKeyTool(BaseTool):
-    """Tek bir tuşa veya '+' ile ayrılmış bir kısayol kombinasyonuna basar."""
+    """Tek bir tuşa veya '+' ile ayrılmış bir kısayol kombinasyonuna basar.
+
+    NOT (v3.12): medya tuşları ('playpause', 'nexttrack', 'prevtrack',
+    'volumemute', 'volumeup', 'volumedown') `pyautogui.KEYBOARD_KEYS`
+    içinde zaten tanımlı — "müziği duraklat" gibi komutlar YENİ KOD
+    OLMADAN, doğrudan bu tool ile çalışır. Tek eksik, modelin bunu
+    BİLMESİYDİ (açıklama hiç ima etmiyordu); bu yüzden yalnızca
+    açıklama genişletildi, plugin'e dokunulmadı.
+    """
 
     name = "mouse_keyboard.press_key"
     description = (
         "Tek bir tuşa (ör. 'enter', 'esc', 'f5') veya '+' ile ayrılmış bir "
-        "kısayol kombinasyonuna (ör. 'ctrl+c', 'alt+tab') basar."
+        "kısayol kombinasyonuna (ör. 'ctrl+c', 'alt+tab') basar. Medya "
+        "tuşları da desteklenir: 'playpause' (oynat/duraklat), "
+        "'nexttrack'/'prevtrack' (sonraki/önceki parça), 'volumemute'."
     )
     danger_level = DangerLevel.SAFE
 

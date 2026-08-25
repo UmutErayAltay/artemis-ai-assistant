@@ -101,6 +101,9 @@ Kullanıcı: "WiFi şifresi neydi?"
 Kullanıcı: "Discord'u küçült"
 [{"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "minimize"}}]
 
+Kullanıcı: "müziği duraklat"
+[{"tool": "mouse_keyboard.press_key", "arguments": {"keys": "playpause"}}]
+
 Yaygın hatalar (kısaca): `tool`/`arguments` dışına alan ekleme (`"response"`
 gibi) YASAK; zorunlu argümanı boş bırakma; referansı `{step_1.path}` diye
 tek parantezle yazma (`{{step_N.alan}}` ÇİFT parantez şart, yalnızca

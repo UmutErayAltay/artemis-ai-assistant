@@ -5,8 +5,9 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.11 (windows.arrange_window; devam eden geliştirme
-planının Faz 0-3'ü). Sürüm geçmişi için `README.md` bölüm 16-30.
+Son güncelleme: v3.12 (medya tuşu dokümantasyonu; geliştirme planının
+Faz 0-4'ü tamamlandı, sırada Faz 5-8). Sürüm geçmişi için `README.md`
+bölüm 16-31.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -84,7 +85,8 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 v3.9: +rename/+move), `windows.*` (13, v3.11: +arrange_window), `web.*`
 (2), `mouse_keyboard.*` (5), `browser.*` (6), `memory.*` (3, v3.10),
 `assistant.reply` (1). MCP tool'ları `config.yaml::mcp_servers` boş
-olduğu sürece SIFIR. Sistem promptu şu an ~16.416 karakter — eski
+olduğu sürece SIFIR. Sistem promptu şu an ~16.776 karakter (38 tool; mouse_keyboard.press_key
+v3.12'de medya tuşları için genişletildi, yeni tool eklenmedi) — eski
 14.000 sınırı devam eden geliştirme planının tüm tool'larını geçirecek
 kadar GEÇİCİ olarak 18.000'e çekildi (`test_prompt_builder.py`
 docstring'i, README §28b) — bir model geri yüklenince gerçek gecikme
