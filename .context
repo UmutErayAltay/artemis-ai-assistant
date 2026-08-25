@@ -5,8 +5,8 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.7 (mcp_plugin.py — dinamik tool keşfi).
-Sürüm geçmişi için `README.md` bölüm 16-27.
+Son güncelleme: v3.9 (filesystem.rename/move; devam eden geliştirme
+planının Faz 0-1'i). Sürüm geçmişi için `README.md` bölüm 16-28.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -60,7 +60,7 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Ollama yaşam döngüsü | `core/ollama_manager.py` | ✅ otomatik başlat/durdur, model seçimi, RAM yönetimi |
 | Sohbet döngüsü | `core/conversation_loop.py` | ✅ terminal I/O; onay ekranı artık argümanları gösteriyor |
 | Hafıza | `memory/context_memory.py` | ✅ SQLite k-v; `location: "last"` akışıyla plugin'lere bağlı |
-| Plugin: dosya sistemi | `plugins/filesystem_plugin.py` | ✅ 6 tool, testli, path-traversal'a karşı sertleştirilmiş |
+| Plugin: dosya sistemi | `plugins/filesystem_plugin.py` | ✅ 8 tool (v3.9: +rename/+move), testli, path-traversal'a karşı sertleştirilmiş |
 | Plugin: Windows | `plugins/windows_plugin.py` | ✅ 12 tool, testli |
 | Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
 | Plugin: app resolver | `plugins/_app_resolver.py` | ✅ registry + kısayol fuzzy-match, testli |
@@ -79,15 +79,15 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Model indirme | `scripts/setup_voice.py` | ✅ stdlib-only, ~60MB (yalnızca Piper) |
 | Plugin: MCP köprüsü | `plugins/mcp_plugin.py` | ✅ dinamik keşif → statik registry, testli (v3.7) |
 
-**Toplam 32 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (6),
-`windows.*` (12), `web.*` (2), `mouse_keyboard.*` (5), `browser.*` (6),
-`assistant.reply` (1 — modelin "hiçbir şey yapma" seçeneği, bkz. §5.7).
-MCP tool'ları `config.yaml::mcp_servers` boş olduğu sürece SIFIR —
-varsayılan davranışı etkilemez. Sistem promptu 13.533 karakter —
-`test_prompt_contains_tools_and_stays_compact`'ın 14.000 sınırına ~470
-karakter kaldı (README §26 notu, yeni STATİK tool eklerken dikkat; MCP
-tool'ları kullanıcı yapılandırmasına bağlı olduğu için bu bütçeye
-otomatik girmez).
+**Toplam 34 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (8,
+v3.9: +rename/+move), `windows.*` (12), `web.*` (2), `mouse_keyboard.*`
+(5), `browser.*` (6), `assistant.reply` (1). MCP tool'ları
+`config.yaml::mcp_servers` boş olduğu sürece SIFIR. Sistem promptu şu an
+~14.820 karakter — eski 14.000 sınırı devam eden geliştirme planının
+(memory.*/arrange_window daha gelecek) tüm tool'larını geçirecek kadar
+GEÇİCİ olarak 18.000'e çekildi (`test_prompt_builder.py` docstring'i,
+README §28b) — bir model geri yüklenince gerçek gecikme ölçümüyle
+KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
 Test durumu: **393 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
 4 kırık). Devre dışı ikisi `@pytest.mark.disruptive` işaretli
@@ -335,6 +335,19 @@ riskli noktasını (süreç yönetimi, sync/async köprü) gösterdi; ayrıca
 paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
+
+### 6.14) `filesystem.rename`/`move`: kaynak==hedef koruması (v3.9)
+İkisinde de aynı sınıf hata bulunup düzeltildi: kaynak ve hedef AYNI
+yola çözülürse (örn. dosyayı zaten bulunduğu yere "taşı", ya da aynı
+adla "yeniden adlandır"), `overwrite=True` dalı önce hedefi SİLİP sonra
+kaynaktan taşımaya/yeniden adlandırmaya çalışırdı — ama kaynak ZATEN o
+hedefti, yani kendini silip sonra "taşımaya" çalışıyordu (veri kaybı).
+Kod incelemesiyle değil, testler yazılırken ("aynı isme yeniden adlandır"
+senaryosu) bulundu. `source == destination` erken kontrolüyle düzeltildi
+(bkz. `plugins/filesystem_plugin.py`). Gerekçe README §28a.
+
+**Ders**: "kaynak == hedef" gibi kenar durumları, mutlu-yol testleri
+yazarken akla gelmez — özellikle onları da yazmak gerekir.
 
 ## 6.6) Bu makineye özgü donanım notları (KOD HATASI DEĞİL)
 

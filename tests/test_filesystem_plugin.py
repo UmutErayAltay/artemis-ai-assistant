@@ -1,4 +1,4 @@
-"""`plugins.filesystem_plugin` içindeki 7 tool ve `_resolve_location` testleri.
+"""`plugins.filesystem_plugin` içindeki 8 tool ve `_resolve_location` testleri.
 
 Gerçek dosya sistemi + gerçek `ToolDispatcher` kullanılır (tmp_path ile
 izole edilmiş sahte bir masaüstü/indirilenler klasörü); yalnızca
@@ -412,6 +412,250 @@ def test_copy_with_overwrite_true_replaces_existing_target(
 
     assert result.success is True
     assert existing.read_text(encoding="utf-8") == "yeni içerik"
+
+
+# --- filesystem.rename ---
+
+
+def test_rename_file_changes_name_keeps_content(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    source = desktop / "eski.txt"
+    source.write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": "eski.txt", "name": "yeni.txt"}}
+    )
+
+    assert result.success is True
+    assert not source.exists()
+    renamed = desktop / "yeni.txt"
+    assert renamed.exists()
+    assert renamed.read_text(encoding="utf-8") == "içerik"
+    assert result.data["path"] == str(renamed)
+
+
+def test_rename_folder(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    source = desktop / "EskiKlasor"
+    source.mkdir()
+    (source / "dosya.txt").write_text("x", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": "EskiKlasor", "name": "YeniKlasor"}}
+    )
+
+    assert result.success is True
+    assert not source.exists()
+    assert (desktop / "YeniKlasor" / "dosya.txt").exists()
+
+
+def test_rename_missing_source_fails(dispatcher: ToolDispatcher) -> None:
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": "olmayan.txt", "name": "yeni.txt"}}
+    )
+
+    assert result.success is False
+
+
+def test_rename_rejects_absolute_target(dispatcher: ToolDispatcher, tmp_path: Path) -> None:
+    outside = tmp_path / "gizli.txt"
+    outside.write_text("hassas", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": str(outside), "name": "yeni.txt"}}
+    )
+
+    assert result.success is False
+    assert outside.exists()  # dokunulmamalı
+
+
+def test_rename_rejects_traversal_in_new_name(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    """Yeni ad da `_safe_join`'den geçmeli — aksi halde `Path.rename()`'e
+    verilen bir `../` dizin dışına taşırdı (bkz. tool docstring'i)."""
+
+    source = desktop / "dosya.txt"
+    source.write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": "dosya.txt", "name": "../disari.txt"}}
+    )
+
+    assert result.success is False
+    assert source.exists()  # eski ad hâlâ duruyor, taşınmadı
+
+
+def test_rename_onto_existing_name_fails_by_default(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    source = desktop / "kaynak.txt"
+    source.write_text("yeni", encoding="utf-8")
+    existing = desktop / "hedef.txt"
+    existing.write_text("korunmalı", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.rename", "arguments": {"target": "kaynak.txt", "name": "hedef.txt"}}
+    )
+
+    assert result.success is False
+    assert existing.read_text(encoding="utf-8") == "korunmalı"
+    assert source.exists()
+
+
+def test_rename_onto_existing_name_with_overwrite_replaces(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    source = desktop / "kaynak.txt"
+    source.write_text("yeni", encoding="utf-8")
+    existing = desktop / "hedef.txt"
+    existing.write_text("eski", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.rename",
+            "arguments": {"target": "kaynak.txt", "name": "hedef.txt", "overwrite": True},
+        }
+    )
+
+    assert result.success is True
+    assert existing.read_text(encoding="utf-8") == "yeni"
+    assert not source.exists()
+
+
+def test_rename_to_same_name_is_a_safe_noop(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    """REGRESYON: kaynak/hedef aynı yola çözülüyorsa (yeni ad = eski ad),
+    "overwrite" dalı kaynağı SİLİP sonra yeniden adlandırmaya çalışmamalı
+    — bu veri kaybına yol açardı (bkz. tool'daki koruma yorumu)."""
+
+    source = desktop / "dosya.txt"
+    source.write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.rename",
+            "arguments": {"target": "dosya.txt", "name": "dosya.txt", "overwrite": True},
+        }
+    )
+
+    assert result.success is True
+    assert source.exists()
+    assert source.read_text(encoding="utf-8") == "içerik"
+
+
+# --- filesystem.move ---
+
+
+def test_move_file_removes_source_and_creates_destination(
+    dispatcher: ToolDispatcher, desktop: Path, downloads: Path
+) -> None:
+    source = desktop / "kaynak.txt"
+    source.write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": "kaynak.txt", "destination_location": "downloads"},
+        }
+    )
+
+    assert result.success is True
+    assert not source.exists()  # taşıma: kopyalamadan farklı olarak kaynakta iz kalmaz
+    moved = downloads / "kaynak.txt"
+    assert moved.exists()
+    assert moved.read_text(encoding="utf-8") == "içerik"
+    assert result.data["destination"] == str(moved)
+
+
+def test_move_folder_recursively(dispatcher: ToolDispatcher, desktop: Path, downloads: Path) -> None:
+    source_dir = desktop / "Proje"
+    source_dir.mkdir()
+    (source_dir / "dosya.txt").write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.move", "arguments": {"target": "Proje", "destination_location": "downloads"}}
+    )
+
+    assert result.success is True
+    assert not source_dir.exists()
+    assert (downloads / "Proje" / "dosya.txt").exists()
+
+
+def test_move_missing_source_fails(dispatcher: ToolDispatcher, downloads: Path) -> None:
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": "olmayan.txt", "destination_location": "downloads"},
+        }
+    )
+
+    assert result.success is False
+
+
+def test_move_rejects_absolute_target(dispatcher: ToolDispatcher, tmp_path: Path, downloads: Path) -> None:
+    outside = tmp_path / "gizli.txt"
+    outside.write_text("hassas", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": str(outside), "destination_location": "downloads"},
+        }
+    )
+
+    assert result.success is False
+    assert outside.exists()
+
+
+def test_move_onto_existing_target_fails_by_default(
+    dispatcher: ToolDispatcher, desktop: Path, downloads: Path
+) -> None:
+    source = desktop / "kaynak.txt"
+    source.write_text("yeni", encoding="utf-8")
+    existing = downloads / "kaynak.txt"
+    existing.write_text("korunmalı", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": "kaynak.txt", "destination_location": "downloads"},
+        }
+    )
+
+    assert result.success is False
+    assert existing.read_text(encoding="utf-8") == "korunmalı"
+    assert source.exists()  # başarısız taşıma kaynağı silmemeli
+
+
+def test_move_with_overwrite_true_replaces_existing_target(
+    dispatcher: ToolDispatcher, desktop: Path, downloads: Path
+) -> None:
+    source = desktop / "kaynak.txt"
+    source.write_text("yeni", encoding="utf-8")
+    existing = downloads / "kaynak.txt"
+    existing.write_text("eski", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": "kaynak.txt", "destination_location": "downloads", "overwrite": True},
+        }
+    )
+
+    assert result.success is True
+    assert existing.read_text(encoding="utf-8") == "yeni"
+    assert not source.exists()
+
+
+def test_move_to_same_location_is_a_safe_noop(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    """REGRESYON: kaynak/hedef aynı yola çözülüyorsa (aynı konuma "taşı"),
+    kaynağı silip sonra taşımaya çalışmamalı — veri kaybı olurdu."""
+
+    source = desktop / "dosya.txt"
+    source.write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.move",
+            "arguments": {"target": "dosya.txt", "destination_location": "desktop", "overwrite": True},
+        }
+    )
+
+    assert result.success is True
+    assert source.exists()
+    assert source.read_text(encoding="utf-8") == "içerik"
 
 
 # --- filesystem.delete (CONFIRM_REQUIRED) ---

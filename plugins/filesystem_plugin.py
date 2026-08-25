@@ -256,7 +256,7 @@ class FilesystemCopyTool(BaseTool):
                 "destination_location": {"type": "string", "default": "desktop"},
                 "overwrite": {
                     "type": "boolean",
-                    "description": "Hedefte aynı isimde bir öğe varsa üzerine yazılsın mı.",
+                    "description": "Hedefte aynı isim varsa üzerine yazılsın mı.",
                     "default": False,
                 },
             },
@@ -294,6 +294,151 @@ class FilesystemCopyTool(BaseTool):
         return ToolResult(
             success=True,
             message=f"'{source.name}', {destination.parent.name} klasörüne kopyalandı.",
+            data={"source": str(source), "destination": str(destination)},
+        )
+
+
+@register_tool
+class FilesystemRenameTool(BaseTool):
+    """Bir dosyayı/klasörü AYNI dizin içinde yeniden adlandırır.
+
+    Konum değiştirmek için değil — bunun için `filesystem.move` var.
+    Hem `target` (mevcut ad) hem `name` (yeni ad) `_safe_join` ile
+    doğrulanır: yeni ad da mutlak yol/`..` içeremez, aksi halde
+    `Path.rename()`'e verilen bir yol dizini dışına taşıyabilirdi.
+    """
+
+    name = "filesystem.rename"
+    description = "Bir dosya/klasörü yeniden adlandırır (konumu değişmez)."
+    danger_level = DangerLevel.SAFE
+
+    def get_arguments_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "description": "Mevcut dosya/klasör adı."},
+                "name": {"type": "string", "description": "Yeni ad."},
+                "location": {"type": "string", "default": "desktop"},
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Hedefte aynı isim varsa üzerine yazılsın mı.",
+                    "default": False,
+                },
+            },
+            "required": ["target", "name"],
+        }
+
+    def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+        target = arguments["target"]
+        new_name = arguments["name"]
+        overwrite = arguments.get("overwrite", False)
+        base_path = _resolve_location(arguments.get("location", "desktop"), context)
+
+        source = _safe_join(base_path, target)
+        if source is None:
+            return _unsafe_target_result(target)
+        destination = _safe_join(base_path, new_name)
+        if destination is None:
+            return _unsafe_target_result(new_name)
+
+        if not source.exists():
+            return ToolResult(success=False, message=f"'{source}' bulunamadı.")
+
+        # Kaynak ve hedef aynı yola çözülüyorsa (örn. yeni ad eskiyle
+        # birebir aynı) hiçbir şey yapmadan başarı dön — aksi halde
+        # aşağıdaki "overwrite" dalı kaynağı SİLİP sonra yeniden
+        # adlandırmaya çalışırdı (veri kaybı).
+        if source == destination:
+            return ToolResult(success=True, message=f"'{source.name}' zaten bu adda.", data={"path": str(source)})
+
+        if destination.exists():
+            if not overwrite:
+                return ToolResult(
+                    success=False,
+                    message=(
+                        f"'{destination}' hedefinde aynı isimde bir öğe zaten var; "
+                        "üzerine yazmak için overwrite=true gönderin."
+                    ),
+                )
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+
+        source.rename(destination)
+        context.memory.remember_last_path(str(destination))
+        return ToolResult(
+            success=True,
+            message=f"'{source.name}', '{destination.name}' olarak yeniden adlandırıldı.",
+            data={"path": str(destination)},
+        )
+
+
+@register_tool
+class FilesystemMoveTool(BaseTool):
+    """Bir dosyayı/klasörü BAŞKA bir konuma taşır (`filesystem.copy`'nin
+    taşıma karşılığı — argüman şeması BİREBİR aynı, yalnızca kaynakta
+    kopya bırakmaz)."""
+
+    name = "filesystem.move"
+    description = "Bir dosya/klasörü başka bir konuma taşır (kaynakta kopya kalmaz)."
+    danger_level = DangerLevel.SAFE
+
+    def get_arguments_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string"},
+                "source_location": {"type": "string", "default": "desktop"},
+                "destination_location": {"type": "string", "default": "desktop"},
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Hedefte aynı isim varsa üzerine yazılsın mı.",
+                    "default": False,
+                },
+            },
+            "required": ["target", "destination_location"],
+        }
+
+    def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
+        target = arguments["target"]
+        overwrite = arguments.get("overwrite", False)
+        source = _safe_join(_resolve_location(arguments.get("source_location", "desktop"), context), target)
+        if source is None:
+            return _unsafe_target_result(target)
+        destination_dir = _resolve_location(arguments["destination_location"], context)
+
+        if not source.exists():
+            return ToolResult(success=False, message=f"'{source}' bulunamadı.")
+
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / source.name
+
+        # Bkz. FilesystemRenameTool'daki aynı korumanın gerekçesi:
+        # kaynak/hedef aynı yolsa "overwrite" dalı kaynağı silip sonra
+        # taşımaya çalışırdı.
+        if source == destination:
+            return ToolResult(success=True, message="Kaynak zaten hedef konumda.", data={"path": str(source)})
+
+        if destination.exists():
+            if not overwrite:
+                return ToolResult(
+                    success=False,
+                    message=(
+                        f"'{destination}' hedefinde aynı isimde bir öğe zaten var; "
+                        "üzerine yazmak için overwrite=true gönderin."
+                    ),
+                )
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            else:
+                destination.unlink()
+
+        shutil.move(str(source), str(destination))
+        context.memory.remember_last_path(str(destination))
+        return ToolResult(
+            success=True,
+            message=f"'{source.name}', {destination.parent.name} klasörüne taşındı.",
             data={"source": str(source), "destination": str(destination)},
         )
 
