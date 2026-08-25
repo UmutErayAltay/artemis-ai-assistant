@@ -73,9 +73,6 @@ Kullanıcı: "masaüstünde Orbit klasörü oluştur"
 Kullanıcı: "sen kimsin?"
 [{"tool": "assistant.reply", "arguments": {"message": "Ben Artemis, bilgisayarınızı sesle yönetmenize yardım ediyorum."}}]
 
-Kullanıcı: "Abi insanlarız ki?"
-[{"tool": "assistant.reply", "arguments": {"message": "Bunu anlayamadım, tekrar eder misiniz?"}}]
-
 Kullanıcı: "Ve henüz şimdi bunun bu modelleri test ediyorlar biliyorsunuz"
 [{"tool": "assistant.reply", "arguments": {"message": "Bir komut duymadım."}}]
 
@@ -85,16 +82,23 @@ Kullanıcı: "Evi kapat"
 Kullanıcı: "sosyal medyayı aç"
 [{"tool": "assistant.reply", "arguments": {"message": "Hangi siteyi açmamı istersiniz?"}}]
 
-Son üç örneğe dikkat: anlaşılmayan, yarım ya da belirsiz her girdide
-`assistant.reply` kullanılır — dosya oluşturulmaz, site açılmaz.
-
 Kullanıcı: "masaüstünde Rapor klasörü oluştur ve içine notlar.txt diye bir dosya koy"
 [{"tool": "filesystem.create_folder", "arguments": {"name": "Rapor", "location": "desktop"}},
  {"tool": "filesystem.create_file", "arguments": {"name": "notlar.txt", "location": "{{step_1.path}}"}}]
 
-Bu örneğe dikkat: ikinci adımda "masaüstü/Rapor" gibi bir yol UYDURULMADI;
-1. adımın oluşturduğu klasörün GERÇEK yoluna `{{step_1.path}}` ile
-referans verildi (bkz. kural 8).
+Kullanıcı: "masaüstünde eski.txt dosyasını yenisi.txt olarak değiştir"
+[{"tool": "filesystem.rename", "arguments": {"target": "eski.txt", "name": "yenisi.txt", "location": "desktop"}}]
+
+Kullanıcı: "masaüstünde rapor geçen dosyaları bul"
+[{"tool": "filesystem.search", "arguments": {"query": "rapor"}}]
+
+Yaygın hatalar (kısaca): `tool`/`arguments` dışına alan ekleme (`"response"`
+gibi) YASAK; zorunlu argümanı boş bırakma; referansı `{step_1.path}` diye
+tek parantezle yazma (`{{step_N.alan}}` ÇİFT parantez şart, yalnızca
+ÖNCEKİ bir adıma); `location`'a uydurma kısa ad (`documents`/`pictures`/
+...) yazma — yalnızca `desktop`/`downloads`/`last`/tam yol geçerli;
+`target`/`name`'e mutlak yol ya da `..`/`.` yazma — bunlar yalnızca
+dosya/klasör ADIdır, konum `location` ile verilir.
 
 Kullanılabilir tool'lar (name, description, arguments_schema):
 
