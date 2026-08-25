@@ -1942,3 +1942,74 @@ yolundan geçtiği için mimari garanti aynıdır.
 Geliştirme planının Faz 0-5 ve 7'si tamamlandı. Kalan: Faz 6 (prompt
 bütçesinin gerçek modelle kesinleştirilmesi — bir Ollama modeli geri
 yüklenmesini bekliyor, bkz. §28b).
+
+---
+
+## 34) Faz 6 kapatıldı: tool eklemenin gerçek bedeli GECİKME DEĞİL, DOĞRULUK (v3.15)
+
+Bir Ollama modeli geri yüklenince (kullanıcı "hangi modelleri önerirsin"
+diye sordu, ben de dört yeni aday indirip §21'deki yöntemle test ettim)
+Faz 6'nın açık sorusu nihayet ölçülebildi — ama beklenenden farklı bir
+sonuçla.
+
+### 34a) Dört yeni aday, hiçbiri `gemma4:e4b`'yi geçemedi
+
+`hermes3:3b`, `qwen3:8b`, `llama3-groq-tool-use:8b`, `granite3.3:2b` —
+öncekilerden (gemma/qwen3.5/llama3.1/qwen2.5/phi4-mini/gpt-oss) tamamen
+farklı aileler, GÜNCEL prompt'a (38 tool) karşı test edildi:
+
+| Model | Doğruluk | Tehlikeli hata | Gecikme |
+|---|---|---|---|
+| **`gemma4:e4b`** | 14/20 | 1 | 2.50 sn |
+| `qwen3:8b` | 13/20 | 2 | 2.86 sn |
+| `hermes3:3b` | 12/20 | 4 | 1.67 sn |
+| `llama3-groq-tool-use:8b` | 10/20 | 5 | 2.12 sn |
+| `granite3.3:2b` | 8/20 | 6 | 0.68 sn |
+
+`granite3.3:2b` en hızlısı ama en tehlikelisi de: "masaüstünde Orbit
+klasörü oluştur" komutunu `windows.list_windows` sanmıştı. `gemma4:e4b`
+varsayılan olarak kaldı.
+
+### 34b) Asıl bulgu: `gemma4:e4b`'nin KENDİ skoru da düşmüştü — tesadüf değil
+
+İlk kıyasta `gemma4:e4b` 14/20'ye düşmüştü (eskiden §21'de 18/20).
+Bu, test senaryolarının 3'ünü yeni tool'lar için değiştirmemden mi
+geliyordu, yoksa GERÇEKTEN prompt büyümesinden mi — izole edilmeden
+bilinemezdi. İzolasyon için: git'ten bu oturumun geliştirme planından
+HEMEN ÖNCEKİ `system_prompt.md` (32 tool) çıkarıldı, bu oturumda
+eklenen 6 tool (`filesystem.rename`/`move`, `memory.remember`/`recall`/
+`forget`, `windows.arrange_window`) `TOOL_REGISTRY`'den GEÇİCİ
+çıkarılıp eski şablonla birleştirildi — gerçek bir "eski prompt"
+yeniden inşa edildi. Yalnızca ESKİ prompt'ta da var olan tool'ları
+gerektiren 17 ORTAK senaryoyla, İKİ modelde ayrı ayrı ölçüldü:
+
+| | Eski (32 tool, 13.645 kr) | Yeni (38 tool, 16.776 kr) |
+|---|---|---|
+| `gemma4:e4b` | 15/17, **2** tehlikeli, 1.32 sn | 11/17, **1** tehlikeli, 1.81 sn |
+| `llama3-groq-tool-use:8b` | 11/17, **4** tehlikeli, 1.94 sn | 7/17, **5** tehlikeli, 2.11 sn |
+
+Test senaryosu SABİT, yalnızca prompt boyutu değişti. Sonuç: İKİ
+modelde de doğruluk düştü (gemma 15→11, llama3-groq 11→7) VE gecikme
+arttı (gemma 1.32→1.81sn, ~%37; llama3-groq 1.94→2.11sn).
+
+**Ders — Faz 6'nın orijinal çerçevesi eksikti:** "prompt büyüdükçe
+gecikme kötüleşir mi" diye sorulmuştu (README §28b), ama asıl maliyet
+DOĞRULUK kaybıydı — gecikme artışı (1.32→1.81sn) doğruluk kaybının
+(15/17→11/17, yani %24) yanında ikincil kalıyor. Yani "tool ekle,
+sonra prompt bütçesini büyüt" döngüsü BEDAVA değil: her yeni tool,
+manifest'e girdiği andan itibaren MEVCUT tool'ların da doğru
+seçilme olasılığını düşürüyor — modelin dikkatini bölüyor.
+
+### 34c) Karar: geçici 18.000 sınırı KALDI, ama artık "geçici rahatlık" değil "ölçülmüş bir uyarı"
+
+Bu oturumda eklenen 6 tool'un (memory.*, rename, move, arrange_window)
+GERÇEK bir kullanıcı ihtiyacına karşılık geldiği (§29-30) ve geri
+alınmasının bu değişikliği tersine çevireceği göz önüne alınarak
+tool'lar KALDI — ama bu ölçüm, gelecekte yeni bir tool eklemenin
+"bedava" olmadığını KANITLADI. `test_prompt_builder.py`'deki 18.000
+sınırı artık gerekçeli: yalnızca gecikme değil, doğruluk kaybı da
+göz önünde bulunduran bir üst sınır. Yeni bir tool eklenecekse, bu
+ölçüm YÖNTEMİYLE (izole eski/yeni prompt kıyası) tekrar sınanmalı.
+
+Dört yeni aday model diskte 13.4 GB tutuyor, hiçbiri kazanmadı —
+kullanıcı onayıyla silinecek. `gemma4:e4b` varsayılan model olarak kaldı.

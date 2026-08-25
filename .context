@@ -5,15 +5,18 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.14 (conversation_loop.py doc-drift + uçtan uca
-doğrulama; geliştirme planının Faz 0-5 ve 7'si tamamlandı). Sürüm
-geçmişi için `README.md` bölüm 16-33.
+Son güncelleme: v3.15 (Faz 6 kapatıldı — tool eklemenin gerçek bedeli
+ölçüldü). Geliştirme planının TAMAMI (Faz 0-8) tamamlandı. Sürüm
+geçmişi için `README.md` bölüm 16-34.
 
-**AÇIK KALAN TEK ŞEY: Faz 6** — sistem promptunun geçici 18.000
-karakter sınırı (§28b), bir Ollama modeli geri yüklenip gerçek gecikme
-ölçümü yapılınca kesinleştirilmeli. Makinede şu an HİÇ model yok
-(`ollama list` boş) — kullanıcı `ollama pull gemma4:e4b` (ya da
-tercih ettiği model) çalıştırdıktan sonra bu faz tamamlanabilir.
+**Faz 6 sonucu — ezber değil, ölçüldü:** dört yeni aday model
+(`hermes3:3b`, `qwen3:8b`, `llama3-groq-tool-use:8b`, `granite3.3:2b`)
+`gemma4:e4b`'yi geçemedi, varsayılan model değişmedi. Ama izole bir
+eski/yeni-prompt kıyası (aynı 17 senaryo, yalnızca prompt boyutu
+değişti) önemli bir şey ortaya çıkardı: tool eklemenin bedeli
+GECİKME değil DOĞRULUK — `gemma4:e4b` 32→38 tool'da 15/17→11/17'ye,
+`llama3-groq-tool-use:8b` 11/17→7/17'ye düştü. Gerekçe ve tam ölçüm
+README §34.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -345,6 +348,21 @@ riskli noktasını (süreç yönetimi, sync/async köprü) gösterdi; ayrıca
 paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
+
+### 6.18) Tool eklemenin bedeli DOĞRULUK, gecikme değil (v3.15, Faz 6 kapanışı)
+İzole ölçüm (aynı 17 senaryo, git'ten çıkarılan eski şablon + `TOOL_
+REGISTRY`'den geçici çıkarılan 6 yeni tool ile yeniden inşa edilen
+"eski prompt"): `gemma4:e4b` 32→38 tool'da 15/17→11/17, `llama3-groq-
+tool-use:8b` 11/17→7/17. Gecikme de arttı (1.32→1.81sn) ama doğruluk
+kaybı (%24) yanında ikincil. **Yeni bir tool eklerken bunu unutma: her
+ekleme mevcut tool'ların doğru seçilme olasılığını da düşürür.** Dört
+yeni aday model (hermes3:3b, qwen3:8b, llama3-groq-tool-use:8b,
+granite3.3:2b) `gemma4:e4b`'yi geçemedi, varsayılan değişmedi. Gerekçe
+ve tam tablo README §34.
+
+**Ders**: bir bekçi testinin sınırını (14.000→18.000 karakter) "geçici
+rahatlık" diye büyütüp geçmek kolay ama YANLIŞ soruyu cevaplıyordu —
+"gecikme kötüleşir mi" değil "doğruluk düşer mi" diye ölçülmeliydi.
 
 ### 6.17) `plugin_loader.py`/`tool_base.py` ilk kez doğrudan test edildi (v3.13)
 `_` önek kuralı GERÇEK `plugins/` paketiyle sınanamazdı (`_app_resolver.py`
