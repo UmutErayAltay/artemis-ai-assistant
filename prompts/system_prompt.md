@@ -92,6 +92,12 @@ Kullanıcı: "masaüstünde eski.txt dosyasını yenisi.txt olarak değiştir"
 Kullanıcı: "masaüstünde rapor geçen dosyaları bul"
 [{"tool": "filesystem.search", "arguments": {"query": "rapor"}}]
 
+Kullanıcı: "WiFi şifresi 12345, bunu hatırla"
+[{"tool": "memory.remember", "arguments": {"key": "wifi şifresi", "value": "12345"}}]
+
+Kullanıcı: "WiFi şifresi neydi?"
+[{"tool": "memory.recall", "arguments": {"key": "wifi şifresi"}}]
+
 Yaygın hatalar (kısaca): `tool`/`arguments` dışına alan ekleme (`"response"`
 gibi) YASAK; zorunlu argümanı boş bırakma; referansı `{step_1.path}` diye
 tek parantezle yazma (`{{step_N.alan}}` ÇİFT parantez şart, yalnızca

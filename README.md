@@ -1765,3 +1765,48 @@ Sınır **geçici olarak 18.000'e** çekildi (`tests/test_prompt_builder.py`,
 gerekçe test docstring'inde) — rastgele değil, planlanan tüm tool'ları
 geçirecek kadar cömert ama eski kötü değerin (21.823) altında bir tavan.
 Bir model geri yüklenince gerçek ölçümle KESİNLEŞTİRİLECEK (plan Faz 6).
+
+---
+
+## 29) Hafıza LLM'e açıldı: `memory.remember`/`recall`/`forget` (v3.10)
+
+`memory/context_memory.py` genel bir SQLite k-v deposu olarak zaten
+vardı ama yalnızca İÇ kullanım içindi (`remember_last_path`/
+`get_last_path`, `location: "last"`'ın dayandığı yer) — kullanıcı "WiFi
+şifremi hatırla" dese bile hiçbir tool bunu kaydedip geri çağıramıyordu.
+Bu, kod tabanında en uzun süredir "var ama kullanılmayan" durumdaki
+altyapıydı; sınıfın kendi docstring'i genişletmeyi zaten öneriyordu.
+
+**İsim çakışması riski ve çözümü:** ham `set(key, value)`'u doğrudan
+LLM'e açmak tehlikeliydi — model (ya da kullanıcı) yanlışlıkla
+`key="last_path"` gönderirse `location: "last"` özelliğinin dayandığı
+İÇ anahtarı sessizce ezerdi. Çözüm `fact:` önekiyle namespace'lenmiş
+yeni convenience metotlar (`remember_fact`/`recall_fact`/`forget_fact`)
+— kullanıcı verisiyle sistemin kendi durumu asla aynı ad alanında
+çakışmaz. Bu, hem sınıf seviyesinde (`tests/test_memory_context.py`)
+hem uçtan uca dispatcher üzerinden (`tests/test_memory_plugin.py`) özel
+bir regresyon testiyle doğrulandı: `memory.remember(key="last_path",
+...)` çağrısından SONRA bile `filesystem.open(location="last")` doğru
+çalışmaya devam ediyor.
+
+Üç yeni tool (`plugins/memory_plugin.py`, tamamı `SAFE`):
+- `memory.remember` — bir bilgiyi kaydeder.
+- `memory.recall` — bulunamazsa dürüstçe `success=False` döner ("böyle
+  bir şey hatırlamıyorum") — model olmayan bir bilgiyi UYDURMAZ (bkz.
+  CLAUDE.md, koşulsuz `success=True` yasağı).
+- `memory.forget` — hiç var olmamış bir anahtarı "unutmak" hata değil,
+  zararsız bir `success=True` ("zaten hatırlamıyordum").
+
+**Güvenlik notu (kod içi belgelenmiş, engellenmiyor):** bu depo
+şifrelenmemiş, düz metin bir SQLite dosyasıdır. Gerçek parola/kart
+numarası gibi çok hassas veriler için önerilmez — tool açıklamasında
+kullanıcı uyarılır ama bu bir kasa değil, Artemis'in kendi notlarını
+tuttuğu bir defter.
+
+`memory/context_memory.py` bu değişiklikle birlikte İLK KEZ doğrudan
+test edildi (13 test) — daha önce yalnızca dolaylı olarak (filesystem
+tool'ları üzerinden) sınanıyordu; yeni kullanıcıya-açık sorumluluk
+üstlenince doğrudan test şart oldu. Toplam 21 yeni test, tüm paket 429.
+
+Yeni tool'lar promptu 14.820 → 16.010 karaktere çıkardı (37 tool),
+geçici 18.000 sınırının hâlâ altında (§28b).

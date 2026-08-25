@@ -5,8 +5,9 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.9 (filesystem.rename/move; devam eden geliştirme
-planının Faz 0-1'i). Sürüm geçmişi için `README.md` bölüm 16-28.
+Son güncelleme: v3.10 (memory.remember/recall/forget; devam eden
+geliştirme planının Faz 0-2'si). Sürüm geçmişi için `README.md`
+bölüm 16-29.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -59,7 +60,8 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Prompt üretimi | `core/prompt_builder.py` | ✅ manifest otomatik enjekte (`.replace`, `.format` değil) |
 | Ollama yaşam döngüsü | `core/ollama_manager.py` | ✅ otomatik başlat/durdur, model seçimi, RAM yönetimi |
 | Sohbet döngüsü | `core/conversation_loop.py` | ✅ terminal I/O; onay ekranı artık argümanları gösteriyor |
-| Hafıza | `memory/context_memory.py` | ✅ SQLite k-v; `location: "last"` akışıyla plugin'lere bağlı |
+| Hafıza | `memory/context_memory.py` | ✅ SQLite k-v; `location: "last"` + `fact:` namespace'i (v3.10), testli |
+| Plugin: hafıza | `plugins/memory_plugin.py` | ✅ 3 tool (`remember`/`recall`/`forget`), testli (v3.10) |
 | Plugin: dosya sistemi | `plugins/filesystem_plugin.py` | ✅ 8 tool (v3.9: +rename/+move), testli, path-traversal'a karşı sertleştirilmiş |
 | Plugin: Windows | `plugins/windows_plugin.py` | ✅ 12 tool, testli |
 | Plugin: web | `plugins/web_plugin.py` | ✅ 2 tool (`search`, `open_url`), testli |
@@ -79,14 +81,15 @@ geliştirme yaparken mekanik işleri daha küçük bir modele devretmek için.
 | Model indirme | `scripts/setup_voice.py` | ✅ stdlib-only, ~60MB (yalnızca Piper) |
 | Plugin: MCP köprüsü | `plugins/mcp_plugin.py` | ✅ dinamik keşif → statik registry, testli (v3.7) |
 
-**Toplam 34 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (8,
+**Toplam 37 tool (+ varsayılan olarak 0 MCP tool'u)**: `filesystem.*` (8,
 v3.9: +rename/+move), `windows.*` (12), `web.*` (2), `mouse_keyboard.*`
-(5), `browser.*` (6), `assistant.reply` (1). MCP tool'ları
-`config.yaml::mcp_servers` boş olduğu sürece SIFIR. Sistem promptu şu an
-~14.820 karakter — eski 14.000 sınırı devam eden geliştirme planının
-(memory.*/arrange_window daha gelecek) tüm tool'larını geçirecek kadar
-GEÇİCİ olarak 18.000'e çekildi (`test_prompt_builder.py` docstring'i,
-README §28b) — bir model geri yüklenince gerçek gecikme ölçümüyle
+(5), `browser.*` (6), `memory.*` (3, v3.10), `assistant.reply` (1). MCP
+tool'ları `config.yaml::mcp_servers` boş olduğu sürece SIFIR. Sistem
+promptu şu an ~16.010 karakter — eski 14.000 sınırı devam eden
+geliştirme planının (`windows.arrange_window` daha gelecek) tüm
+tool'larını geçirecek kadar GEÇİCİ olarak 18.000'e çekildi
+(`test_prompt_builder.py` docstring'i, README §28b) — bir model geri
+yüklenince gerçek gecikme ölçümüyle
 KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
 Test durumu: **393 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
@@ -335,6 +338,16 @@ riskli noktasını (süreç yönetimi, sync/async köprü) gösterdi; ayrıca
 paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
+
+### 6.15) Hafıza `fact:` önekiyle namespace'lendi, ham set/get LLM'e açılmadı (v3.10)
+`memory.remember`/`recall`/`forget` eklendi ama `ContextMemory.set/get`
+DOĞRUDAN kullanılmadı — `remember_fact`/`recall_fact`/`forget_fact`
+(`fact:` önekli) yeni convenience metotlar araya girdi. Gerekçe: önek
+olmadan kullanıcı `key="last_path"` gönderirse (kazayla ya da meraktan),
+`location: "last"` özelliğinin dayandığı İÇ anahtar sessizce ezilirdi.
+Hem sınıf seviyesinde hem uçtan uca dispatcher üzerinden özel regresyon
+testiyle doğrulandı. Depo düz metin/şifresiz — hassas veri için
+önerilmiyor (engellenmiyor, kod içi belgelendi). Gerekçe README §29.
 
 ### 6.14) `filesystem.rename`/`move`: kaynak==hedef koruması (v3.9)
 İkisinde de aynı sınıf hata bulunup düzeltildi: kaynak ve hedef AYNI
