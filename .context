@@ -5,9 +5,10 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.12 (medya tuşu dokümantasyonu; geliştirme planının
-Faz 0-4'ü tamamlandı, sırada Faz 5-8). Sürüm geçmişi için `README.md`
-bölüm 16-31.
+Son güncelleme: v3.13 (test kapsamı: plugin_loader/tool_base/manifest;
+geliştirme planının Faz 0-5'i tamamlandı, sırada Faz 6-8 — Faz 6 bir
+Ollama modeli geri yüklenmesini bekliyor). Sürüm geçmişi için
+`README.md` bölüm 16-32.
 
 ## 1) Artemis ne, tek cümleyle
 
@@ -93,7 +94,7 @@ docstring'i, README §28b) — bir model geri yüklenince gerçek gecikme
 ölçümüyle
 KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
-Test durumu: **393 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
+Test durumu: **454 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
 4 kırık). Devre dışı ikisi `@pytest.mark.disruptive` işaretli
 (`windows.lock`, `windows.set_volume`) — gerçek makineyi etkiledikleri
 için varsayılan `pytest`'te ÇALIŞMAZLAR; bilinçli çalıştırmak için
@@ -339,6 +340,14 @@ riskli noktasını (süreç yönetimi, sync/async köprü) gösterdi; ayrıca
 paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
+
+### 6.17) `plugin_loader.py`/`tool_base.py` ilk kez doğrudan test edildi (v3.13)
+`_` önek kuralı GERÇEK `plugins/` paketiyle sınanamazdı (`_app_resolver.py`
+hiç tool tanımlamıyor, "atlandı" ile "zaten yok" ayırt edilemez). İzole,
+geçici bir sahte paket (`tmp_path`, `sys.path`'e eklenip temizlenen)
+kuruldu — gerçek `TOOL_REGISTRY`'ye kalıcı hiçbir şey eklenmedi. Ayrıca
+`BaseTool`'un ABC zorlamasının GERÇEKTEN çalıştığı (yalnızca docstring'de
+yazmak değil) doğrudan `TypeError` bekleyerek doğrulandı. Gerekçe README §32.
 
 ### 6.16) `windows.arrange_window`: fake win32'de komut≠durum hatası (v3.11)
 Windows API'sinde `ShowWindow`'a verilen KOMUT (`SW_MINIMIZE=6`) ile

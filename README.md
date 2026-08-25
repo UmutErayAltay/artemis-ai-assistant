@@ -1873,3 +1873,42 @@ geçiyor, prompt 38 tool ile 16.776 karakter (geçici 18.000 sınırının
 altında). Sırada Faz 5 (test kapsamı: `plugin_loader.py`/`tool_base.py`)
 ve Faz 6 (gerçek modelle prompt bütçesi kesinleştirme — bir Ollama
 modeli geri yüklenmesini bekliyor).
+
+---
+
+## 32) Test kapsamı: `plugin_loader.py`, `tool_base.py`, `manifest.py` (v3.13)
+
+Geliştirme planı Faz 5. Üç çekirdek modül daha önce HİÇ doğrudan test
+edilmemişti — yalnızca her test dosyasının `load_plugins()`/`ToolContext`/
+`build_system_prompt()` çağırması yoluyla DOLAYLI olarak sınanıyorlardı.
+Mekanizmaların kendisi (isim çakışması gerçekten `ValueError` fırlatıyor
+mu, `_` ile başlayan dosyalar gerçekten atlanıyor mu, `danger_level`
+gerçekten manifest'ten düşüyor mu) hiçbir yerde doğrudan doğrulanmıyordu.
+
+**`_` önek kuralı GERÇEK `plugins/` paketiyle sınanamazdı** —
+`_app_resolver.py` hiç tool tanımlamıyor, yani "atlandı" ile "zaten
+tool'u yok" ayırt edilemezdi. Bunun yerine izole, geçici bir sahte paket
+kuruldu (`tmp_path` altında, gerçek bir Python paketi olarak `sys.path`'e
+eklenip sonra temizlenen); `load_plugins()` ona karşı çalıştırılıp hem
+normal hem `_` önekli bir modül içerdiği doğrulandı. Gerçek `TOOL_REGISTRY`'ye
+kalıcı hiçbir şey eklenmedi.
+
+`tests/test_plugin_loader.py` (10 test): isim çakışması `ValueError`,
+`name` zorunluluğu, decorator'ın sınıfı değiştirmeden döndürmesi, sahte
+paketle keşif + `_`-atlama, bozuk bir modülün `PluginLoadError` vermesi,
+gerçek pakete karşı pozitif kontrol.
+
+`tests/test_tool_base.py` (6 test): `ToolContext`'in GERÇEKTEN frozen
+olduğu (mutasyon `FrozenInstanceError` fırlatır), `BaseTool`'un ABC
+zorlamasının GERÇEKTEN çalıştığı (eksik `execute`/`get_arguments_schema`
+ile örnekleme `TypeError` verir — yalnızca docstring'de yazmak yetmez),
+`danger_level`'in varsayılan olarak `SAFE`'e düştüğü.
+
+`core/manifest.py` için yeni bir dosya AÇILMADI (planın kendi kararı —
+`test_prompt_builder.py` zaten manifest-bitişik testler barındırıyor,
+gereksiz tekrar önlendi); 2 test eklendi: `build_tool_manifest()` (nesne
+formu) `danger_level`'ı TUTAR, `build_tool_manifest_json()` (modele
+giden asıl form) onu DÜŞÜRÜR ve geçerli/kompakt JSON üretir — önceki
+tek test yalnızca tüm prompt string'i üzerinden dolaylı bakıyordu.
+
+15 yeni test, 454 test paketi.

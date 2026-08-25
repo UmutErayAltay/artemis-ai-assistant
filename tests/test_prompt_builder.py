@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.manifest import build_tool_manifest, build_tool_manifest_json
 from core.plugin_loader import load_plugins
 from core.prompt_builder import build_system_prompt, strip_developer_header
 
@@ -95,3 +96,40 @@ def test_manifest_omits_danger_level() -> None:
     """
 
     assert "danger_level" not in build_system_prompt()
+
+
+# --------------------------------------------------------------------------
+# `core/manifest.py` — Faz 5 (geliştirme planı): daha önce yalnızca
+# YUKARIDAKİ testler aracılığıyla, tüm prompt string'i üzerinden dolaylı
+# sınanıyordu. Bu iki test manifest fonksiyonlarını DOĞRUDAN çağırır,
+# böylece prompt şablonu değişse bile manifest'in kendi davranışı ayrı
+# doğrulanmış olur.
+# --------------------------------------------------------------------------
+
+
+def test_build_tool_manifest_object_form_keeps_danger_level() -> None:
+    """`build_tool_manifest()` (nesne formu, geliştirici içgözlemi için)
+    `danger_level`'ı TUTMALI — düşürülen yalnızca JSON/prompt formudur
+    (bkz. `build_tool_manifest_json`)."""
+
+    manifest = build_tool_manifest()
+
+    names = [entry.name for entry in manifest]
+    assert names == sorted(names)  # alfabetik sıralı olmalı
+    assert any(entry.name == "filesystem.delete" for entry in manifest)
+    delete_entry = next(entry for entry in manifest if entry.name == "filesystem.delete")
+    assert delete_entry.danger_level is not None
+
+
+def test_build_tool_manifest_json_is_valid_compact_json_without_danger_level() -> None:
+    """`build_tool_manifest_json()` — modele giden asıl form — geçerli
+    JSON olmalı, `danger_level` İÇERMEMELİ, girintisiz (kompakt) olmalı."""
+
+    import json
+
+    raw = build_tool_manifest_json()
+    parsed = json.loads(raw)  # geçerli JSON olmalı, aksi halde exception
+
+    assert isinstance(parsed, list)
+    assert all("danger_level" not in entry for entry in parsed)
+    assert "\n" not in raw  # kompakt: girinti/satır sonu yok
