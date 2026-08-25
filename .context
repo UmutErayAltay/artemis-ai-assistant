@@ -5,10 +5,15 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.13 (test kapsamı: plugin_loader/tool_base/manifest;
-geliştirme planının Faz 0-5'i tamamlandı, sırada Faz 6-8 — Faz 6 bir
-Ollama modeli geri yüklenmesini bekliyor). Sürüm geçmişi için
-`README.md` bölüm 16-32.
+Son güncelleme: v3.14 (conversation_loop.py doc-drift + uçtan uca
+doğrulama; geliştirme planının Faz 0-5 ve 7'si tamamlandı). Sürüm
+geçmişi için `README.md` bölüm 16-33.
+
+**AÇIK KALAN TEK ŞEY: Faz 6** — sistem promptunun geçici 18.000
+karakter sınırı (§28b), bir Ollama modeli geri yüklenip gerçek gecikme
+ölçümü yapılınca kesinleştirilmeli. Makinede şu an HİÇ model yok
+(`ollama list` boş) — kullanıcı `ollama pull gemma4:e4b` (ya da
+tercih ettiği model) çalıştırdıktan sonra bu faz tamamlanabilir.
 
 ## 1) Artemis ne, tek cümleyle
 

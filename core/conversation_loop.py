@@ -1,14 +1,20 @@
-"""Metin tabanlı konuşma döngüsü.
+"""Metin tabanlı konuşma döngüsü — `python main.py --chat`.
 
-STT/TTS (Whisper / Piper-pyttsx3) hazır olana kadar geçici arayüz olarak
-terminal `input()`/`print()` kullanılır. Ses katmanı eklendiğinde yalnızca
-bu iki çağrı değiştirilecek; LLM/dispatcher/planner katmanlarında hiçbir
-değişiklik gerekmeyecek (katmanların birbirinden bağımsız olmasının
-somut faydası).
+DÜZELTME (v3.14, README §33): bu dosyanın docstring'i uzun süre "ses
+katmanı hazır olana kadar geçici arayüz" diyordu. Bu artık yanlış: ses
+katmanı v2.0'da geldi (`core/voice_loop.py`, `python main.py --voice`)
+ve bu modül GEÇİCİ olarak yerini ona bırakmadı — ikisi de KALICI, ayrı
+birer giriş noktası. `--chat` sesin uygun olmadığı (paylaşımlı bir ofis,
+mikrofon yok, betikleme/otomasyon) durumlar için terminal tabanlı bir
+alternatif sağlamaya devam ediyor.
 
 Çok adımlı komutların ("Chrome'u aç, GitHub'a git, ara") sıralı ve güvenli
 yürütülmesi `core.planner.TaskPlanner`'a devredilmiştir; bu modül yalnızca
-terminal I/O'sunu (girdi alma, onay sorma, sonuç yazdırma) sağlar.
+terminal I/O'sunu (girdi alma, onay sorma, sonuç yazdırma) sağlar — bu
+sayede yeni bir tool eklendiğinde (örn. bu oturumdaki `filesystem.rename`,
+`memory.*`, `windows.arrange_window`) burada HİÇBİR değişiklik gerekmez;
+akış zaten aynı `ToolDispatcher`/`TaskPlanner`'dan geçer (bkz. README §33
+— uçtan uca doğrulandı, varsayılmadı).
 """
 
 from __future__ import annotations

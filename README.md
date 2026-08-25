@@ -1912,3 +1912,33 @@ giden asıl form) onu DÜŞÜRÜR ve geçerli/kompakt JSON üretir — önceki
 tek test yalnızca tüm prompt string'i üzerinden dolaylı bakıyordu.
 
 15 yeni test, 454 test paketi.
+
+---
+
+## 33) `conversation_loop.py` doc-drift düzeltmesi + uçtan uca doğrulama (v3.14)
+
+Geliştirme planı Faz 7. `core/conversation_loop.py`'nin docstring'i
+uzun süre *"STT/TTS hazır olana kadar geçici arayüz"* diyordu — ses
+katmanı v2.0'da geldi (README §17) ama bu dosya o zamandan beri hiç
+gözden geçirilmemişti. Bu, projenin kendi "README §16a" dersinin
+(şema ile sistem promptu aynı sözleşmeyi konuşmalı) bir başka örneği:
+iki dosya aynı gerçeği anlatmayı bırakmıştı.
+
+Gerçek durum: `--chat` (bu dosya) ve `--voice` (`voice_loop.py`) İKİSİ
+DE kalıcı, ayrı giriş noktaları — `--chat` GEÇİCİ değil, sesin uygun
+olmadığı (paylaşımlı ofis, mikrofon yok, betikleme) durumlar için bir
+alternatif. Docstring buna göre düzeltildi.
+
+**Uçtan uca doğrulama (varsayılmadı, ölçüldü):** bu oturumda eklenen
+tool'ların (`filesystem.rename`, `memory.remember`/`recall`) hem
+`conversation_loop.run()` hem `voice_loop.py`'nin KULLANDIĞI AYNI
+`TaskPlanner`/`ToolDispatcher` nesneleri üzerinden, LLM'siz (elle
+kurulmuş bir plan ile) gerçekten çalıştığı doğrulandı — 4 adımlık bir
+plan (klasör oluştur → yeniden adlandır → hatırla → geri çağır) 4/4
+başarıyla tamamlandı. `windows.arrange_window` canlı denenmedi (gerçek
+bir pencereyi hareket ettirirdi) ama aynı `TOOL_REGISTRY`/dispatcher
+yolundan geçtiği için mimari garanti aynıdır.
+
+Geliştirme planının Faz 0-5 ve 7'si tamamlandı. Kalan: Faz 6 (prompt
+bütçesinin gerçek modelle kesinleştirilmesi — bir Ollama modeli geri
+yüklenmesini bekliyor, bkz. §28b).
