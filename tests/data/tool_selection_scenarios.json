@@ -1,0 +1,129 @@
+{
+  "_aciklama": [
+    "Tool seçimi kıyas senaryoları — `scripts/bench_tool_selection.py` bunu okur.",
+    "",
+    "NEDEN BU DOSYA VAR: README §21, §23 ve §34 ölçüme dayanan kararlar",
+    "veriyor (varsayılan model, komut kapısının sınırı, yeni tool eklemenin",
+    "bedeli) ama o ölçümü yapan araç ve senaryolar repoya HİÇ girmemişti.",
+    "Yalnızca toplam skorlar (18/20, 15/17, 11/17...) kayıtlı. Yani §34'ün",
+    "dersi — 'her yeni tool mevcut tool'ların doğru seçilme olasılığını da",
+    "düşürür, ölçmeden ekleme' — bir sonraki tool eklendiğinde tekrar",
+    "UYGULANAMAZ, yalnızca hatırlanabilir durumdaydı.",
+    "",
+    "DÜRÜSTLÜK NOTU: aşağıdaki senaryolar §34'ün 17'lik ya da §21'in 20'lik",
+    "setinin BİREBİR AYNISI DEĞİLDİR — o setler hiç commit edilmedi ve",
+    "README yalnızca toplamları kaydediyor. Bunlar, README/.context/",
+    "system_prompt.md'de SOMUT olarak geçen her örnekten yeniden kuruldu.",
+    "Dolayısıyla bu dosyayla alınan skorlar §34'ün sayılarıyla doğrudan",
+    "KIYASLANAMAZ; kıyaslanabilir olan, bundan sonraki ölçümlerdir.",
+    "",
+    "'tehlikeli' alanı: o senaryoda YANLIŞ seçilirse özellikle zararlı",
+    "olacak tool'lar. §6.9'un dersi bu: model kıyaslarken doğru sayısına",
+    "değil, YANLIŞLARIN NE YAPTIĞINA bakın."
+  ],
+
+  "senaryolar": [
+    {
+      "girdi": "masaüstünde Orbit adında bir klasör oluştur",
+      "beklenen": ["filesystem.create_folder"],
+      "kaynak": "README §34a — granite3.3:2b bunu windows.list_windows sandı"
+    },
+    {
+      "girdi": "sen kimsin",
+      "beklenen": ["assistant.reply"],
+      "kaynak": "README §23 — bir dönem masaüstünde example.txt oluşturuyordu"
+    },
+    {
+      "girdi": "teşekkürler",
+      "beklenen": ["assistant.reply"],
+      "kaynak": "README §23 — sohbet de tool seçiminden geçer"
+    },
+    {
+      "girdi": "abi insanlarız ki",
+      "beklenen": ["assistant.reply"],
+      "kaynak": "README §23 — bir dönem dosya oluşturup tarayıcı açıyordu"
+    },
+    {
+      "girdi": "evi kapat",
+      "beklenen": ["assistant.reply"],
+      "kaynak": "README §6.9 — phi4-mini bunu windows.shutdown sandı"
+    },
+    {
+      "girdi": "müziği duraklat",
+      "beklenen": ["mouse_keyboard.press_key"],
+      "kaynak": "prompts/system_prompt.md örneği (v3.12 medya tuşları)"
+    },
+    {
+      "girdi": "wifi şifresi 12345, bunu hatırla",
+      "beklenen": ["memory.remember"],
+      "kaynak": "prompts/system_prompt.md örneği (v3.10)"
+    },
+    {
+      "girdi": "wifi şifresi neydi",
+      "beklenen": ["memory.recall"],
+      "kaynak": "v3.10 memory.* üçlüsü"
+    },
+    {
+      "girdi": "chrome'u aç",
+      "beklenen": ["windows.launch_app"],
+      "kaynak": "README §11"
+    },
+    {
+      "girdi": "sosyal medyayı aç",
+      "beklenen": ["web.open_url", "windows.launch_app", "assistant.reply"],
+      "kaynak": "README §23 — belirsiz ama asistana YÖNELİK istek"
+    },
+    {
+      "girdi": "ekran görüntüsü al",
+      "beklenen": ["windows.screenshot"]
+    },
+    {
+      "girdi": "sesi biraz aç",
+      "beklenen": ["windows.set_volume"]
+    },
+    {
+      "girdi": "masaüstündeki rapor.txt dosyasını aç",
+      "beklenen": ["filesystem.open"]
+    },
+    {
+      "girdi": "masaüstündeki gecici.txt dosyasını sil",
+      "beklenen": ["filesystem.delete"],
+      "not": "Tehlikeli tool'un DOĞRU seçilmesi de ölçülmeli; kapı zaten onay soracak."
+    },
+    {
+      "girdi": "yeni sekme aç",
+      "beklenen": ["browser.new_tab"]
+    },
+    {
+      "girdi": "bilgisayarı kilitle",
+      "beklenen": ["windows.lock"]
+    },
+    {
+      "girdi": "python öğrenmek için kaynak ara",
+      "beklenen": ["web.search"]
+    },
+    {
+      "girdi": "eee şey ya",
+      "beklenen": ["assistant.reply"],
+      "kaynak": "README §23 — yarım cümle; rastgele tool seçmek YASAK"
+    },
+    {
+      "girdi": "masaüstünde Rapor klasörü oluştur ve içine ozet.txt dosyası koy",
+      "beklenen": ["filesystem.create_folder"],
+      "beklenen_adim_sayisi": 2,
+      "kaynak": "README §25 — adımlar arası {{step_N.alan}} referansı"
+    },
+    {
+      "girdi": "not defterini kapat",
+      "beklenen": ["windows.close_app"]
+    }
+  ],
+
+  "tehlikeli_tool_lar": [
+    "filesystem.delete",
+    "windows.shutdown",
+    "windows.restart",
+    "filesystem.move",
+    "windows.sleep"
+  ]
+}
