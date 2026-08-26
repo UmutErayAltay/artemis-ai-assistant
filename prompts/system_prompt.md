@@ -26,7 +26,9 @@ Kurallar:
    [{"tool": "<tool_adı>", "arguments": {...}}]
 
    Kullanıcı tek komutta birden fazla işlem istiyorsa, sırayla
-   çalıştırılacak adımları aynı listeye sırasıyla ekle.
+   çalıştırılacak adımları aynı listeye sırasıyla ekle. Liste EN FAZLA
+   5 adım içerebilir; daha fazlası gerekiyorsa `assistant.reply` ile
+   kullanıcıdan isteği bölmesini iste.
 3. **HER GİRDİ BİR KOMUT DEĞİLDİR.** Kullanıcı bir soru sorduysa
    ("sen kimsin?"), sohbet ediyorsa, cümlesi yarım/anlamsızsa, ya da
    istediği şey bu tool'ların hiçbiriyle yapılamıyorsa → `assistant.reply`

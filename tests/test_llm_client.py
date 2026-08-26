@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.llm_client import LLMResponseParseError, OllamaLLMClient
+from core.llm_client import MAX_PLAN_STEPS, LLMResponseParseError, OllamaLLMClient
 from core.plugin_loader import TOOL_REGISTRY, load_plugins
 from core.prompt_builder import build_system_prompt
 
@@ -328,3 +328,153 @@ def test_gate_rejects_background_noise(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
 
     assert OllamaLLMClient(model="fake-model").should_engage("bilmiyorum ya öyle bir şey işte") is False
+
+
+# --- Grammar düştüğünde Python'ın devraldığı denetimler (README §35) -----
+#
+# `_response_schema()` üç şeyi grammar ile FİZİKSEL olarak dayatır: her
+# eleman `tool`/`arguments` alanlı bir nesnedir, `tool` gerçek bir tool
+# adıdır, plan en fazla `MAX_PLAN_STEPS` adımdır. Ama `_chat` dört
+# stratejiyi sırayla dener ve son ikisinde (`format="json"`, kısıtsız)
+# şema hiç GÖNDERİLMEZ — o anda üç dayatma da düşer. Aşağıdaki testler,
+# o düşüşte Python tarafının aynı sözleşmeyi koruduğunu doğrular.
+
+
+def test_plan_longer_than_the_limit_is_rejected_not_silently_truncated() -> None:
+    """Sınırı aşan plan REDDEDİLİR; sessizce ilk N adıma indirilmez.
+
+    Sessiz kırpma, kullanıcıyı "5 şey istedim, 3'ü oldu" durumunda
+    bırakırdı — bu, dürüstçe başarısız olmaktan kötüdür.
+    """
+
+    one = '{"tool": "assistant.reply", "arguments": {"message": "x"}}'
+    raw = "[" + ", ".join([one] * (MAX_PLAN_STEPS + 1)) + "]"
+
+    with pytest.raises(LLMResponseParseError) as exc:
+        OllamaLLMClient.extract_tool_calls(raw)
+
+    assert str(MAX_PLAN_STEPS) in str(exc.value)
+
+
+def test_plan_exactly_at_the_limit_is_accepted() -> None:
+    """Sınırın KENDİSİ geçerli olmalı — off-by-one bir regresyon olurdu."""
+
+    one = '{"tool": "assistant.reply", "arguments": {"message": "x"}}'
+    raw = "[" + ", ".join([one] * MAX_PLAN_STEPS) + "]"
+
+    assert len(OllamaLLMClient.extract_tool_calls(raw)) == MAX_PLAN_STEPS
+
+
+def test_list_of_strings_fails_cleanly_instead_of_crashing_the_loop() -> None:
+    """ÇÖKME DÜZELTMESİ: dize listesi geçerli JSON'dur ama tool-call değil.
+
+    Bu çıktı `format="json"` altında olasıdır. Denetim olmadan
+    `planner.execute_plan` bir `str` üzerinde `.get()` çağırır,
+    `AttributeError` fırlar ve onu ne `conversation_loop.run` ne de
+    `VoiceAssistant._handle_one_command` yakalar — sohbet döngüsü ya da
+    ses işçisi ÖLÜR. Artık düzgün bir ayrıştırma hatası olur.
+    """
+
+    with pytest.raises(LLMResponseParseError):
+        OllamaLLMClient.extract_tool_calls('["filesystem.delete", "windows.shutdown"]')
+
+
+def test_hallucinated_tool_name_is_rejected() -> None:
+    """Şemasız stratejide model var olmayan bir tool adı uydurabilir.
+
+    Grammar'daki `enum` kısıtının Python karşılığı budur.
+    """
+
+    with pytest.raises(LLMResponseParseError) as exc:
+        OllamaLLMClient.extract_tool_calls('[{"tool": "filesystem.format_disk", "arguments": {}}]')
+
+    assert "filesystem.format_disk" in str(exc.value)
+
+
+def test_non_dict_arguments_are_rejected() -> None:
+    with pytest.raises(LLMResponseParseError):
+        OllamaLLMClient.extract_tool_calls('[{"tool": "assistant.reply", "arguments": "merhaba"}]')
+
+
+def test_empty_list_is_rejected() -> None:
+    """Şema `minItems: 1` der; şemasız stratejide boş liste gelebilir."""
+
+    with pytest.raises(LLMResponseParseError):
+        OllamaLLMClient.extract_tool_calls("[]")
+
+
+def test_validation_also_covers_the_native_tool_calling_path() -> None:
+    """Native yol da AYNI denetimden geçmeli — yarım güvence güvence değil.
+
+    `_extract_native_tool_calls` Ollama'nın yapısını çevirir ama içeriğini
+    doğrulamaz; adı `None` olan bir çağrı bile üretebilir.
+    """
+
+    client = OllamaLLMClient(model="test")
+    uydurma = [{"tool": "windows.format_c", "arguments": {}}]
+
+    def _fake_chat(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, object]] | None]:
+        return "", uydurma
+
+    client._chat = _fake_chat  # type: ignore[method-assign]
+
+    with pytest.raises(LLMResponseParseError):
+        client.get_tool_calls("sistem", "bir şey yap", max_retries=0)
+
+
+# --- Şema <-> prompt sözleşmesi (CLAUDE.md'nin açık kuralı) --------------
+#
+# README §16a'nın dersi: bir güvenilirlik katmanı eklerken o katmanın başka
+# bir özelliğin sözleşmesini daraltıp daraltmadığı kontrol edilmeli.
+# Grammar-constrained decoding, şemanın YASAKLADIĞI bir biçimi modelin
+# ÜRETMESİNİ fiziksel olarak imkânsız kılar — yani ikisi aynı şeyi
+# söylemek ZORUNDA. Aşağıdakiler o eşitliğin bekçileridir.
+
+
+def test_schema_forbids_extra_fields_just_like_the_prompt_does() -> None:
+    """Prompt `"response"` gibi fazladan alanı YASAKLIYOR; şema da yasaklamalı.
+
+    Bir dönem prompt yasaklıyor, şema izin veriyordu: kural yalnızca bir
+    talimattı, fiziksel bir kısıt değildi.
+    """
+
+    schema = OllamaLLMClient._response_schema()
+
+    assert schema["items"]["additionalProperties"] is False
+    assert "tool" in schema["items"]["properties"]
+    assert "arguments" in schema["items"]["properties"]
+
+
+def test_step_limit_is_stated_in_the_prompt_not_only_in_the_schema() -> None:
+    """`maxItems` prompta yazılmazsa model sınırı bilmeden aşar.
+
+    Grammar üretimi ortadan keser; ne model ne kullanıcı sebebini öğrenir.
+    """
+
+    prompt = build_system_prompt()
+
+    assert str(MAX_PLAN_STEPS) in prompt, (
+        f"Sistem promptu {MAX_PLAN_STEPS} adım sınırından hiç söz etmiyor; "
+        "şema onu dayatıyor ama model bilmiyor."
+    )
+
+
+def test_schema_step_limit_matches_the_constant() -> None:
+    assert OllamaLLMClient._response_schema()["maxItems"] == MAX_PLAN_STEPS
+
+
+def test_command_gate_schema_enum_matches_the_gate_constants() -> None:
+    """Kapının şeması ve sabitleri ayrı ayrı yazılmış İKİNCİ bir sözleşme.
+
+    `should_engage`, modelin cevabını `_GATE_ENGAGE` ile karşılaştırır;
+    şema ise `enum` ile neyin üretilebileceğini belirler. İkisi ayrışırsa
+    kapı SESSİZCE hep aynı cevabı verir — üstelik "karar verilemezse
+    True" kuralı yüzünden hep AÇIK tarafa düşerek.
+    """
+
+    from core.llm_client import _COMMAND_GATE_SCHEMA, _GATE_ENGAGE, _GATE_NOISE
+
+    enum_values = _COMMAND_GATE_SCHEMA["properties"]["karar"]["enum"]
+
+    assert set(enum_values) == {_GATE_ENGAGE, _GATE_NOISE}
+    assert _GATE_ENGAGE != _GATE_NOISE

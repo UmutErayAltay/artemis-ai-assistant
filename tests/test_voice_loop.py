@@ -321,6 +321,114 @@ def test_dangerous_tool_runs_after_clear_spoken_approval(
     assert not victim.exists(), "Onaylanan silme işlemi gerçekleşmeliydi"
 
 
+# --- Sesli onay: Türkçe olumsuzluk (README §35 regresyonu) ---------------
+#
+# Bu testlerin varlık sebebi ÖLÇÜLMÜŞ bir arızadır: onay kontrolü bir dönem
+# `any(word in answer for word in _AFFIRMATIVE_WORDS)` idi — yani ALT DİZE
+# araması. Türkçe eklemeli bir dil olduğu ve olumsuzluk bir EK olduğu için
+# olumlu kök, olumsuz sözcüğün içinde geçer ("yapma" ⊃ "yap"). Sonuç:
+# kullanıcı `filesystem.delete` onayına "hayır yapma" dediğinde dosya
+# SİLİNİYORDU. Mevcut testler bunu yakalayamamıştı çünkü hiçbiri gerçek bir
+# Türkçe reddi denemiyordu — "kapıyı kapat" gibi alakasız bir cevap
+# tesadüfen hiçbir onay sözcüğünü alt dize olarak içermiyor.
+
+
+REDDEDILMESI_GEREKEN_CEVAPLAR = [
+    "hayır yapma",
+    "yapma",
+    "hayır",
+    "onaylamıyorum",
+    "kabul etmiyorum",
+    "istemiyorum",
+    "hayır tamamen vazgeçtim",
+    "devam etme",
+    "yapmam",
+    "olmaz",
+    "yapmayacağım",
+    "iptal",
+    "dur",
+    "vazgeçtim",
+    "",
+    "kapıyı kapat",
+]
+
+ONAYLANMASI_GEREKEN_CEVAPLAR = [
+    "evet",
+    "tamam",
+    "onaylıyorum",
+    "olur",
+    "kabul",
+    "evet onayla",
+    "Evet!",
+    "Tamam, onaylıyorum.",
+]
+
+
+@pytest.mark.parametrize("answer", REDDEDILMESI_GEREKEN_CEVAPLAR)
+def test_spoken_refusal_is_never_treated_as_approval(
+    dispatcher: ToolDispatcher, settings: Settings, answer: str
+) -> None:
+    """GÜVENLİK: net bir onay OLMAYAN her cevap RED sayılmalı.
+
+    Özellikle Türkçe olumsuz çekimleri: "yapma", "etmiyorum", "olmaz"...
+    Bunların hepsi olumlu bir kökü ALT DİZE olarak içerir.
+    """
+
+    overlay = FakeOverlay()
+    assistant = VoiceAssistant(dispatcher, FakeLLM(), overlay, settings)
+    assistant._tts = FakeTTS()
+    assistant._active_mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+    assistant._stt = FakeSTT(answer)
+
+    approved = assistant._confirm_by_voice("filesystem.delete", {"target": "x"})
+
+    assert approved is False, f"{answer!r} onay sayıldı — geri alınamaz işlem çalışırdı"
+
+
+@pytest.mark.parametrize("answer", ONAYLANMASI_GEREKEN_CEVAPLAR)
+def test_clear_spoken_approval_is_accepted(
+    dispatcher: ToolDispatcher, settings: Settings, answer: str
+) -> None:
+    """Net bir onay reddedilmemeli — kapı asimetrik ama kullanılamaz değil."""
+
+    overlay = FakeOverlay()
+    assistant = VoiceAssistant(dispatcher, FakeLLM(), overlay, settings)
+    assistant._tts = FakeTTS()
+    assistant._active_mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+    assistant._stt = FakeSTT(answer)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is True
+
+
+def test_spoken_refusal_actually_spares_the_file_end_to_end(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """Uçtan uca: "hayır yapma" dendiğinde dosya GERÇEKTEN durmalı.
+
+    Yukarıdaki birim testleri `_confirm_by_voice`'u doğrudan çağırıyor;
+    bu test aynı şeyi GERÇEK dispatcher ve GERÇEK `filesystem.delete`
+    üzerinden yapar — onay kapısının bu düzeltmeden sonra da zincirin
+    içinde işlediğini kanıtlar (bkz. modül başındaki not).
+    """
+
+    settings.desktop_path.mkdir(parents=True, exist_ok=True)
+    victim = settings.desktop_path / "onemli.txt"
+    victim.write_text("silinmemeli", encoding="utf-8")
+
+    overlay = FakeOverlay()
+    llm = FakeLLM([{"tool": "filesystem.delete", "arguments": {"target": "onemli.txt", "location": "desktop"}}])
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "onemli.txt dosyasını sil")
+
+    mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+    assistant._active_mic = mic
+    assistant._stt = FakeSTT("hayır yapma")
+
+    assistant._handle_one_command(mic)
+
+    assert victim.exists(), "Sesli olarak REDDEDİLEN silme işlemi dosyayı yok etti"
+    assert victim.read_text(encoding="utf-8") == "silinmemeli"
+
+
 def test_confirmation_without_active_microphone_is_refused(
     dispatcher: ToolDispatcher, settings: Settings
 ) -> None:

@@ -48,11 +48,134 @@ _FEEDBACK_COOLDOWN_SECONDS = 0.6
 """Artemis konuştuktan sonra, kendi yankısını duymamak için beklenen süre."""
 
 _AFFIRMATIVE_WORDS = frozenset(
-    {"evet", "onayla", "onaylıyorum", "tamam", "olur", "kabul", "devam", "yap"}
+    {"evet", "onayla", "onaylıyorum", "onayliyorum", "tamam", "olur", "kabul"}
 )
-"""Sesli onayda kabul edilen sözcükler. Bunun DIŞINDAKİ her şey RED sayılır."""
+"""Sesli onayda kabul edilen sözcükler. Bunun DIŞINDAKİ her şey RED sayılır.
+
+`"yap"` ve `"devam"` BİLEREK ÇIKARILDI: ikisi de tek başına net bir onay
+değil ve olumsuz çekimlerinin (`"yapma"`, `"devam etme"`) kökü aynı olduğu
+için ayırt edilmeleri kırılgan. Bir onay sözcüğü, YANLIŞ duyulduğunda
+geri alınamaz bir işlemi çalıştıracak kadar net olmalıdır.
+"""
+
+_NEGATIVE_WORDS = frozenset(
+    {
+        "hayır",
+        "hayir",
+        "yapma",
+        "etme",
+        "iptal",
+        "dur",
+        "durdur",
+        "vazgeç",
+        "vazgectim",
+        "vazgeçtim",
+        "olmaz",
+        "istemiyorum",
+        "onaylamıyorum",
+        "onaylamiyorum",
+        "hayır!",
+    }
+)
+"""Duyulduğunda onayı KOŞULSUZ reddeden sözcükler.
+
+Türkçe eklemeli bir dildir ve olumsuzluk bir EKTİR: `"yapma"` sözcüğü
+`"yap"`ı, `"onaylamıyorum"` `"onayla"`yı, `"tamamen"` `"tamam"`ı ALT DİZE
+olarak içerir. Bu yüzden onay kontrolü alt dize araması OLAMAZ (bir dönem
+öyleydi ve *"hayır yapma"* cevabı işlemi ÇALIŞTIRIYORDU — bkz. README §35).
+
+Ayrıca `"hayir"`/`"vazgectim"` gibi noktasız yazımlar da listede: Whisper
+Türkçe çıktısında noktalama/aksan tutarlı değildir, ve `str.lower()` Türkçe
+yerel ayarı kullanmaz (`"HAYIR".lower()` -> `"hayir"`).
+"""
+
+_WORD_SPLIT_RE = re.compile(r"[^\wçğıöşüÇĞİÖŞÜ]+", re.UNICODE)
+"""Onay cevabını sözcüklere ayırır; noktalama ayırıcı sayılır, Türkçe
+harfler sözcüğün parçası kalır."""
+
+_NEGATION_SUFFIX_RE = re.compile(
+    r"(m[ıiuü]yor|m[ae]z|m[ae]yece|m[ae]m$|[a-zçğıöşü]{2,}m[ae]$)",
+    re.UNICODE,
+)
+"""Türkçe olumsuzluk EKİNİ sözcük sonunda yakalar.
+
+`_NEGATIVE_WORDS` sabit bir liste; ama Türkçe eklemeli bir dil olduğu için
+olumsuzluk sonsuz sayıda çekim üretir ve hepsini listelemek mümkün DEĞİL::
+
+    "kabul etmiyorum"   -> etmiyorum   (m + ıyor)
+    "onaylamıyorum"     -> onaylamıyorum
+    "yapmam"            -> yapmam      (m + am)
+    "olmaz"             -> olmaz       (m + az)
+    "yapmayacağım"      -> yapmayaca...(m + ayaca)
+    "yapma"             -> yapma       (kök + ma)
+
+Son dal (`[a-zçğıöşü]{2,}m[ae]$`) en az iki harflik bir kökten sonra gelen
+`-ma`/`-me` emir olumsuzunu yakalar (`"yapma"`, `"etme"`, `"silme"`).
+
+Bu SEZGİSEL bir kural, tam bir çekim çözümleyici değil; bu yüzden
+`_AFFIRMATIVE_WORDS`'teki sözcükler bu testten MUAF tutulur (bkz.
+`_is_affirmative`). Aksi halde `"tamam"` sözcüğü `m[ae]m$` dalına
+takılır ("ta-**mam**") ve geçerli bir onay reddedilirdi.
+
+YANLIŞ POZİTİF BİLİNÇLİ OLARAK TERCİH EDİLİR: bu kapı asimetriktir
+(`.context` §6.5). Yanlışlıkla reddedilen bir onay kullanıcıya yalnızca
+"tekrar söyle" dedirtir; yanlışlıkla kabul edilen bir onay geri alınamaz
+bir işlemi çalıştırır.
+"""
 
 _CONFIRMATION_TIMEOUT_SECONDS = 8.0
+
+def _is_affirmative(answer: str) -> bool:
+    """Duyulan onay cevabının NET bir onay olup olmadığına karar verir.
+
+    Kural asimetriktir ve bu bilinçlidir (bkz. `.context` §6.5): onay
+    istenen tool'lar geri alınamaz işlemler yapar ve ses tanıma hata
+    yapar. Bu yüzden **yalnızca net bir onay duyulursa** True döner;
+    sessizlik, anlaşılmayan cevap, boş dize — hepsi False'tur.
+
+    İKİ KATMAN, BU SIRAYLA:
+
+    1. **Olumsuzluk vetosu**: cevapta `_NEGATIVE_WORDS`'ten bir sözcük
+       varsa, başka ne varsa olsun RED. *"Hayır, tamam boş ver"* gibi bir
+       cevapta hem olumsuz hem olumlu sözcük geçer; böyle bir belirsizlikte
+       güvenli taraf durmaktır.
+    2. **Sözcük seviyesinde** (ALT DİZE DEĞİL) olumlu eşleşme.
+
+    Alt dize araması NEDEN OLMAZ: Türkçede olumsuzluk bir ektir, yani
+    olumlu kök olumsuz sözcüğün İÇİNDE geçer::
+
+        "yapma"        icerir "yap"
+        "onaylamıyorum" icerir "onayla"
+        "tamamen"      icerir "tamam"
+        "devam etme"   icerir "devam"
+
+    Bu fonksiyondan önce burada `any(word in answer for word in
+    _AFFIRMATIVE_WORDS)` vardı; yani kullanıcı `filesystem.delete` onayına
+    *"hayır yapma"* dediğinde işlem ÇALIŞIYORDU (README §35).
+
+    Args:
+        answer: `_listen_for_confirmation`'dan gelen, küçük harfe
+            çevrilmiş ham metin (duyulamadıysa boş dize).
+
+    Returns:
+        Yalnızca net bir onay duyulduysa True.
+    """
+
+    words = {word for word in _WORD_SPLIT_RE.split(answer.strip().lower()) if word}
+    if not words:
+        return False
+    if words & _NEGATIVE_WORDS:
+        return False
+    # Sezgisel ek testi yalnızca TANIMADIĞIMIZ sözcüklere uygulanır:
+    # `"tamam"` sözcüğü `m[ae]m$` dalına takılır ("ta-mam"), oysa geçerli
+    # bir onaydır. Muafiyet güvenliği zayıflatmaz — muaf tutulan küme,
+    # zaten olumsuzluk içermeyen 7 sabit sözcüktür.
+    unknown_words = words - _AFFIRMATIVE_WORDS
+    if any(_NEGATION_SUFFIX_RE.search(word) for word in unknown_words):
+        return False
+    return bool(words & _AFFIRMATIVE_WORDS)
+
+
 
 _WINDOWS_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+")
 _URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
@@ -391,7 +514,7 @@ class VoiceAssistant:
         self._speak(f"{tool_name} işlemi onay gerektiriyor. Onaylıyor musunuz?")
 
         answer = self._listen_for_confirmation()
-        approved = any(word in answer for word in _AFFIRMATIVE_WORDS)
+        approved = _is_affirmative(answer)
 
         logger.info(
             "Sesli onay: tool=%s duyulan=%r sonuç=%s",
