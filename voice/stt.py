@@ -270,6 +270,46 @@ class SpeechToText:
         audio_array = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
         model = self._ensure_model()
-        segments, _info = model.transcribe(audio_array, language="tr", hotwords=hotwords or None)
+
+        # `SpeechRecorder` konuşma bitene karar vermek için kullanıcı
+        # sustuktan sonra `silence_timeout` (varsayılan 1.2 sn) kadar
+        # dinlemeye devam eder ve bu süre boyunca toplanan ses (oda
+        # gürültüsü, nefes, mikrofon taban gürültüsü) de arabelleğe
+        # eklenir (bkz. `SpeechRecorder.feed`) — yani buraya gelen
+        # `audio_array` neredeyse HER ZAMAN konuşmanın arkasında bir
+        # gürültü kuyruğu taşır. Whisper'ın bilinen bir zaafı, sessizlik/
+        # düşük seviyeli gürültü verildiğinde halüsinasyon yapması
+        # (var olmayan kelime uydurması) ve bunun cümlenin geri kalanının
+        # çözülme biçimini de bozabilmesidir.
+        #
+        # Bu proje aynı sorunu bir kez, başka bir bağlamda ölçüp çözmüştü:
+        # `voice/wake_word.py::WakeWordDetector._recognize` uyandırma
+        # sözcüğü tanımasında `vad_filter=True` kullanıyor ve kod
+        # yorumunda ölçülmüş kanıt var ("vad_filter=False -> ortam
+        # gürültüsünden 'Hızlı, hızlı, hızlı'; vad_filter=True -> boş").
+        # O düzeltme yalnızca uyandırma sözcüğüne uygulanmış, asıl komut
+        # tanımasına hiç taşınmamıştı — burada aynı, zaten kanıtlanmış
+        # desen uygulanıyor. Özel `vad_parameters` GEÇİLMEZ:
+        # faster-whisper'ın Silero VAD varsayılanları (`min_silence_
+        # duration_ms=2000` vb.) zaten muhafazakâr — yalnızca ≥2 sn'lik
+        # sessizlikleri keser, cümle içi doğal duraklamalara dokunmaz.
+        segments, _info = model.transcribe(
+            audio_array, language="tr", hotwords=hotwords or None, vad_filter=True
+        )
         text = "".join(segment.text for segment in segments).strip()
+
+        if not text:
+            # Koşulsuz boş sonucu kabul etmek yasak (CLAUDE.md'nin
+            # "koşulsuz success=True yasak" ilkesiyle aynı ruhta): VAD
+            # tüm klibi "sessizlik" sayıp silmiş olabilir (kısık konuşma,
+            # düşük mikrofon kazancı). Bu durumda kullanıcı "Sizi
+            # duyamadım" duyar (bkz. `core/voice_loop.py::_handle_one_
+            # command`) — bu, wake-word'deki bir yanlış negatiften daha
+            # pahalıdır (orada kullanıcı basitçe tekrar dener). Bu yüzden
+            # BİR KEZ, VAD olmadan tekrar denenir.
+            segments, _info = model.transcribe(
+                audio_array, language="tr", hotwords=hotwords or None, vad_filter=False
+            )
+            text = "".join(segment.text for segment in segments).strip()
+
         return text

@@ -109,8 +109,10 @@ class Settings(BaseModel):
             sabit enerji eşiği, ortam gürültüsü değişken olduğu için bu
             işi yapamıyordu (bkz. `voice/wake_word.py`). Klasör yoksa
             enerji eşiğine düşülür, asistan çalışmaya devam eder.
-        whisper_device: Whisper'ın çalışacağı cihaz: "cpu" (varsayılan)
-            veya "cuda". **"auto" KULLANMAYIN.** faster-whisper'ın kendi
+        whisper_device: Whisper'ın çalışacağı cihaz: "cpu" veya "cuda"
+            (varsayılan — GPU'su olmayan/CUDA kurulu olmayan makinelerde
+            `resolve_device()` otomatik olarak "cpu"ya düşer, bkz.
+            `voice/gpu.py`). **"auto" KULLANMAYIN.** faster-whisper'ın kendi
             varsayılanı "auto"dur ve makinede bir NVIDIA GPU görürse
             CUDA'yı seçer; CUDA çalışma kütüphaneleri (cuBLAS/cuDNN)
             kurulu değilse bu, model yüklenirken değil İLK TANIMA

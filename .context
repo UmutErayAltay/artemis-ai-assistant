@@ -5,10 +5,25 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.16 (denetim teslimatı — iki sessiz güvenlik deliği
-kapatıldı, CI/ruff/mypy kuruldu, ölçüm aracı repoya girdi). Geliştirme
-planının TAMAMI (Faz 0-8) tamamlandı. Sürüm geçmişi için `README.md`
-bölüm 16-35.
+Son güncelleme: v3.17 (komut tanımada VAD eksikliği düzeltildi — ses
+tanıma doğruluğu şikayeti). Geliştirme planının TAMAMI (Faz 0-8)
+tamamlandı. Sürüm geçmişi için `README.md` bölüm 16-36.
+
+**v3.17 — kullanıcı gerçek kullanımdan bildirdi (README §36):** komut
+tanımada (`voice/stt.py`) `vad_filter` hiç kullanılmıyordu; aynı düzeltme
+uyandırma sözcüğünde (`voice/wake_word.py`) zaten ÖLÇÜLÜP uygulanmıştı
+ama komut tanımaya hiç taşınmamıştı. `SpeechRecorder`'ın konuşma sonrası
+~1.2 saniyelik gürültü kuyruğunu da arabelleğe eklemesi, bu sesin
+filtresiz Whisper'a gitmesiyle birleşince kelime düzeyinde yanlış
+tanımaya yol açıyordu. Artık `vad_filter=True` + boş sonuçta VAD'sız tek
+geri düşme var. **DOĞRULANMADI**: gerçek mikrofon/Türkçe konuşma yok,
+kullanıcı denemeli (README §36e).
+
+**Ayrıca bulunan ama BU şikayetle ilgisiz olduğu doğrulanan bir hata**
+(README §36d): "Artemis" + komut aynı nefeste söylenirse
+`WakeWordDetector` komutu sessizce kaybediyor. Kullanıcı bunu
+yaşamadığını doğruladı; tasarımı hazır ama UYGULANMADI, ayrı bir istekte
+ele alınmalı.
 
 **v3.16 — ÖNEMLİ, herkes okumalı (README §35):** sesli onay bir dönem
 "hayır yapma" gibi Türkçe reddetme cevaplarını ONAY sayıyordu (alt dize
@@ -112,7 +127,7 @@ docstring'i, README §28b) — bir model geri yüklenince gerçek gecikme
 ölçümüyle
 KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
-Test durumu: **590 geçiyor, 4 devre dışı** (v1.2 öncesi: 48 geçiyor,
+Test durumu: **593 geçiyor, 4 devre dışı** (v1.2 öncesi: 48 geçiyor,
 4 kırık; v3.15 sonu: 454 geçiyor ama üç dosya Linux'ta hiç
 TOPLANAMIYORDU — v3.16'da düzeltildi, bkz. README §35h). Devre dışı
 dördü `@pytest.mark.disruptive`/platform işaretli — gerçek makineyi
@@ -471,31 +486,44 @@ CLAUDE.md'de "henüz yok" diye işaretlenmiş üç plugin'in (browser,
 mouse_keyboard, mcp) üçü de tamamlandı (v3.6/v3.7); CLAUDE.md da bu
 oturumda güncellendi.
 
-0. **v3.16'nın DOĞRULANMAMIŞ değişiklikleri — ÖNCELİKLİ.** Bu denetim
-   Linux'ta yapıldı; aşağıdakiler kullanıcının Windows/gerçek-Ollama
-   makinesinde denenmeli (tam liste ve gerekçe README §35l):
+0. **v3.16/v3.17'nin DOĞRULANMAMIŞ değişiklikleri — ÖNCELİKLİ.** Bu
+   denetim Linux'ta, gerçek mikrofon/Ollama olmadan yapıldı; aşağıdakiler
+   kullanıcının Windows/gerçek-Ollama makinesinde denenmeli:
    - Altı `windows.*` düzeltmesi (shutdown/restart/lock/sleep/
      clipboard_copy/focus_window) — sahte win32 ile test edildi,
-     GERÇEK Windows'ta çalıştırılmadı.
+     GERÇEK Windows'ta çalıştırılmadı (README §35l).
    - Sesli onay düzeltmesi (`_is_affirmative`) — sahte STT ile test
-     edildi, gerçek mikrofonla denenmedi.
+     edildi, gerçek mikrofonla denenmedi (README §35l).
    - `python scripts/bench_tool_selection.py --model gemma4:e4b` —
      betiğin mantığı sahte istemciyle sınandı, GERÇEK modelle hiç
      çalıştırılmadı. Bu, `gemma4:e4b`'nin varsayılan kalıp kalmayacağını
-     da bir sonraki tool eklemeden önce yeniden doğrulamanın yoludur.
-1. **`browser.*` altı tool'unun tek `browser.control` tool'una
+     da bir sonraki tool eklemeden önce yeniden doğrulamanın yoludur
+     (README §35l).
+   - `voice/stt.py`'ye eklenen `vad_filter=True` — gerçek Türkçe
+     konuşma/mikrofon/arka plan gürültüsüyle etkisi ÖLÇÜLMEDİ. Kullanıcı
+     `logs/artemis.log`'daki "Duyulan komut: ..." satırlarıyla
+     öncesi/sonrasını karşılaştırmalı (README §36e).
+1. **"Artemis" + komut aynı nefeste söylenirse komut kayboluyor —
+   BULUNDU ama UYGULANMADI (README §36d).** v3.17'de sesli komut
+   şikayeti araştırılırken bulundu; kullanıcı BU senaryoyu
+   yaşamadığını doğruladığı için o oturumun kapsamı dışında bırakıldı.
+   Tasarımı hazır: `WakeWordDetector`'a mevcut `feed()` imzasını
+   bozmayan bir `take_leftover_audio()` "pull" metodu eklenip
+   `core/voice_loop.py::_record_and_transcribe`'ın kayda bunu baştan
+   eklemesi. Kullanıcı isterse ayrı bir istekte uygulanmalı.
+2. **`browser.*` altı tool'unun tek `browser.control` tool'una
    indirilmesi YAPILMADI — bilerek.** §34'ün dersi gereği (her tool
    mevcutların doğru seçilme olasılığını düşürür) bu ölçülebilir bir
    kazanç olabilir, ama aynı gerekçeyle ölçülmeden yapılmamalı. Madde 0
    (bench) koşulduktan SONRA, önce/sonra kıyasıyla karar verilmeli.
-2. **`ruff format` uygulanmadı, CI'a eklenmedi.** Depo biçimlendiriciye
+3. **`ruff format` uygulanmadı, CI'a eklenmedi.** Depo biçimlendiriciye
    göre 42 dosyada farklı — mekanik ama tek seferde uygulanırsa anlamlı
    diff'i gözden geçirilemez kılar. Ayrı, tek başına bir commit'te
    yapılıp sonra CI adımı açılmalı.
-3. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
+4. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
    bitti, artık kullanılmıyor — yer gerekiyorsa
    `ollama rm gemma4:12b` ile silinebilir.
-4. **MCP v1 yalnızca stdio taşımasını destekliyor** (§6.13). Uzak/HTTP
+5. **MCP v1 yalnızca stdio taşımasını destekliyor** (§6.13). Uzak/HTTP
    sunucular (SSE) bilerek eklenmedi — hiçbir kullanıcı istemedi,
    hipotetik ihtiyaç için yazılmadı. Aynı desenle (`mcp.client.sse`)
    ileride eklenebilir.

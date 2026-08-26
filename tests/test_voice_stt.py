@@ -239,3 +239,97 @@ def test_model_load_failure_raises_clear_error(monkeypatch: pytest.MonkeyPatch) 
     stt = SpeechToText()
     with pytest.raises(SpeechRecognitionUnavailableError):
         stt.transcribe(_speech_block(duration=1.0))
+
+
+# --- VAD filtresi (README §36) --------------------------------------------
+#
+# `SpeechRecorder` konuşma bitene karar vermek için kullanıcı sustuktan
+# sonra `silence_timeout` kadar dinlemeye devam eder ve bu süre boyunca
+# toplanan sesi (gürültü kuyruğunu) arabelleğe dahil eder — yani
+# `transcribe()`'a giden ses neredeyse her zaman arkasında bir gürültü
+# kuyruğu taşır. `voice/wake_word.py`'nin zaten ölçtüğü ("vad_filter=False
+# -> ortam gürültüsünden halüsinasyon, vad_filter=True -> doğru") deseni
+# buraya da taşımanın bekçileri.
+
+
+def test_transcribe_passes_vad_filter_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    received = {}
+
+    class _FakeSegment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            received["vad_filter"] = kwargs.get("vad_filter")
+            return iter([_FakeSegment("merhaba")]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert received["vad_filter"] is True
+
+
+def test_transcribe_retries_without_vad_when_vad_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """VAD tüm klibi 'sessizlik' sayıp silmiş olabilir (kısık konuşma,
+    düşük mikrofon kazancı). Komut akışında boş dönüş kullanıcıya "Sizi
+    duyamadım" dedirtir — koşulsuz kabul edilmemeli, BİR KEZ VAD'sız
+    tekrar denenmeli."""
+
+    calls = []
+
+    class _FakeSegment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            calls.append(kwargs.get("vad_filter"))
+            if kwargs.get("vad_filter"):
+                return iter([]), types.SimpleNamespace()  # VAD tüm sesi sildi
+            return iter([_FakeSegment("merhaba")]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    text = SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert text == "merhaba"
+    assert calls == [True, False], "önce VAD ile, boş dönünce VAD'sız TAM OLARAK bir kez daha denenmeli"
+
+
+def test_transcribe_does_not_retry_when_vad_returns_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Normal durumda (VAD boş dönmüyor) ikinci bir çağrı YAPILMAMALI —
+    gereksiz gecikme regresyonuna karşı."""
+
+    calls = []
+
+    class _FakeSegment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            calls.append(kwargs.get("vad_filter"))
+            return iter([_FakeSegment("merhaba")]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert calls == [True], f"gereksiz ikinci çağrı yapıldı: {calls}"

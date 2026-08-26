@@ -2282,3 +2282,95 @@ denenmedi** ve kullanıcının doğrulaması gerekiyor:
 **Ders (bu bölümün tamamı için)**: "doğrulanmadı"yı "doğrulandı" gibi
 yazmak, bu teslimatta düzeltilen hataların ta kendisidir. Bir denetim
 teslimatı, kendi sınırlarını da raporlamak zorundadır.
+
+## 36) Komut tanımada VAD eksikti — aynı düzeltme bir yerde vardı, diğerinde yoktu (v3.17)
+
+Kullanıcı şikayeti basitti: *"asistan söylediklerimi Google'ın mikrofonu
+kadar net anlamıyor."* Sorgulamayla iki olası neden elendi — kullanıcı
+"Artemis" dedikten sonra duraklayıp komutu ayrı söylüyor (yani §37'de
+[aşağıda] bahsedilen "aynı nefeste söyleme" sorunu bu değil) ve log'da
+GPU/`large-v3-turbo` doğru yükleniyor (küçük modele düşme yok). Belirti
+saf: doğru model, doğru cihaz, ama **kelimeler yanlış duyuluyor.**
+
+### 36a) Kök neden: komut kaydına giden ses her zaman bir gürültü kuyruğu taşıyor
+
+`voice/stt.py::SpeechRecorder`, konuşmanın bittiğine karar vermek için
+kullanıcı sustuktan sonra `silence_timeout` (varsayılan 1.2 sn) kadar
+mikrofonu dinlemeye devam eder — ve bu süre boyunca toplanan HER ŞEY
+(`feed()`, sessizlik/konuşma ayrımı yapmadan `self._buffer += block`)
+arabelleğe eklenir. Yani `SpeechToText.transcribe()`'a giden ses,
+kullanıcının konuşmasının hemen ardından ~1.2 saniyelik oda gürültüsü/
+nefes/mikrofon taban gürültüsü taşır. Bu ses hiçbir filtreden geçmeden
+doğrudan Whisper'a veriliyordu:
+
+```python
+segments, _info = model.transcribe(audio_array, language="tr", hotwords=hotwords or None)
+```
+
+Whisper'ın bilinen bir zaafı, sessizlik/düşük seviyeli gürültü verildiğinde
+HALÜSİNASYON yapması (var olmayan kelime/cümle üretmesi) ve bunun cümlenin
+geri kalanının çözülme biçimini de bozabilmesidir.
+
+### 36b) Bu proje aynı sorunu ZATEN bir kez çözmüştü — ama başka bir yerde
+
+`voice/wake_word.py::WakeWordDetector._recognize`, uyandırma sözcüğü
+tanımasında `vad_filter=True` kullanıyor ve kod yorumunda ÖLÇÜLMÜŞ bir
+kanıt var:
+
+    vad_filter=False -> ortam gürültüsünden "Hızlı, hızlı, hızlı" üretiyor
+    vad_filter=True  -> boş (doğru)
+
+Bu düzeltme yalnızca uyandırma sözcüğüne uygulanmış, asıl komut tanımasına
+(`voice/stt.py`) hiç taşınmamıştı. Aynı, zaten kanıtlanmış desen artık
+`SpeechToText.transcribe()`'a da uygulandı — özel `vad_parameters` GEÇİLMEDİ
+(faster-whisper'ın Silero VAD varsayılanları, `min_silence_duration_ms=2000`
+gibi, zaten muhafazakâr: yalnızca ≥2 sn'lik sessizlikleri keser, cümle içi
+doğal duraklamalara dokunmaz).
+
+**Ders**: bir düzeltmeyi bir yerde ölçüp uyguladıktan sonra, AYNI
+mekanizmanın (STT çağrısı) başka bir kullanım yerine (komut tanıma) de
+taşınıp taşınmadığını kontrol etmek gerekir. Ölçülmüş bir çözüm, yalnızca
+ilk uygulandığı yerde fayda sağlıyorsa yarım kalmış demektir.
+
+### 36c) Koşulsuz boş sonuç kabul etmek de yasak
+
+`vad_filter=True` kendi başına yeni bir risk taşır: VAD, kısık konuşan ya
+da mikrofon kazancı düşük bir kullanıcının TÜM klibini "sessizlik" sayıp
+silebilir. Komut akışında bu, kullanıcının *"Sizi duyamadım"* duyması
+demek — wake-word'deki bir yanlış negatiften (kullanıcı basitçe tekrar
+dener) daha pahalı bir hata sınıfı. CLAUDE.md'nin "koşulsuz `success=True`
+yasak" ilkesiyle aynı ruhta: `transcribe()` artık VAD boş dönerse BİR KEZ,
+VAD OLMADAN tekrar dener. `no_speech_prob` bazlı segment filtresi
+(`wake_word.py`'de var) bilinçli olarak taşınmadı — o, SÜREKLİ dinlenen
+(çoğunlukla gürültü) bir akış için; komut STT'si zaten "kullanıcı
+konuştu" kararı verilmiş TEK bir klip üzerinde çalışıyor.
+
+### 36d) Ayrıca bulunan, ama bu şikayetle İLGİSİZ olduğu doğrulanan bir hata
+
+Araştırma sırasında `voice/wake_word.py::WakeWordDetector`'ın, kullanıcı
+"Artemis" ile komutu AYNI NEFESTE (duraksamadan) söylerse, komutun
+tamamını sessizce kaybettiği bulundu — dedektör tüm cümleyi kendi
+arabelleğinde toplayıp yalnızca uyandırma sözcüğü var mı diye kontrol
+ediyor, geri kalanını hiçbir yere aktarmadan atıyor. Bu GERÇEK bir hata,
+ama kullanıcı sorgulamayla bunu YAŞAMADIĞINI (komuttan önce duruyor)
+doğruladı — yani bu bölümün kapsamı dışında bırakıldı. Tasarımı hazır
+(`WakeWordDetector`'a mevcut `feed()` imzasını bozmayan bir
+`take_leftover_audio()` "pull" metodu eklenip `core/voice_loop.py`'nin
+kayda bunu baştan eklemesi) ama uygulanmadı; ayrı bir istekte ele alınmalı.
+
+**Ders**: bir kullanıcı şikayeti geldiğinde ilk akla gelen olası neden
+(burada: "aynı nefeste söyleme") HER ZAMAN doğru teşhis olmayabilir.
+Sorgulamadan doğrudan bir hatayı düzeltmeye girişmek, gerçek sorunu
+ıskalayıp ilgisiz bir değişiklik yapma riski taşır.
+
+### 36e) DOĞRULANMADI — kullanıcının denemesi gerekiyor
+
+Bu ortamda gerçek mikrofon, gerçek Türkçe konuşma, gerçek arka plan
+gürültüsü ve gerçek Ollama YOK. Yukarıdaki teşhis kod okumasıyla
+doğrulandı (mekanizma kesin), ama düzeltmenin GERÇEKTEN doğruluğu
+iyileştirdiği ÖLÇÜLMEDİ. Kullanıcı birkaç günlük-konuşma tarzı komut
+söyleyip `logs/artemis.log`'daki "Duyulan komut: ..." satırlarına
+bakarak öncesi/sonrasını karşılaştırmalı. Yetersizse sıradaki adaylar
+(öncelik sırasına göre): mikrofonun fiziksel konumu / Windows ses
+geliştirmelerinin (audio enhancements) kapalı olup olmadığı, ardından
+`beam_size`/`best_of` ayarının varsayılandan yükseltilmesi.
