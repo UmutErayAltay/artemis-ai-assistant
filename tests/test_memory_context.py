@@ -12,6 +12,8 @@ Gerçek bir SQLite dosyası kullanılır (`tmp_path`), mock yok.
 
 from __future__ import annotations
 
+import sqlite3
+
 from pathlib import Path
 
 from memory.context_memory import ContextMemory
@@ -136,3 +138,50 @@ def test_fact_namespace_never_collides_with_internal_last_path(tmp_path: Path) -
     assert memory.get_last_path() == "C:/gercek/son/yol"
     # Kullanıcının verisi de kendi namespace'inde ayrı duruyor.
     assert memory.recall_fact("last_path") == "kullanıcının kendi verisi"
+
+
+def test_repeated_operations_do_not_leak_database_connections(tmp_path: Path) -> None:
+    """DÜRÜSTLÜK/KAYNAK: her çağrı bağlantıyı KAPATMALI.
+
+    `sqlite3.Connection`'ın `with` bloğu commit/rollback yapar ama
+    `close()` YAPMAZ — yaygın bir yanılgıdır. Bu sınıf bir dönem her
+    `set`/`get`/`delete` çağrısında, çöp toplayıcı devreye girene kadar
+    açık kalan bir bağlantı bırakıyordu. Ses döngüsünde bu her komutta
+    bir kez oluyor.
+
+    Ölçüm yöntemi: `sqlite3.connect`'i sarmalayıp açılan ve kapatılan
+    bağlantıları sayıyoruz. Açık dosya tanıtıcısı saymak (`/proc/self/fd`)
+    platforma bağlı olurdu; bu sayım, davranışı doğrudan ve platformdan
+    bağımsız olarak sınar.
+    """
+
+    memory = ContextMemory(tmp_path / "leak.db")
+
+    acilan: list[sqlite3.Connection] = []
+    gercek_connect = sqlite3.connect
+
+    def _izlenen_connect(*args, **kwargs):
+        conn = gercek_connect(*args, **kwargs)
+        acilan.append(conn)
+        return conn
+
+    sqlite3.connect = _izlenen_connect
+    try:
+        for i in range(50):
+            memory.set(f"anahtar{i}", "deger")
+            memory.get(f"anahtar{i}")
+        memory.delete("anahtar0")
+    finally:
+        sqlite3.connect = gercek_connect
+
+    assert len(acilan) == 101, "beklenen sayıda bağlantı açılmadı (test kendisi bozuk)"
+
+    hala_acik = []
+    for conn in acilan:
+        try:
+            conn.execute("SELECT 1")
+            hala_acik.append(conn)
+        except sqlite3.ProgrammingError:
+            pass  # kapalı — beklenen
+
+    assert not hala_acik, f"{len(hala_acik)} veritabanı bağlantısı kapatılmadan bırakıldı"

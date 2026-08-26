@@ -24,6 +24,7 @@ from typing import Any
 from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
+from plugins.filesystem_plugin import _resolve_location
 from models.tool_models import ToolResult
 from plugins._app_resolver import AppResolver
 
@@ -295,7 +296,19 @@ class WindowsLockTool(BaseTool):
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         import ctypes
 
-        ctypes.windll.user32.LockWorkStation()
+        # Koşulsuz success=True yasak: `LockWorkStation` bir BOOL döner ve
+        # etkileşimli olmayan bir oturumdan (servis, uzak masaüstü oturumu
+        # kapalıyken) çağrıldığında 0 dönerek SESSİZCE başarısız olur.
+        try:
+            locked = ctypes.windll.user32.LockWorkStation()
+        except (AttributeError, OSError) as exc:
+            return ToolResult(success=False, message=f"Bilgisayar kilitlenemedi: {exc}")
+
+        if not locked:
+            return ToolResult(
+                success=False,
+                message="Bilgisayar kilitlenemedi (bu oturumdan kilitleme izni olmayabilir).",
+            )
         return ToolResult(success=True, message="Bilgisayar kilitlendi.")
 
 
@@ -313,8 +326,76 @@ class WindowsSleepTool(BaseTool):
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         import ctypes
 
-        ctypes.windll.powrprof.SetSuspendState(False, True, True)
+        # Koşulsuz success=True yasak: `SetSuspendState` bir BOOLEAN döner.
+        # Uyku BIOS/donanım seviyesinde devre dışıysa (bkz. `.context`
+        # §6.6 — geliştirici makinesinde tam olarak bu durum var) çağrı
+        # 0 döner ve hiçbir şey olmaz. "Uykuya alınıyor" deyip uyanık
+        # kalmak, dürüstçe başarısız olmaktan kötüdür.
+        try:
+            suspended = ctypes.windll.powrprof.SetSuspendState(False, True, True)
+        except (AttributeError, OSError) as exc:
+            return ToolResult(success=False, message=f"Uyku moduna geçilemedi: {exc}")
+
+        if not suspended:
+            return ToolResult(
+                success=False,
+                message="Uyku moduna geçilemedi (bu makinede uyku devre dışı olabilir).",
+            )
         return ToolResult(success=True, message="Bilgisayar uyku moduna alınıyor.")
+
+
+_SHUTDOWN_TIMEOUT_SECONDS = 10.0
+"""`shutdown.exe`'nin cevap vermesi için tanınan süre.
+
+Komut kapanmayı PLANLAR ve hemen döner (`/t 0` ile bile), yani normalde
+saniyenin altında biter. Zaman aşımı, komutun bir sebeple asılı kalması
+durumunda dispatcher'ı (ve ses işçisini) süresiz kilitlememek içindir.
+"""
+
+
+def _run_shutdown_command(flag: str, success_message: str, failure_prefix: str) -> ToolResult:
+    """`shutdown.exe`'yi çalıştırır ve SONUCUNU doğrular.
+
+    Koşulsuz success=True yasak (CLAUDE.md): burada bir dönem
+    `subprocess.run([...], check=False)` vardı ve hemen ardından
+    koşulsuz `success=True` dönülüyordu — yani çıkış kodu AÇIKÇA
+    atılıyordu. `shutdown.exe` başarısız olabilir ve olur:
+
+        1190 - zaten planlanmış bir kapanma var
+        1314 - gerekli ayrıcalık (SeShutdownPrivilege) yok
+        5    - erişim reddedildi (grup ilkesi/etki alanı kısıtı)
+
+    Bu durumda kullanıcı "Bilgisayar kapatılıyor." mesajını duyup
+    bilgisayarın kapanmasını beklerdi. Üstelik bu tool CONFIRM_REQUIRED —
+    yani kullanıcının bilinçli olarak onayladığı bir işlemde yalan
+    söyleniyordu.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["shutdown", flag, "/t", "0"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_SHUTDOWN_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult(
+            success=False,
+            message=f"{failure_prefix}: 'shutdown' komutu {_SHUTDOWN_TIMEOUT_SECONDS:.0f} sn içinde cevap vermedi.",
+        )
+    except (OSError, FileNotFoundError) as exc:
+        return ToolResult(success=False, message=f"{failure_prefix}: 'shutdown' komutu çalıştırılamadı ({exc}).")
+
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        suffix = f": {detail}" if detail else "."
+        return ToolResult(
+            success=False,
+            message=f"{failure_prefix} (shutdown çıkış kodu {completed.returncode}){suffix}",
+        )
+
+    return ToolResult(success=True, message=success_message)
 
 
 @register_tool
@@ -329,8 +410,7 @@ class WindowsShutdownTool(BaseTool):
         return {"type": "object", "properties": {}}
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-        subprocess.run(["shutdown", "/s", "/t", "0"], check=False)
-        return ToolResult(success=True, message="Bilgisayar kapatılıyor.")
+        return _run_shutdown_command("/s", "Bilgisayar kapatılıyor.", "Bilgisayar kapatılamadı")
 
 
 @register_tool
@@ -345,8 +425,9 @@ class WindowsRestartTool(BaseTool):
         return {"type": "object", "properties": {}}
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-        subprocess.run(["shutdown", "/r", "/t", "0"], check=False)
-        return ToolResult(success=True, message="Bilgisayar yeniden başlatılıyor.")
+        return _run_shutdown_command(
+            "/r", "Bilgisayar yeniden başlatılıyor.", "Bilgisayar yeniden başlatılamadı"
+        )
 
 
 @register_tool
@@ -435,15 +516,33 @@ class WindowsScreenshotTool(BaseTool):
     def get_arguments_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {"location": {"type": "string", "default": "desktop"}},
+            "properties": {
+                "location": {
+                    "type": "string",
+                    "default": "desktop",
+                    "description": "desktop / downloads / last ya da tam yol.",
+                }
+            },
         }
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         import pyautogui
 
         location = arguments.get("location", "desktop")
-        base_path = context.settings.desktop_path if location == "desktop" else context.settings.downloads_path
-        base_path.mkdir(parents=True, exist_ok=True)
+
+        # `location` çözümlemesi filesystem tool'larıyla AYNI yerden gelir.
+        # Burada bir dönem elle yazılmış bir üçlü koşul vardı
+        # (`desktop_path if location == "desktop" else downloads_path`) ve
+        # `"desktop"` DIŞINDAKİ HER değeri — `"last"`ı da, tam bir yolu da
+        # — sessizce indirilenler klasörüne yönlendiriyordu. Yani aynı
+        # argüman adı bu tool'da başka bir sözleşme konuşuyordu:
+        # kullanıcı `location: "C:/temp"` dediğinde dosya sessizce başka
+        # bir yere yazılıyordu.
+        base_path = _resolve_location(location, context)
+        try:
+            base_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return ToolResult(success=False, message=f"'{base_path}' klasörü oluşturulamadı: {exc}")
 
         filename = f"artemis_screenshot_{datetime.now():%Y%m%d_%H%M%S}.png"
         full_path = base_path / filename
@@ -461,10 +560,9 @@ class WindowsScreenshotTool(BaseTool):
             )
 
         context.memory.remember_last_path(str(full_path))
-        location_label = "masaüstüne" if location == "desktop" else "indirilenler klasörüne"
         return ToolResult(
             success=True,
-            message=f"Ekran görüntüsü {location_label} kaydedildi.",
+            message=f"Ekran görüntüsü '{full_path}' olarak kaydedildi.",
             data={"path": str(full_path)},
         )
 
@@ -488,12 +586,28 @@ class WindowsClipboardCopyTool(BaseTool):
         import win32clipboard
 
         text = arguments["text"]
-        win32clipboard.OpenClipboard()
+
+        # Koşulsuz success=True yasak. Pano PAYLAŞILAN bir kaynaktır: başka
+        # bir uygulama onu kilitlemiş olabilir (`OpenClipboard` hata verir)
+        # ya da yazdıktan hemen sonra üzerine yazabilir. Yazılan değeri
+        # GERİ OKUMAK, bu tool için elde edilebilecek gerçek başarı
+        # sinyalidir ve API bunu bedava sunuyor.
         try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
-        finally:
-            win32clipboard.CloseClipboard()
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+                written = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception as exc:  # noqa: BLE001 - pano başka bir uygulama tarafından kilitli olabilir
+            return ToolResult(success=False, message=f"Panoya kopyalanamadı: {exc}")
+
+        if written != text:
+            return ToolResult(
+                success=False,
+                message="Panoya yazıldı ama geri okunan değer farklı (başka bir uygulama panoyu değiştirmiş olabilir).",
+            )
 
         return ToolResult(success=True, message="Metin panoya kopyalandı.")
 
@@ -573,7 +687,27 @@ class WindowsFocusWindowTool(BaseTool):
         if hwnd is None:
             return ToolResult(success=False, message=f"'{title_query}' ile eşleşen pencere bulunamadı.")
 
-        win32gui.SetForegroundWindow(hwnd)
+        # Koşulsuz success=True yasak: `SetForegroundWindow` Windows'un ön
+        # plan kilidi (foreground lock) kuralları yüzünden RUTİN OLARAK
+        # başarısız olur — çağıran süreç ön planda değilse, kullanıcı
+        # başka bir pencereyle etkileşimdeyse ya da hedef pencere
+        # minimize ise sistem isteği sessizce reddedip 0 döndürür.
+        # Kardeş tool `windows.arrange_window` sonucu zaten
+        # `GetWindowPlacement` ile doğruluyor; bu tool tek istisnaydı.
+        try:
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception as exc:  # noqa: BLE001 - ön plan kilidi pywin32'de istisna da fırlatabilir
+            return ToolResult(
+                success=False,
+                message=f"'{title_query}' penceresi öne getirilemedi (Windows ön plan kısıtı): {exc}",
+            )
+
+        if win32gui.GetForegroundWindow() != hwnd:
+            return ToolResult(
+                success=False,
+                message=f"'{title_query}' penceresi öne getirilemedi (Windows isteği reddetti).",
+            )
+
         return ToolResult(success=True, message=f"'{title_query}' penceresi öne getirildi.")
 
 

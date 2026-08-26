@@ -8,7 +8,12 @@ yol/klasör gibi bilgileri kalıcı olarak tutar.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
+
+_LOCK_TIMEOUT_SECONDS = 5.0
+"""Eşzamanlı bir yazma sürerken kilidin serbest kalması için beklenecek süre."""
 
 
 class ContextMemory:
@@ -28,8 +33,28 @@ class ContextMemory:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Bir bağlantı açar, işlemi tamamlar ve bağlantıyı KAPATIR.
+
+        NEDEN AYRI BİR CONTEXT MANAGER: `sqlite3.Connection`'ın kendi
+        `with` bloğu yalnızca commit/rollback yapar, `close()` YAPMAZ —
+        yaygın bir yanılgıdır. Buradaki her metot `with self._connect()`
+        yazıyordu ve her `set`/`get`/`delete` çağrısı, çöp toplayıcı
+        devreye girene kadar açık bir bağlantı bırakıyordu. Ses
+        döngüsünde bu, her komutta bir kez oluyor.
+
+        `timeout`: eşzamanlı bir yazma sırasında hemen "database is
+        locked" ile düşmek yerine kısa süre bekler. Ses işçisi ve Qt ana
+        iş parçacığı aynı hafızayı paylaşır (bkz. `ToolDispatcher`).
+        """
+
+        conn = sqlite3.connect(self._db_path, timeout=_LOCK_TIMEOUT_SECONDS)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -76,9 +101,12 @@ class ContextMemory:
             yapabilmesi için — bkz. `forget_fact`).
         """
 
+        # `rowcount` `with` bloğunun İÇİNDE okunur: dışarıda okumak,
+        # bağlantı kapandıktan sonra bir imleç niteliğine erişmek demek —
+        # CPython'da bugün çalışıyor ama belirtilmiş bir davranış değil.
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM context_memory WHERE key = ?", (key,))
-        return cursor.rowcount > 0
+            return cursor.rowcount > 0
 
     # --- Sık kullanılan senaryolar için convenience metotlar ---
 

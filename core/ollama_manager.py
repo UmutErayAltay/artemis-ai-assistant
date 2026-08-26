@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 _STARTUP_TIMEOUT_SECONDS = 15
 _POLL_INTERVAL_SECONDS = 0.5
 
+_OLLAMA_PROCESS_NAMES = frozenset({"ollama", "ollama.exe", "ollama_llama_server", "ollama_llama_server.exe"})
+"""`--stop-ollama`'nın sonlandıracağı süreç adları (TAM eşleşme).
+
+Bir dönem `if "ollama" in name` yazıyordu; bu, kullanıcının
+`ollama-webui`, `ollama_bench.py` gibi tamamen ilgisiz süreçlerini de
+öldürürdü. Bir "RAM temizleme" komutunun kapsamı, adında bir alt dize
+geçen her şey OLAMAZ.
+"""
+
+_TERMINATE_GRACE_SECONDS = 5.0
+"""`terminate()` sonrası, sürecin kendiliğinden kapanması için tanınan süre."""
+
 
 class OllamaUnavailableError(Exception):
     """`ollama` komutu bulunamadığında, sunucu başlatılamadığında veya
@@ -166,19 +178,53 @@ def stop_all_ollama_processes() -> int:
     serve` süreci ve yüklü model kalabilir. Bu fonksiyon, o durumda elle
     çağrılacak bir temizlik komutudur (`python main.py --stop-ollama`).
 
+    KOŞULSUZ BAŞARI SAYIMI YASAK (CLAUDE.md): bu fonksiyon bir dönem
+    `terminate()` ÇAĞRILARINI sayıp "N süreç kapatıldı" diyordu. Ama
+    `terminate()` yalnızca bir sinyal GÖNDERİR; süreç sinyali yok
+    sayabilir, kapanması zaman alabilir ya da hiç kapanmayabilir.
+    Kullanıcı "3 süreç kapatıldı" mesajını okuyup RAM'in boşaldığını
+    sanarken üç süreç de çalışıyor olabilirdi. Artık `wait_procs` ile
+    GERÇEKTEN ölenler sayılır ve kapanmayanlara `kill()` ile ısrar edilir.
+
     Returns:
-        Sonlandırılan süreç sayısı.
+        GERÇEKTEN sonlandırılmış süreç sayısı.
     """
 
     import psutil
 
-    killed = 0
+    targets = []
     for proc in psutil.process_iter(["pid", "name"]):
         name = (proc.info.get("name") or "").lower()
-        if "ollama" in name:
-            try:
-                proc.terminate()
-                killed += 1
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-    return killed
+        # Tam ad eşleşmesi: `in` araması kullanıcının `ollama-webui`,
+        # `ollama_bench.py` gibi ilgisiz süreçlerini de öldürürdü.
+        if name in _OLLAMA_PROCESS_NAMES:
+            targets.append(proc)
+
+    if not targets:
+        return 0
+
+    for proc in targets:
+        try:
+            proc.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    gone, alive = psutil.wait_procs(targets, timeout=_TERMINATE_GRACE_SECONDS)
+
+    # Nazik istek işe yaramadıysa ısrar et — "kapattım" demenin bedeli var.
+    for proc in alive:
+        try:
+            proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    killed_by_force, still_alive = psutil.wait_procs(alive, timeout=_TERMINATE_GRACE_SECONDS)
+
+    if still_alive:
+        logger.warning(
+            "%d ollama süreci kapatılamadı (PID: %s).",
+            len(still_alive),
+            ", ".join(str(p.pid) for p in still_alive),
+        )
+
+    return len(gone) + len(killed_by_force)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from core.enums import DangerLevel
@@ -77,8 +77,25 @@ def _safe_join(base: Path, target: str) -> Path | None:
     """
 
     candidate = Path(target)
-    if candidate.anchor or ".." in candidate.parts or not candidate.parts:
-        return None
+
+    # Yol, HEM çalıştığımız platformun kurallarına HEM de Windows
+    # kurallarına göre denetlenir. Sebep ölçüldü: POSIX'te
+    # `Path("C:/Windows/System32")` MUTLAK DEĞİLDİR (`anchor == ""`),
+    # parçaları `("C:", "Windows", "System32")` olur — yani bu koruma
+    # Linux/macOS'ta çalışırken tam olarak engellemesi gereken girdiyi
+    # KABUL EDİYORDU. Aynı şekilde `"AltKlasor\..\..\x"` POSIX'te tek
+    # bir parçadır, `..` hiç görünmez.
+    #
+    # Artemis bir Windows uygulaması, yani üretimde bu fark görünmezdi;
+    # ama bu bir güvenlik kontrolü ve bir güvenlik kontrolünün doğruluğu
+    # çalıştığı makinenin işletim sistemine BAĞLI OLMAMALIDIR. (Pratik
+    # sonucu da var: bu üç senaryonun testleri Linux CI'da kırılıyordu.)
+    windows_candidate = PureWindowsPath(target)
+
+    for parsed in (candidate, windows_candidate):
+        if parsed.anchor or ".." in parsed.parts or not parsed.parts:
+            return None
+
     return base / candidate
 
 
@@ -137,7 +154,19 @@ class FilesystemOpenTool(BaseTool):
         if not full_path.exists():
             return ToolResult(success=False, message=f"'{full_path}' bulunamadı.")
 
-        os.startfile(full_path)  # Windows'a özgü; proje Windows masaüstü hedefliyor.
+        # Korumasız `os.startfile` yasak: kayıtlı bir uygulaması olmayan
+        # bir uzantı, bozuk bir kısayol ya da erişim reddi `OSError`
+        # fırlatır ve kullanıcı "Beklenmeyen hata: ..." görürdü. Aynı
+        # çağrı `windows_plugin.WindowsLaunchAppTool`'da zaten sarılı.
+        try:
+            os.startfile(full_path)  # Windows'a özgü; proje Windows masaüstü hedefliyor.
+        except OSError as exc:
+            return ToolResult(success=False, message=f"'{full_path}' açılamadı: {exc}")
+        except AttributeError:
+            return ToolResult(
+                success=False,
+                message="Dosya açma yalnızca Windows'ta desteklenir (os.startfile bu platformda yok).",
+            )
         context.memory.remember_last_path(str(full_path))
         return ToolResult(success=True, message=f"'{full_path}' açıldı.", data={"path": str(full_path)})
 
