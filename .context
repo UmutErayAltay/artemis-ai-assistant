@@ -5,9 +5,19 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.15 (Faz 6 kapatıldı — tool eklemenin gerçek bedeli
-ölçüldü). Geliştirme planının TAMAMI (Faz 0-8) tamamlandı. Sürüm
-geçmişi için `README.md` bölüm 16-34.
+Son güncelleme: v3.16 (denetim teslimatı — iki sessiz güvenlik deliği
+kapatıldı, CI/ruff/mypy kuruldu, ölçüm aracı repoya girdi). Geliştirme
+planının TAMAMI (Faz 0-8) tamamlandı. Sürüm geçmişi için `README.md`
+bölüm 16-35.
+
+**v3.16 — ÖNEMLİ, herkes okumalı (README §35):** sesli onay bir dönem
+"hayır yapma" gibi Türkçe reddetme cevaplarını ONAY sayıyordu (alt dize
+araması; Türkçede olumsuzluk bir ek, olumlu kök reddin içinde geçiyor).
+Ölçüldü: 14 doğal reddin 8'i onaylanıyordu. Ayrıca `MAX_PLAN_STEPS` ve
+tool-adı kısıtı yalnızca gramerde vardı; `_chat` şemasız stratejiye
+düştüğünde ikisi de kayboluyordu. İkisi de düzeltildi ve 24+ regresyon
+testiyle sabitlendi. **DOĞRULANMADI**: gerçek Windows makine, gerçek
+mikrofon, gerçek Ollama modeli — bkz. README §35l, kullanıcı denemeli.
 
 **Faz 6 sonucu — ezber değil, ölçüldü:** dört yeni aday model
 (`hermes3:3b`, `qwen3:8b`, `llama3-groq-tool-use:8b`, `granite3.3:2b`)
@@ -102,11 +112,20 @@ docstring'i, README §28b) — bir model geri yüklenince gerçek gecikme
 ölçümüyle
 KESİNLEŞTİRİLMELİ, rastgele bırakılmamalı.
 
-Test durumu: **454 geçiyor, 2 devre dışı** (v1.2 öncesi: 48 geçiyor,
-4 kırık). Devre dışı ikisi `@pytest.mark.disruptive` işaretli
-(`windows.lock`, `windows.set_volume`) — gerçek makineyi etkiledikleri
-için varsayılan `pytest`'te ÇALIŞMAZLAR; bilinçli çalıştırmak için
-`pytest -m disruptive`.
+Test durumu: **590 geçiyor, 4 devre dışı** (v1.2 öncesi: 48 geçiyor,
+4 kırık; v3.15 sonu: 454 geçiyor ama üç dosya Linux'ta hiç
+TOPLANAMIYORDU — v3.16'da düzeltildi, bkz. README §35h). Devre dışı
+dördü `@pytest.mark.disruptive`/platform işaretli — gerçek makineyi
+etkiledikleri ya da yalnızca Windows'ta çalıştıkları için varsayılan
+`pytest`'te ÇALIŞMAZLAR; bilinçli çalıştırmak için `pytest -m
+disruptive`. Artık CI'da (Ubuntu × Python 3.11/3.12) her push'ta
+otomatik koşuyor; ayrıca `ruff check .` ve `mypy` de CI'ın parçası.
+
+`scripts/bench_tool_selection.py` (v3.16) tool seçimi kıyasıdır: gerçek
+Ollama, gerçek sistem promptu, gerçek `TOOL_REGISTRY`; skoru değil
+HATANIN YÖNÜNÜ raporlar. `pytest` koşusunda çalışmaz, elle çağrılır.
+Senaryo dosyası `tests/data/tool_selection_scenarios.json`. Gerekçe ve
+"neden bu tool §21/§34'ün 17'lik setiyle birebir aynı değil" README §35j.
 
 `scripts/smoke_voice.py` uçtan uca duman testidir: Piper ile konuşma
 üretip gerçek boru hattının tamamından geçirir (mikrofon ve hoparlör
@@ -349,6 +368,25 @@ paylaşılan global `TOOL_REGISTRY`'ye test-zamanlı kayıt yapan HER testin
 kendini temizlemesi gerektiği (yoksa ilgisiz bir testi flaky kırar)
 gerçek bir hatayla (`test_prompt_builder.py`'nin 14.000 sınırı) doğrulandı.
 
+### 6.19) Sesli onay alt dize araması TERSİNE çalışıyordu (v3.16)
+
+`_confirm_by_voice` `any(word in answer for word in _AFFIRMATIVE_WORDS)`
+kullanıyordu. Türkçe eklemeli bir dil ve olumsuzluk bir EK olduğu için
+olumlu kök, olumsuz sözcüğün İÇİNDE geçiyor ("yapma" ⊃ "yap"). Ölçüldü:
+14 doğal reddin 8'i onay sayılıyordu. Düzeltme iki katmanlı: önce sabit
++ regex ile olumsuzluk vetosu, sonra sözcük seviyesinde (alt dize değil)
+olumlu eşleşme. Aynı kökten ikinci bir hata: `str.lower()` Türkçe yerel
+ayarını kullanmıyor (`"HAYIR".lower()` → `"hayir"`), bu da hem onay
+vetosunu hem `--chat`'in çıkış komutunu (`"ÇIKIŞ"`) etkiliyordu;
+`utils/text.py::turkish_lower`/`lower_variants` ikisini de kapatıyor.
+
+**Ders**: bir güvenlik kuralı üç yerde (kod yorumu, docstring, bu dosya)
+yazılı olabilir ve yine de UYGULANMIYOR olabilir. Kuralın tek gerçek
+bekçisi, o kuralı ihlal eden GERÇEK bir girdiyle yazılmış bir testtir —
+mevcut testler "kapıyı kapat" gibi tesadüfen zararsız cevaplar
+kullandığı için bu hatayı hiç yakalamamıştı. Gerekçe ve tam liste
+README §35a-b.
+
 ### 6.18) Tool eklemenin bedeli DOĞRULUK, gecikme değil (v3.15, Faz 6 kapanışı)
 İzole ölçüm (aynı 17 senaryo, git'ten çıkarılan eski şablon + `TOOL_
 REGISTRY`'den geçici çıkarılan 6 yeni tool ile yeniden inşa edilen
@@ -421,7 +459,11 @@ araştırmaya girişilmesin diye kayıtlıdır.
   hall sensörü arızalı olduğu için uyku modu BIOS/donanım seviyesinde
   devre dışı. Tool projede KALIYOR (başka makinelerde çalışır); bu
   makinede başarısız olması beklenen davranıştır, düzeltilecek bir şey
-  yoktur.
+  yoktur. v3.16'dan ÖNCE bu makinede tool koşulsuz "uykuya alınıyor"
+  diyip hiçbir şey yapmıyordu (bkz. README §35d); artık `SetSuspendState`'in
+  dönüş değeri kontrol ediliyor ve bu makinede DÜRÜSTÇE başarısız oluyor
+  — yani bu not artık "neden hâlâ çalışmıyor" değil "neden başarısız
+  DÖNÜYOR" sorusuna cevap.
 
 ## 7) Bilinen boşluklar / sıradaki işler
 
@@ -429,10 +471,31 @@ CLAUDE.md'de "henüz yok" diye işaretlenmiş üç plugin'in (browser,
 mouse_keyboard, mcp) üçü de tamamlandı (v3.6/v3.7); CLAUDE.md da bu
 oturumda güncellendi.
 
-1. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
+0. **v3.16'nın DOĞRULANMAMIŞ değişiklikleri — ÖNCELİKLİ.** Bu denetim
+   Linux'ta yapıldı; aşağıdakiler kullanıcının Windows/gerçek-Ollama
+   makinesinde denenmeli (tam liste ve gerekçe README §35l):
+   - Altı `windows.*` düzeltmesi (shutdown/restart/lock/sleep/
+     clipboard_copy/focus_window) — sahte win32 ile test edildi,
+     GERÇEK Windows'ta çalıştırılmadı.
+   - Sesli onay düzeltmesi (`_is_affirmative`) — sahte STT ile test
+     edildi, gerçek mikrofonla denenmedi.
+   - `python scripts/bench_tool_selection.py --model gemma4:e4b` —
+     betiğin mantığı sahte istemciyle sınandı, GERÇEK modelle hiç
+     çalıştırılmadı. Bu, `gemma4:e4b`'nin varsayılan kalıp kalmayacağını
+     da bir sonraki tool eklemeden önce yeniden doğrulamanın yoludur.
+1. **`browser.*` altı tool'unun tek `browser.control` tool'una
+   indirilmesi YAPILMADI — bilerek.** §34'ün dersi gereği (her tool
+   mevcutların doğru seçilme olasılığını düşürür) bu ölçülebilir bir
+   kazanç olabilir, ama aynı gerekçeyle ölçülmeden yapılmamalı. Madde 0
+   (bench) koşulduktan SONRA, önce/sonra kıyasıyla karar verilmeli.
+2. **`ruff format` uygulanmadı, CI'a eklenmedi.** Depo biçimlendiriciye
+   göre 42 dosyada farklı — mekanik ama tek seferde uygulanırsa anlamlı
+   diff'i gözden geçirilemez kılar. Ayrı, tek başına bir commit'te
+   yapılıp sonra CI adımı açılmalı.
+3. **`gemma4:12b` yalnızca deney için indirildi** (7.6 GB). Ses ölçümü
    bitti, artık kullanılmıyor — yer gerekiyorsa
    `ollama rm gemma4:12b` ile silinebilir.
-2. **MCP v1 yalnızca stdio taşımasını destekliyor** (§6.13). Uzak/HTTP
+4. **MCP v1 yalnızca stdio taşımasını destekliyor** (§6.13). Uzak/HTTP
    sunucular (SSE) bilerek eklenmedi — hiçbir kullanıcı istemedi,
    hipotetik ihtiyaç için yazılmadı. Aynı desenle (`mcp.client.sse`)
    ileride eklenebilir.
