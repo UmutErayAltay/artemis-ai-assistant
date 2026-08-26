@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from config.settings import (
     ConfigError,
@@ -108,7 +109,7 @@ def test_settings_are_read_only(tmp_path: Path) -> None:
 
     settings = get_settings(tmp_path / "yok.yaml")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         settings.ollama_model = "baska"
 
 

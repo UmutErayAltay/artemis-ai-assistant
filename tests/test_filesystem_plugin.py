@@ -18,15 +18,9 @@ import pytest
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.plugin_loader import load_plugins
 from core.tool_base import ToolContext
 from memory.context_memory import ContextMemory
 from plugins.filesystem_plugin import _resolve_location, _safe_join
-
-
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
 
 
 @pytest.fixture

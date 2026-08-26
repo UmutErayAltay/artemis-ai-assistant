@@ -25,7 +25,6 @@ import pytest
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.plugin_loader import load_plugins
 from memory.context_memory import ContextMemory
 
 WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="Yalnızca Windows üzerinde çalışır.")
@@ -43,7 +42,7 @@ class _FakeProcess:
         self,
         pid: int,
         name: str,
-        parent: "_FakeProcess | None" = None,
+        parent: _FakeProcess | None = None,
         still_running: bool = True,
         terminate_error: Exception | None = None,
     ) -> None:
@@ -56,7 +55,7 @@ class _FakeProcess:
         self._terminate_error = terminate_error
         self.terminate_called = False
 
-    def parent(self) -> "_FakeProcess | None":
+    def parent(self) -> _FakeProcess | None:
         return self._parent
 
     def is_running(self) -> bool:
@@ -67,11 +66,6 @@ class _FakeProcess:
         if self._terminate_error is not None:
             raise self._terminate_error
         self._still_running = False
-
-
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
 
 
 @pytest.fixture
@@ -289,7 +283,7 @@ def test_send_graceful_close_posts_wm_close_only_to_visible_matching_windows(
     fake_win32gui = types.ModuleType("win32gui")
     fake_win32gui.IsWindowVisible = lambda hwnd: hwnd in visible_hwnds
     fake_win32gui.EnumWindows = lambda callback, extra: [callback(hwnd, extra) for hwnd in window_pids]
-    fake_win32gui.PostMessage = lambda hwnd, msg, w, l: posted.append((hwnd, msg))
+    fake_win32gui.PostMessage = lambda hwnd, msg, wparam, lparam: posted.append((hwnd, msg))
 
     fake_win32process = types.ModuleType("win32process")
     fake_win32process.GetWindowThreadProcessId = lambda hwnd: (0, window_pids[hwnd])
@@ -669,11 +663,11 @@ def _install_fake_ctypes(
     import types
 
     class _User32:
-        def LockWorkStation(self) -> int:  # noqa: N802 - Windows API adı
+        def LockWorkStation(self) -> int:
             return user32_lock_result
 
     class _Powrprof:
-        def SetSuspendState(self, hibernate, force, wakeup_events_disabled) -> int:  # noqa: N802
+        def SetSuspendState(self, hibernate, force, wakeup_events_disabled) -> int:
             return powrprof_suspend_result
 
     fake_ctypes = types.ModuleType("ctypes")

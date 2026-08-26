@@ -1,0 +1,24 @@
+# Testleri ve statik denetimleri çalıştırmak için GEREKEN paketler.
+#
+# `requirements.txt`'ten AYRI tutulmasının sebebi ölçüldü: tam liste
+# PyQt6, faster-whisper (dolaylı olarak torch), av, vosk içeriyor —
+# gigabaytlarca indirme. Testlerin hiçbiri bunlara ihtiyaç duymuyor;
+# ses ve UI katmanları sahte modüllerle sınanıyor (bkz.
+# tests/conftest.py::install_fake_module). Böylece CI dakikalar değil
+# saniyeler sürüyor.
+#
+# Çalıştırma bağımlılıkları için: pip install -r requirements.txt
+
+pydantic>=2.7
+PyYAML>=6.0
+psutil>=5.9
+numpy>=1.24         # voice/audio.py testlerinin PCM örnekleri
+mcp>=1.20           # plugins/mcp_plugin.py GERÇEK bir alt süreçle test edilir
+requests>=2.31      # voice/stt_cloud.py ve stt_azure.py testleri modül seviyesinde import eder
+
+pytest>=8.0
+ruff>=0.6
+mypy>=1.11
+
+types-PyYAML>=6.0    # config/settings.py yaml.safe_load
+types-requests>=2.31 # voice/stt_cloud.py, voice/stt_azure.py

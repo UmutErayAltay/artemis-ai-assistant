@@ -820,3 +820,23 @@ def test_command_gate_can_be_disabled_from_settings(
 
     assert llm.gate_inputs == [], "Kapı kapalıyken çalıştırılmamalıydı"
     assert (settings.desktop_path / "Orbit").is_dir()
+
+
+@pytest.mark.parametrize("answer", ["HAYIR", "HAYIR YAPMA", "Hayır", "İSTEMİYORUM"])
+def test_refusal_in_capitals_is_still_a_refusal(
+    dispatcher: ToolDispatcher, settings: Settings, answer: str
+) -> None:
+    """BÜYÜK HARFLE söylenen bir red de RED olmalı.
+
+    Python'ın `str.lower()`'ı Türkçe yerel ayarını kullanmaz:
+    `"HAYIR".lower()` -> `"hayir"` (noktalı i) verir ve veto listesindeki
+    `"hayır"` ile EŞLEŞMEZDİ. Konuşma tanıyıcının büyük harfle
+    döndürdüğü bir cevap, sessizce onaya dönüşebilirdi.
+    """
+
+    assistant = VoiceAssistant(dispatcher, FakeLLM(), FakeOverlay(), settings)
+    assistant._tts = FakeTTS()
+    assistant._active_mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+    assistant._stt = FakeSTT(answer)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is False

@@ -19,11 +19,6 @@ from core.plugin_loader import load_plugins
 from memory.context_memory import ContextMemory
 
 
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
-
-
 @pytest.fixture
 def dispatcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ToolDispatcher:
     settings = Settings(

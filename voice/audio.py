@@ -160,7 +160,7 @@ class MicrophoneStream:
                 channels=CHANNELS,
             )
             self._stream.start()
-        except Exception as exc:  # noqa: BLE001 - cihaz/sürücü kaynaklı her hata
+        except Exception as exc:
             # `__enter__` hata fırlatırsa `__exit__` ÇAĞRILMAZ; yarı kurulmuş
             # akışı burada kapatmazsak ses cihazı tutulu kalır (sızıntı).
             self.close()
@@ -186,7 +186,7 @@ class MicrophoneStream:
         try:
             self._stream.stop()
             self._stream.close()
-        except Exception:  # noqa: BLE001 - kapatma hatası akışı bozmamalı
+        except Exception:
             logger.debug("Mikrofon kapatılırken hata yoksayıldı.", exc_info=True)
         finally:
             self._stream = None

@@ -53,8 +53,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from core.dispatcher import ToolDispatcher
 from models.tool_models import ToolResult
@@ -70,7 +71,7 @@ hata mesajlarını basit tutar ve gerçek ihtiyaç zaten "bütün değeri
 
 
 def _resolve_step_references(
-    arguments: dict[str, Any], step_results: list["StepResult"]
+    arguments: dict[str, Any], step_results: list[StepResult]
 ) -> tuple[dict[str, Any], str | None]:
     """Argümanlardaki `{{step_N.alan}}` referanslarını önceki adımların
     GERÇEK `ToolResult.data`'sıyla değiştirir.

@@ -10,9 +10,17 @@ etmez.
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
+# `mcp` 2.0'da `FastMCP` -> `MCPServer` olarak yeniden adlandırıldı.
+# İkisini de deneriz: bu depo `mcp>=1.20` diyor ve kullanıcının
+# ortamındaki sürümü kontrol edemiyoruz. Bir TEST fixture'ının, testi
+# çalıştıran kişinin kurulu sürümü yüzünden kırılması, sınadığı şeyle
+# ilgisiz bir başarısızlıktır.
+try:  # mcp >= 2.0
+    from mcp.server.mcpserver import MCPServer as _Server
+except ImportError:  # mcp < 2.0
+    from mcp.server.fastmcp import FastMCP as _Server
 
-server = FastMCP("echo-test-server")
+server = _Server("echo-test-server")
 
 
 @server.tool()

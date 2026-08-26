@@ -146,13 +146,6 @@ def main_voice() -> None:
         3) Ollama kurulu ve en az bir model çekilmiş olmalı.
     """
 
-    from PyQt6.QtWidgets import QApplication
-
-    from core.voice_loop import VoiceAssistant
-    from ui.hotkey import GlobalHotkey, HotkeyParseError
-    from ui.overlay import ArtemisOverlay
-    from ui.tray import ArtemisTray
-
     dispatcher = bootstrap()
     settings = dispatcher.settings
 
@@ -160,6 +153,11 @@ def main_voice() -> None:
     # sözü tutmanın tek yolu ses işçisini hiç başlatmamaktır. Ollama'yı
     # başlatmadan ÖNCE kontrol edilir ki gereksiz yere sunucu ayağa
     # kalkmasın ve model seçimi sorulmasın.
+    #
+    # Bu kontrol, GUI/ses yığınının import'undan da ÖNCE yapılır: ses
+    # kapalıyken PyQt6'yı (ve dolayısıyla bir pencere sistemi bağlantısını)
+    # yüklemenin bir sebebi yok. Yan faydası, `--voice`'un kapalıyken
+    # başlıksız bir makinede de dürüstçe "kapalı" diyebilmesi.
     if not settings.voice_enabled:
         print(
             "Sesli asistan config.yaml'da kapalı (voice_enabled: false).\n"
@@ -167,6 +165,13 @@ def main_voice() -> None:
             "    python main.py --chat"
         )
         return
+
+    from PyQt6.QtWidgets import QApplication
+
+    from core.voice_loop import VoiceAssistant
+    from ui.hotkey import GlobalHotkey, HotkeyParseError
+    from ui.overlay import ArtemisOverlay
+    from ui.tray import ArtemisTray
 
     server_manager = OllamaServerManager()
 

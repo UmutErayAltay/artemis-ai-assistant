@@ -37,8 +37,8 @@ from config.settings import Settings, get_settings  # noqa: E402
 from core.dispatcher import ToolDispatcher  # noqa: E402
 from core.llm_client import OllamaLLMClient  # noqa: E402
 from core.ollama_manager import (  # noqa: E402
-    OllamaUnavailableError,
     OllamaServerManager,
+    OllamaUnavailableError,
     list_installed_models,
 )
 from core.plugin_loader import load_plugins  # noqa: E402
@@ -179,11 +179,11 @@ def main() -> int:
     for senaryo in SENARYOLAR:
         overlay = _SessizOverlay()
         asistan = VoiceAssistant(dispatcher, llm, overlay, ayarlar)
-        asistan._tts = _SessizTTS()  # noqa: SLF001 - duman testi bilinçli olarak içeri uzanır
+        asistan._tts = _SessizTTS()
 
         print(f"[söylenen] {senaryo}")
         try:
-            asistan._handle_one_command(_UretilmisMikrofon(_konusma_uret(senaryo)))  # noqa: SLF001
+            asistan._handle_one_command(_UretilmisMikrofon(_konusma_uret(senaryo)))
         except Exception as exc:  # noqa: BLE001 - duman testi çökmemeli, raporlamalı
             print(f"  ÇÖKTÜ: {type(exc).__name__}: {exc}\n")
             continue

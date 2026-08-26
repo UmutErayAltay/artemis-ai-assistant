@@ -24,9 +24,9 @@ from typing import Any
 from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
-from plugins.filesystem_plugin import _resolve_location
 from models.tool_models import ToolResult
 from plugins._app_resolver import AppResolver
+from plugins.filesystem_plugin import _resolve_location
 
 # AppResolver'ın Başlat Menüsü kısayol taraması (yavaş) yalnızca ilk
 # ihtiyaç duyulduğunda yapılır ve modül ömrü boyunca (tüm launch_app
@@ -810,7 +810,7 @@ def _snap_window(hwnd: int, position: str) -> str | None:
 
     # Doğrulama: pencere gerçekten hedeflenen yarıya mı gitti (birkaç
     # pikselllik pencere-çerçevesi payı toleransla).
-    left, top, right, _bottom = win32gui.GetWindowRect(hwnd)
+    left, _top, right, _bottom = win32gui.GetWindowRect(hwnd)
     if abs(left - x) > 20 or abs((right - left) - half_width) > 40:
         return "Pencere taşınamadı ya da beklenen konuma ulaşmadı."
     return None

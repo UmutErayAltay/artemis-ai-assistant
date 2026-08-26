@@ -193,7 +193,7 @@ class ToolDispatcher:
         except InvalidToolArgumentsError as exc:
             logger.error("Argüman hatası (%s): %s", call.tool, exc)
             return ToolResult(success=False, message=str(exc))
-        except Exception as exc:  # noqa: BLE001 - beklenmeyen hatayı da güvenli döndür
+        except Exception as exc:
             # Ham istisna METNİ kullanıcıya VERİLMEZ. Bu mesaj terminale
             # yazılır ve ses modunda YÜKSEK SESLE OKUNUR (bkz.
             # `voice_loop._summarize`); istisna metinleri ise rutin olarak

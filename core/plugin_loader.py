@@ -84,7 +84,22 @@ def load_plugins(plugins_package: str = "plugins") -> dict[str, type[BaseTool]]:
     """
 
     package = importlib.import_module(plugins_package)
-    package_path = Path(package.__file__).resolve().parent
+
+    # `__file__` HER paket için dolu değildir: bir "namespace package"
+    # (yani `__init__.py`'si olmayan klasör) için `None`'dır. Bugün
+    # `plugins/__init__.py` var, ama o dosya bir gün silinirse buradaki
+    # hata `TypeError: expected str, bytes or os.PathLike, not NoneType`
+    # olur ve "plugin sistemi neden çalışmıyor" diye aranır. Açık bir
+    # mesaj, gizli bir çökmeden iyidir.
+    package_file = getattr(package, "__file__", None)
+    if package_file is None:
+        raise PluginLoadError(
+            plugins_package,
+            "paketin __file__ özniteliği yok (namespace package?); "
+            "içinde bir __init__.py bulunduğundan emin olun",
+        )
+
+    package_path = Path(package_file).resolve().parent
 
     for module_info in pkgutil.iter_modules([str(package_path)]):
         if module_info.name.startswith("_"):
@@ -94,7 +109,7 @@ def load_plugins(plugins_package: str = "plugins") -> dict[str, type[BaseTool]]:
         try:
             importlib.import_module(full_module_name)
             logger.info("Plugin yüklendi: %s", full_module_name)
-        except Exception as exc:  # noqa: BLE001 - kasıtlı olarak geniş yakalama
+        except Exception as exc:
             raise PluginLoadError(full_module_name, str(exc)) from exc
 
     return TOOL_REGISTRY
