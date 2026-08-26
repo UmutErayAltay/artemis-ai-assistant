@@ -33,6 +33,13 @@ Bir dönem `if "ollama" in name` yazıyordu; bu, kullanıcının
 geçen her şey OLAMAZ.
 """
 
+_PING_TIMEOUT_SECONDS = 3.0
+"""Sunucunun ayakta olup olmadığını yoklarken beklenecek azami süre.
+
+Bu yoklama `ensure_running`'in poll döngüsünün İÇİNDE çalışır; süresiz
+bloke olursa `_STARTUP_TIMEOUT_SECONDS` hiçbir şey ifade etmez.
+"""
+
 _TERMINATE_GRACE_SECONDS = 5.0
 """`terminate()` sonrası, sürecin kendiliğinden kapanması için tanınan süre."""
 
@@ -56,7 +63,14 @@ class OllamaServerManager:
                 sunucu zaman aşımı içinde yanıt vermezse.
         """
 
-        if self._is_server_responding():
+        try:
+            already_running = self._is_server_responding()
+        except ImportError as exc:
+            raise OllamaUnavailableError(
+                "Python 'ollama' paketi kurulu değil. Kurmak için: pip install -r requirements.txt"
+            ) from exc
+
+        if already_running:
             logger.info("Ollama sunucusu zaten çalışıyor.")
             return
 
@@ -74,6 +88,16 @@ class OllamaServerManager:
 
         deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
+            # Süreç daha ilk saniyede ÖLDÜYSE beklemenin anlamı yok:
+            # port zaten dolu ya da yapılandırma bozuk olabilir. Bu
+            # kontrol olmadan kullanıcı, sebebi hiç öğrenmeden 15 saniye
+            # bekliyordu.
+            exit_code = self._process.poll()
+            if exit_code is not None:
+                raise OllamaUnavailableError(
+                    f"'ollama serve' hemen kapandı (çıkış kodu {exit_code}). "
+                    "Başka bir Ollama örneği portu kullanıyor olabilir."
+                )
             if self._is_server_responding():
                 logger.info("Ollama sunucusu hazır.")
                 return
@@ -99,12 +123,26 @@ class OllamaServerManager:
 
     @staticmethod
     def _is_server_responding() -> bool:
-        try:
-            import ollama
+        """Sunucu ayakta mı? (Paket eksikliğinden AYRI bir soru.)
 
-            ollama.list()
+        `ollama` PAKETİNİN kurulu olmaması ile SUNUCUNUN çalışmaması
+        farklı arızalardır ve farklı çözümleri vardır. Bir dönem ikisi
+        de aynı `except Exception`'a düşüyordu; sonuç, paketi kurmayı
+        unutan bir kullanıcının 15 saniye bekleyip "Ollama sunucusu 15
+        saniye içinde yanıt vermedi" mesajını okuması oluyordu — doğru
+        cevap `pip install ollama` iken.
+
+        Zaman aşımı da şart: `ensure_running`'in poll döngüsü bunu
+        çağırıyor, yani burada süresiz bloke olan bir istek
+        `_STARTUP_TIMEOUT_SECONDS`'ı tamamen anlamsız kılar.
+        """
+
+        import ollama  # ImportError bilinçli olarak YUKARI SIZAR (bkz. ensure_running)
+
+        try:
+            ollama.Client(timeout=_PING_TIMEOUT_SECONDS).list()
             return True
-        except Exception:  # noqa: BLE001 - bağlantı hatası/vs. hepsi "çalışmıyor" sayılır
+        except Exception:  # noqa: BLE001 - bağlantı/zaman aşımı: hepsi "çalışmıyor" sayılır
             return False
 
 

@@ -12,11 +12,21 @@ import os
 import sys
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
+
+
+class ConfigError(Exception):
+    """`config.yaml` okunamadığında ya da geçersiz olduğunda fırlatılır.
+
+    Bozuk bir ayar dosyası, ham bir `yaml.YAMLError`/`ValidationError`
+    yığın izi olarak `bootstrap()`'tan dışarı sızıyordu. Kullanıcının
+    göreceği şey hangi dosyada, hangi alanda ne sorun olduğu olmalı.
+    """
 
 
 class MCPServerConfig(BaseModel):
@@ -67,6 +77,12 @@ class Settings(BaseModel):
             süre tutulacağı (örn. "5m", "30s", "0" = hemen boşalt,
             "-1" = süresiz tut). Kısa değer = daha az idle RAM ama her
             "uyanışta" birkaç saniye yeniden yükleme gecikmesi.
+        ollama_timeout_seconds: Tek bir Ollama isteği için tanınan azami
+            süre. `ollama-python`'ın varsayılan istemcisinin OKUMA ZAMAN
+            AŞIMI YOKTUR; modelin VRAM'e sığmadığı durumlarda sunucunun
+            kilitlenmesi bilinen bir arızadır ve zaman aşımı olmadan
+            asistan süresiz askıda kalır. Değer cömert seçilmiştir:
+            amaç yavaş isteği kesmek değil, ASILI KALMIŞ isteği kesmek.
         dangerous_tools: Ek olarak kısıtlanmak istenen tool adları.
             Not: Her tool zaten kendi `danger_level`'ını bildirir; bu
             liste, kod değiştirmeden config üzerinden ek/geçici bir
@@ -190,9 +206,27 @@ class Settings(BaseModel):
     # çözer ve o etiket kurulu değilse asistan sebebi anlaşılmayan bir
     # bağlantı hatasıyla düşer (buradaki değer bir dönem "llama3.1" idi,
     # kurulu olan ise "llama3.1:8b").
+    model_config = ConfigDict(
+        # BİLİNMEYEN ANAHTAR SESSİZCE YOK SAYILMAZ. pydantic v2'nin
+        # varsayılanı `extra="ignore"`; yani `config.yaml`'daki bir yazım
+        # hatası (`whisper_devcie: "cuda"`) hiçbir uyarı üretmeden
+        # görmezden geliniyor ve kullanıcı, ayarı değiştirdiğini sanarak
+        # var olmayan bir hatayı ayıklıyordu. Aynı sessizlik
+        # `dangerous_tools` gibi GÜVENLİK ayarları için de geçerliydi.
+        extra="forbid",
+        # Ayarlar TEK ve PAYLAŞILAN bir nesnedir (`get_settings` lru_cache'li)
+        # ve her tool'a `ToolContext` ile veriliyor. Dondurulmamış bir model,
+        # herhangi bir tool'un küresel yapılandırmayı (yolları,
+        # `dangerous_tools` listesini) hiçbir iz bırakmadan değiştirebilmesi
+        # demekti. Kodun tamamı zaten "config salt okunurdur" varsayıyor;
+        # bu satır o varsayımı zorunlu kılar.
+        frozen=True,
+    )
+
     ollama_model: str = "gemma4:e4b"
     use_native_tool_calling: bool = False
     ollama_keep_alive: str = "1m"
+    ollama_timeout_seconds: float = 120.0
     dangerous_tools: list[str] = Field(default_factory=list)
     voice_enabled: bool = True
     wake_word_enabled: bool = True
@@ -212,7 +246,7 @@ class Settings(BaseModel):
     )
     whisper_model_size: str = "large-v3-turbo"
     whisper_compute_type: str = "float16"
-    whisper_device: str = "cuda"
+    whisper_device: Literal["cpu", "cuda"] = "cuda"
     piper_model_path: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent
         / "voice_models"
@@ -224,10 +258,10 @@ class Settings(BaseModel):
     wake_word_model_size: str = "tiny"
 
     # --- Hibrit (bulut/yerel) ses ayarları ---
-    stt_provider: str = "auto"
-    tts_provider: str = "auto"
+    stt_provider: Literal["auto", "cloud", "local"] = "auto"
+    tts_provider: Literal["auto", "cloud", "local"] = "auto"
     command_gate_enabled: bool = True
-    stt_cloud_provider: str = "azure"
+    stt_cloud_provider: Literal["azure", "groq"] = "azure"
     groq_model: str = "whisper-large-v3-turbo"
     edge_tts_voice: str = "tr-TR-EmelNeural"
     edge_tts_rate: str = "+0%"
@@ -366,7 +400,23 @@ def get_settings(config_path: Path | None = None) -> Settings:
     if not path.exists():
         return Settings()
 
-    with path.open("r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f) or {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        # Aynı dosyadaki `_read_from_secrets_file` bozuk bir dosyanın
+        # uygulamayı çökertmemesi gerektiğine zaten karar vermişti; o
+        # karar burada da geçerli — ama SESSİZCE varsayılana düşmek de
+        # yanlış olurdu (kullanıcı ayarlarının uygulandığını sanır).
+        # Bu yüzden: anlaşılır bir hata, ham traceback değil.
+        raise ConfigError(f"'{path}' okunamadı ya da geçerli YAML değil: {exc}") from exc
 
-    return Settings(**raw)
+    if not isinstance(raw, dict):
+        raise ConfigError(f"'{path}' bir ayar sözlüğü içermeli (bulunan: {type(raw).__name__}).")
+
+    try:
+        return Settings(**raw)
+    except ValidationError as exc:
+        # `extra="forbid"` sayesinde yazım hataları da buraya düşer;
+        # pydantic'in mesajı hangi alanın sorunlu olduğunu ADIYLA söyler.
+        raise ConfigError(f"'{path}' içindeki ayarlar geçersiz:\n{exc}") from exc

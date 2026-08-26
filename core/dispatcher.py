@@ -135,6 +135,33 @@ class ToolDispatcher:
     ) -> None:
         self.settings = settings or get_settings()
         self.memory = memory or ContextMemory(self.settings.db_path)
+        self._warn_about_unknown_dangerous_tools()
+
+    def _warn_about_unknown_dangerous_tools(self) -> None:
+        """`dangerous_tools`'taki tanınmayan adlar için uyarır.
+
+        Bu liste bir GÜVENLİK kontrolüdür: kod değiştirmeden, config
+        üzerinden ek kısıtlama uygulamaya yarar. Ama hiçbir yerde
+        doğrulanmıyordu — `windows.shutdow` gibi bir yazım hatası,
+        sessizce ETKİSİZ bir güvenlik ayarı demekti. Kullanıcı
+        kısıtlamayı koyduğunu sanırken tool onaysız çalışıyordu.
+
+        Hata değil UYARI: registry, plugin'ler yüklenmeden önce boş
+        olabilir ve dispatcher'ı açılış sırasına duyarlı yapmak
+        istemiyoruz. Ayrıca ileride kaldırılmış bir tool'un adının
+        config'de kalması, asistanın hiç açılmamasını gerektirmez.
+        """
+
+        if not TOOL_REGISTRY:
+            return
+
+        unknown = [name for name in self.settings.dangerous_tools if name not in TOOL_REGISTRY]
+        if unknown:
+            logger.warning(
+                "config.yaml::dangerous_tools içinde tanınmayan tool adı var (%s); "
+                "bu girdiler HİÇBİR ŞEYİ kısıtlamaz. Kayıtlı adlarla karşılaştırın.",
+                ", ".join(unknown),
+            )
 
     def dispatch(self, raw_call: dict[str, Any], confirmed: bool = False) -> ToolResult:
         """Ham bir tool çağrısı sözlüğünü doğrular, güvenlik kontrolünden
@@ -167,8 +194,18 @@ class ToolDispatcher:
             logger.error("Argüman hatası (%s): %s", call.tool, exc)
             return ToolResult(success=False, message=str(exc))
         except Exception as exc:  # noqa: BLE001 - beklenmeyen hatayı da güvenli döndür
+            # Ham istisna METNİ kullanıcıya VERİLMEZ. Bu mesaj terminale
+            # yazılır ve ses modunda YÜKSEK SESLE OKUNUR (bkz.
+            # `voice_loop._summarize`); istisna metinleri ise rutin olarak
+            # mutlak yol, kullanıcı adı ve `WinError` kodu içerir. Ayrıntı
+            # log'a gider (`logger.exception` yığın izini de yazar),
+            # kullanıcı ne olduğunu ve nereye bakacağını öğrenir.
             logger.exception("'%s' çalıştırılırken beklenmeyen hata", call.tool)
-            return ToolResult(success=False, message=f"Beklenmeyen hata: {exc}")
+            return ToolResult(
+                success=False,
+                message=f"'{call.tool}' çalıştırılırken beklenmeyen bir hata oluştu ({type(exc).__name__}). "
+                "Ayrıntı için log dosyasına bakın.",
+            )
 
     def _execute(self, call: ToolCall, confirmed: bool) -> ToolResult:
         tool_cls = TOOL_REGISTRY.get(call.tool)

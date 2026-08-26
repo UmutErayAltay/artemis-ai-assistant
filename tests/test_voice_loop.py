@@ -632,8 +632,9 @@ def test_provider_mode_from_settings_reaches_the_router(
 ) -> None:
     """`stt_provider`/`tts_provider` ayarı gerçekten yönlendiriciye geçmeli."""
 
-    settings.stt_provider = "local"
-    settings.tts_provider = "cloud"
+    # `Settings` artık dondurulmuş (config salt okunurdur); ayarı
+    # değiştirmek yerine türetilmiş bir örnek kullanılır.
+    settings = settings.model_copy(update={"stt_provider": "local", "tts_provider": "cloud"})
     assistant = VoiceAssistant(dispatcher, FakeLLM(), FakeOverlay(), settings)
 
     assert assistant._ensure_stt().mode == "local"
@@ -650,7 +651,7 @@ def test_local_provider_mode_never_constructs_cloud_backend(
     fabrikasının hiç çağrılmadığını kanıtlar.
     """
 
-    settings.stt_provider = "local"
+    settings = settings.model_copy(update={"stt_provider": "local"})
     assistant = VoiceAssistant(dispatcher, FakeLLM(), FakeOverlay(), settings)
 
     router = assistant._ensure_stt()
@@ -807,7 +808,7 @@ def test_command_gate_can_be_disabled_from_settings(
 ) -> None:
     """`command_gate_enabled: false` iken kapı hiç çalıştırılmamalı."""
 
-    settings.command_gate_enabled = False
+    settings = settings.model_copy(update={"command_gate_enabled": False})
     overlay = FakeOverlay()
     llm = FakeLLM(
         [{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}],
