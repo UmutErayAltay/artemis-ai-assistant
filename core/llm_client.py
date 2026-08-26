@@ -114,6 +114,14 @@ MAX_PLAN_STEPS = 5
 Güvenlik sınırıdır (bkz. `_response_schema`): gürültülü/anlaşılamayan bir
 girdide model kaçağa geçip onlarca adımlık yıkıcı bir plan üretebiliyor.
 Gerçek bir sesli komut bu sayıyı pratikte aşmaz.
+
+BU SINIR İKİ YERDE UYGULANIR ve bu bilinçlidir (README §35):
+`_response_schema()` onu grammar-constrained decoding ile FİZİKSEL bir
+kısıt yapar — ama `_chat` şema stratejisi başarısız olursa `format="json"`
+ve kısıtsız stratejilere DÜŞER (bkz. `_chat` strateji listesi). O
+düşüşte hem `maxItems` hem tool adı `enum`'u kaybolur. Bu yüzden aynı
+sınır `_validate_tool_calls` içinde Python tarafında da uygulanır:
+bir güvence katmanı, yalnızca en zayıf hâlinde de geçerliyse güvencedir.
 """
 
 _CORRECTION_MESSAGE = (
@@ -124,6 +132,84 @@ _CORRECTION_MESSAGE = (
 
 class LLMResponseParseError(Exception):
     """LLM çıktısından geçerli bir tool-call JSON'u çıkarılamadığında fırlatılır."""
+
+
+def _validate_tool_calls(parsed: list[Any]) -> list[dict[str, Any]]:
+    """Ayrıştırılmış listeyi, dispatcher'a verilmeden ÖNCE denetler.
+
+    NEDEN BURADA — grammar bir güvence katmanıdır, tek güvence DEĞİL:
+    `_response_schema()` üç şeyi fiziksel olarak dayatır (her eleman
+    `tool`/`arguments` alanlı bir nesne, `tool` gerçek bir tool adı,
+    en fazla `MAX_PLAN_STEPS` adım). Ama `_chat` dört stratejiyi sırayla
+    dener ve son ikisinde (`format="json"` ve kısıtsız) şema hiç
+    GÖNDERİLMEZ — o anda üç dayatmanın üçü de kaybolur. Python tarafında
+    hiçbir şey onları yeniden uygulamıyordu.
+
+    Bu yalnızca kuramsal bir açık değildi; ikisi de ölçülmüş arıza:
+
+    1. **Yıkıcı uzun plan** — `_response_schema` dokümantasyonundaki
+       gerçek olay: tek bir anlamsız cümle 25 tool çağrısı üretti ve
+       içinde `filesystem.delete` vardı. `maxItems` bunu grammar
+       altında imkânsız kılar; şemasız stratejide hiçbir şey kılmıyordu.
+    2. **Çökme** — model `["filesystem.delete", "windows.shutdown"]`
+       (geçerli JSON, `format="json"` altında olası) üretirse
+       `planner.execute_plan` bir `str` üzerinde `.get()` çağırır,
+       `AttributeError` fırlar ve ne `conversation_loop.run` ne de
+       `VoiceAssistant._handle_one_command` onu yakalar — sohbet döngüsü
+       ya da ses işçisi ölür.
+
+    SESSİZ KIRPMA YOK: sınırı aşan bir plan sessizce ilk 5 adıma
+    indirilmez, HATA olur. Kullanıcının "5 şey istedim, 3'ü oldu"
+    durumuyla karşılaşmaması gerekir; model neyi yapacağını yanlış
+    anladıysa doğru cevap dürüstçe başarısız olmaktır.
+
+    Args:
+        parsed: JSON'dan çıkan ham liste (elemanlarının türü belirsiz).
+
+    Returns:
+        Doğrulanmış tool-call sözlükleri.
+
+    Raises:
+        LLMResponseParseError: Liste boşsa, `MAX_PLAN_STEPS`'i aşıyorsa,
+            bir eleman sözlük değilse ya da `tool` alanı kayıtlı bir tool
+            adı değilse.
+    """
+
+    if not parsed:
+        raise LLMResponseParseError("LLM boş bir tool-call listesi döndürdü.")
+
+    if len(parsed) > MAX_PLAN_STEPS:
+        raise LLMResponseParseError(
+            f"LLM {len(parsed)} adımlık bir plan üretti; üst sınır {MAX_PLAN_STEPS}. "
+            "Plan sessizce kırpılmaz, tamamı reddedilir."
+        )
+
+    validated: list[dict[str, Any]] = []
+    for index, call in enumerate(parsed, start=1):
+        if not isinstance(call, dict):
+            raise LLMResponseParseError(
+                f"{index}. tool-call bir nesne değil, {type(call).__name__} geldi: {call!r}"
+            )
+
+        tool_name = call.get("tool")
+        if not isinstance(tool_name, str) or not tool_name:
+            raise LLMResponseParseError(f"{index}. tool-call'da geçerli bir 'tool' alanı yok: {call!r}")
+
+        # Grammar'daki `enum` kısıtının Python karşılığı: şemasız
+        # stratejide model var olmayan bir tool adı UYDURABİLİR.
+        if tool_name not in TOOL_REGISTRY:
+            raise LLMResponseParseError(f"{index}. adım kayıtlı olmayan bir tool istedi: {tool_name!r}")
+
+        arguments = call.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise LLMResponseParseError(
+                f"'{tool_name}' için 'arguments' bir nesne olmalı, {type(arguments).__name__} geldi."
+            )
+
+        validated.append({"tool": tool_name, "arguments": arguments})
+
+    return validated
+
 
 
 class OllamaLLMClient:
@@ -190,10 +276,15 @@ class OllamaLLMClient:
         for attempt in range(max_retries + 1):
             raw_text, native_calls = self._chat(messages)
 
-            if native_calls is not None:
-                return native_calls
-
             try:
+                if native_calls is not None:
+                    # Native tool-calling yolu da AYNI denetimden geçer:
+                    # `_extract_native_tool_calls` Ollama'nın döndürdüğü
+                    # yapıyı çevirir ama içeriğini doğrulamaz (adı `None`
+                    # olan bir çağrı bile üretebilir, bkz. o metodun
+                    # dokümantasyonu). Denetimi yalnızca metin yoluna
+                    # koymak, güvence katmanını yarım bırakırdı.
+                    return _validate_tool_calls(native_calls)
                 return self.extract_tool_calls(raw_text)
             except LLMResponseParseError as exc:
                 last_error = exc
@@ -390,6 +481,14 @@ class OllamaLLMClient:
                     "arguments": {"type": "object"},
                 },
                 "required": ["tool", "arguments"],
+                # `system_prompt.md` "Yaygın hatalar" bölümü fazladan alanı
+                # (`"response"` gibi) zaten YASAKLIYOR; şema bunu izin
+                # verilir bırakmıştı. Prompt bir şeyi yasaklıyor ama şema
+                # onu üretilebilir bırakıyorsa, sözleşme yarımdır: kural
+                # talimat olarak kalır, fiziksel kısıt olmaz (bkz.
+                # CLAUDE.md "Şema ile sistem promptu aynı sözleşmeyi
+                # konuşmalı", README §16a'nın öğrettiği ders).
+                "additionalProperties": False,
             },
             "minItems": 1,
             # Bir sesli komut gerçekçi olarak en fazla birkaç adım sürer
@@ -439,8 +538,8 @@ class OllamaLLMClient:
                 continue
 
             if isinstance(parsed, dict):
-                return [parsed]
+                return _validate_tool_calls([parsed])
             if isinstance(parsed, list):
-                return parsed
+                return _validate_tool_calls(parsed)
 
         raise LLMResponseParseError(f"LLM çıktısından geçerli tool-call JSON'u çıkarılamadı: {raw_text!r}")
