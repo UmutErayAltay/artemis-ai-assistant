@@ -38,6 +38,7 @@ hata verilmez.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -48,6 +49,8 @@ from models.tool_models import ToolResult
 
 # Bilinen masaüstü tarayıcı süreç adları (küçük harf). Yeni bir tarayıcı
 # desteklemek yalnızca bu kümeye tek satır eklemek demektir.
+logger = logging.getLogger(__name__)
+
 _BROWSER_PROCESS_NAMES = frozenset(
     {
         "chrome.exe",
@@ -133,9 +136,20 @@ def _focus_any_browser_window() -> str | None:
     try:
         win32gui.SetForegroundWindow(match["hwnd"])
     except Exception:  # noqa: BLE001 - Windows'un ön plan kısıtlaması engelleyebilir
+        logger.warning("Tarayıcı penceresi öne getirilemedi (ön plan kısıtı).")
         return None
 
     time.sleep(_FOCUS_SETTLE_SECONDS)
+
+    # Koşulsuz başarı yasak: `SetForegroundWindow` bir İSTEKTİR ve
+    # Windows'un ön plan kilidi onu sessizce reddedebilir. Doğrulamadan
+    # dönmek, çağıranın "tarayıcı odakta" sanıp kısayolu YANLIŞ pencereye
+    # göndermesi demekti — kardeş tool `windows.focus_window` da aynı
+    # hatayı taşıyordu.
+    if win32gui.GetForegroundWindow() != match["hwnd"]:
+        logger.warning("Tarayıcı penceresi öne getirilemedi (Windows isteği reddetti).")
+        return None
+
     return match["name"]
 
 

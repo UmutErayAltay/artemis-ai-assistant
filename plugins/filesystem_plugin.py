@@ -122,6 +122,51 @@ def _unsafe_target_result(target: str) -> ToolResult:
     )
 
 
+_OVERWRITE_HINT = "üzerine yazmak için overwrite=true gönderin."
+
+
+def _prepare_destination(destination: Path, overwrite: bool) -> ToolResult | None:
+    """Hedefi yazılabilir hâle getirir; engel varsa açıklayan sonucu döndürür.
+
+    Bu blok `copy`, `rename` ve `move`'da ÜÇ KEZ birebir tekrarlanıyordu.
+    Tekrarın bedeli zaten ödendi: `.context` §6.14, aynı sınıf hatanın
+    (kaynak == hedef olduğunda `overwrite` dalının önce hedefi SİLİP sonra
+    kaynaktan taşımaya çalışması — yani kendini silmesi) bu üçlüde iki kez
+    bulunduğunu kaydediyor. Üç kopya, bir düzeltmenin üçüne birden
+    uygulanmasını unutmayı kolaylaştırır.
+
+    Args:
+        destination: Yazılacak hedef yol.
+        overwrite: Hedefte aynı adda bir şey varsa silinsin mi.
+
+    Returns:
+        `None` ise yol açık, arayan devam edebilir. Aksi hâlde
+        kullanıcıya döndürülecek başarısızlık sonucu.
+    """
+
+    if not destination.exists():
+        return None
+
+    if not overwrite:
+        return ToolResult(
+            success=False,
+            message=f"'{destination}' hedefinde aynı isimde bir öğe zaten var; {_OVERWRITE_HINT}",
+        )
+
+    try:
+        if destination.is_dir():
+            shutil.rmtree(destination)
+        else:
+            destination.unlink()
+    except OSError as exc:
+        # Koşulsuz devam yasak: silme başarısız olduysa (dosya açık, izin
+        # yok) taşıma/kopyalama da başarısız olur — sebebini burada
+        # söylemek, sonraki adımın anlaşılmaz hatasından iyidir.
+        return ToolResult(success=False, message=f"'{destination}' üzerine yazılamadı: {exc}")
+
+    return None
+
+
 @register_tool
 class FilesystemOpenTool(BaseTool):
     """Belirtilen konumdaki bir dosya/klasörü varsayılan uygulamayla açar."""
@@ -306,14 +351,15 @@ class FilesystemCopyTool(BaseTool):
         destination_dir.mkdir(parents=True, exist_ok=True)
         destination = destination_dir / source.name
 
-        if destination.exists() and not overwrite:
+        if source == destination:
             return ToolResult(
                 success=False,
-                message=(
-                    f"'{destination}' hedefinde aynı isimde bir öğe zaten var; "
-                    "üzerine yazmak için overwrite=true gönderin."
-                ),
+                message="Kaynak ve hedef aynı; kopyalanacak bir şey yok.",
             )
+
+        engel = _prepare_destination(destination, overwrite)
+        if engel is not None:
+            return engel
 
         if source.is_dir():
             shutil.copytree(source, destination, dirs_exist_ok=overwrite)
@@ -380,19 +426,9 @@ class FilesystemRenameTool(BaseTool):
         if source == destination:
             return ToolResult(success=True, message=f"'{source.name}' zaten bu adda.", data={"path": str(source)})
 
-        if destination.exists():
-            if not overwrite:
-                return ToolResult(
-                    success=False,
-                    message=(
-                        f"'{destination}' hedefinde aynı isimde bir öğe zaten var; "
-                        "üzerine yazmak için overwrite=true gönderin."
-                    ),
-                )
-            if destination.is_dir():
-                shutil.rmtree(destination)
-            else:
-                destination.unlink()
+        engel = _prepare_destination(destination, overwrite)
+        if engel is not None:
+            return engel
 
         source.rename(destination)
         context.memory.remember_last_path(str(destination))
@@ -449,19 +485,9 @@ class FilesystemMoveTool(BaseTool):
         if source == destination:
             return ToolResult(success=True, message="Kaynak zaten hedef konumda.", data={"path": str(source)})
 
-        if destination.exists():
-            if not overwrite:
-                return ToolResult(
-                    success=False,
-                    message=(
-                        f"'{destination}' hedefinde aynı isimde bir öğe zaten var; "
-                        "üzerine yazmak için overwrite=true gönderin."
-                    ),
-                )
-            if destination.is_dir():
-                shutil.rmtree(destination)
-            else:
-                destination.unlink()
+        engel = _prepare_destination(destination, overwrite)
+        if engel is not None:
+            return engel
 
         shutil.move(str(source), str(destination))
         context.memory.remember_last_path(str(destination))

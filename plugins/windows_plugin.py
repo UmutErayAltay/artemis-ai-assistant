@@ -624,44 +624,56 @@ class WindowsListWindowsTool(BaseTool):
         return {"type": "object", "properties": {}}
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-        import win32gui
-
-        titles: list[str] = []
-
-        def _collect(hwnd: int, _extra: Any) -> None:
-            if win32gui.IsWindowVisible(hwnd):
-                title = win32gui.GetWindowText(hwnd)
-                if title:
-                    titles.append(title)
-
-        win32gui.EnumWindows(_collect, None)
+        titles = [title for _hwnd, title in iter_visible_windows()]
         return ToolResult(success=True, message=f"{len(titles)} pencere bulundu.", data={"windows": titles})
+
+
+def iter_visible_windows() -> list[tuple[int, str]]:
+    """Görünür ve BAŞLIĞI OLAN tüm pencereleri `(hwnd, başlık)` olarak verir.
+
+    `win32gui.EnumWindows` bir GERİ ÇAĞIRIM (callback) API'sidir: her
+    kullanımda bir iç fonksiyon yazıp sonuçları dışarıdaki bir listeye/
+    sözlüğe biriktirmek gerekir. Bu kalıp bu depoda DÖRT ayrı yerde elle
+    yazılmıştı (`_find_window_by_title`, `_send_graceful_close`,
+    `WindowsListWindowsTool` ve `browser_plugin._focus_any_browser_window`)
+    — üstelik `browser_plugin` tekrarı bir yorumla KABUL edip yine de
+    tekrarlıyordu.
+
+    Callback'i sıradan bir listeye çevirmek, çağıran tarafların normal
+    Python ifadeleriyle (filtre, `next`, liste kavrama) çalışmasını
+    sağlar; ayrıca sahtelenmesi de kolaylaşır.
+
+    Returns:
+        `(hwnd, başlık)` çiftleri. Görünmeyen ya da başlıksız pencereler
+        (araç pencereleri, gizli konteynerler) DIŞARIDA bırakılır —
+        dördü de zaten bunu yapıyordu.
+    """
+
+    import win32gui
+
+    windows: list[tuple[int, str]] = []
+
+    def _collect(hwnd: int, _extra: Any) -> None:
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        title = win32gui.GetWindowText(hwnd)
+        if title:
+            windows.append((hwnd, title))
+
+    win32gui.EnumWindows(_collect, None)
+    return windows
 
 
 def _find_window_by_title(title_query: str) -> int | None:
     """Başlığında `title_query` (küçük/büyük harf duyarsız) geçen İLK
     görünür pencerenin `hwnd`'ini bulur.
 
-    `WindowsFocusWindowTool` ve `WindowsArrangeWindowTool` arasında
-    paylaşılan ortak arama mantığı — üçüncü kullanımda (bkz.
-    `plugins/_app_resolver.py`'nin "ortak yardımcı" deseni) inline
-    tekrardan buraya çıkarıldı.
-
     Returns:
         Eşleşen pencerenin `hwnd`'i; hiçbiri bulunamazsa None.
     """
 
-    import win32gui
-
     query = title_query.lower()
-    match: dict[str, int] = {}
-
-    def _find(hwnd: int, _extra: Any) -> None:
-        if win32gui.IsWindowVisible(hwnd) and query in win32gui.GetWindowText(hwnd).lower():
-            match.setdefault("hwnd", hwnd)
-
-    win32gui.EnumWindows(_find, None)
-    return match.get("hwnd")
+    return next((hwnd for hwnd, title in iter_visible_windows() if query in title.lower()), None)
 
 
 @register_tool

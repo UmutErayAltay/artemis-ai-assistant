@@ -129,17 +129,21 @@ class StepResult:
         tool_name: Çalıştırılan (veya çalıştırılamayan) tool'un adı.
         arguments: Bu adım için kullanılan argümanlar.
         result: Dispatcher'dan dönen ToolResult.
-        skipped: True ise bu adım hiç çalıştırılmadı (önceki bir adımın
-            başarısızlığı/onay reddi yüzünden planın durdurulmasından sonra
-            eklenmiştir — yalnızca raporlama amaçlı, kullanıcıya "bu adıma
-            hiç sıra gelmedi" demek için).
+
+    Not: burada bir dönem `skipped: bool` alanı vardı ve docstring'i
+    "atlanan adımlar da raporlama amaçlı eklenir" diyordu — ama alan
+    HİÇBİR YERDE `True` yapılmıyor, hiçbir yerde OKUNMUYORDU. `execute_plan`
+    zaten yalnızca ÇALIŞTIRILAN adımlar için `StepResult` üretiyor
+    (aşağıdaki `Returns` bölümü doğru olan); atlanan adım sayısını
+    `core/conversation_loop.py` ve `core/voice_loop.py` `toplam - tamamlanan`
+    çıkarmasıyla buluyor. Yani docstring, var olmayan bir davranışı
+    anlatıyordu — v3.14'te düzeltilen doc-drift'in aynısı. Alan silindi.
     """
 
     index: int
     tool_name: str
     arguments: dict[str, Any]
     result: ToolResult
-    skipped: bool = False
 
 
 class TaskPlanner:

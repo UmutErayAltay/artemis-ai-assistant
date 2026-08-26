@@ -320,16 +320,16 @@ def test_call_tool_result_translates_error() -> None:
 
 
 def test_ensure_no_running_event_loop_raises_inside_a_loop() -> None:
-    from plugins.mcp_plugin import _ensure_no_running_event_loop
+    from utils.asyncio_guard import ensure_no_running_event_loop
 
     async def _inside() -> None:
-        _ensure_no_running_event_loop("test.execute()")
+        ensure_no_running_event_loop("test.execute()")
 
     with pytest.raises(RuntimeError, match="asyncio"):
         asyncio.run(_inside())
 
 
 def test_ensure_no_running_event_loop_passes_outside_a_loop() -> None:
-    from plugins.mcp_plugin import _ensure_no_running_event_loop
+    from utils.asyncio_guard import ensure_no_running_event_loop
 
-    _ensure_no_running_event_loop("test.execute()")  # exception atmamalı
+    ensure_no_running_event_loop("test.execute()")  # exception atmamalı

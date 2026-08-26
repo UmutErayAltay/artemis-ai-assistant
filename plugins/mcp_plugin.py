@@ -65,29 +65,11 @@ from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
 from models.tool_models import ToolResult
+from utils.asyncio_guard import ensure_no_running_event_loop
 
 logger = logging.getLogger(__name__)
 
 _TOOL_NAME_PREFIX = "mcp"
-
-
-def _ensure_no_running_event_loop(caller: str) -> None:
-    """`asyncio.run()` çağrılmadan önce çalışan bir olay döngüsü olmadığını doğrular.
-
-    `voice/tts_cloud.py`'deki aynı adlı fonksiyonla AYNI gerekçe: bu bir
-    kullanım/programlama hatasıdır (yanlış thread'den çağrı), sunucunun
-    erişilemez olmasıyla ilgisi yoktur ve sessizce yutulmamalıdır.
-    """
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return  # çalışan döngü yok -> beklenen/normal durum
-
-    raise RuntimeError(
-        f"{caller}, zaten çalışan bir asyncio olay döngüsü içinden çağrılamaz "
-        "(asyncio.run() iç içe çalışamaz)."
-    )
 
 
 async def _list_server_tools_async(server: Any) -> list[Any]:
@@ -186,7 +168,7 @@ def _make_mcp_tool_class(server: Any, tool_def: Any) -> type[BaseTool]:
             return resolved_schema
 
         def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-            _ensure_no_running_event_loop(f"{resolved_name}.execute()")
+            ensure_no_running_event_loop(f"{resolved_name}.execute()")
             try:
                 call_result = asyncio.run(
                     asyncio.wait_for(

@@ -43,14 +43,13 @@ değerlendirilebilir.
 
 from __future__ import annotations
 
-import io
 import logging
 import os
-import wave
 
-from voice.audio import CHANNELS, SAMPLE_RATE, SAMPLE_WIDTH_BYTES
+from voice.audio import SAMPLE_RATE, SAMPLE_WIDTH_BYTES
 from voice.stt import MIN_TRANSCRIBE_SECONDS
 from voice.stt_cloud import CloudSpeechUnavailableError
+from voice.wav import pcm_to_wav
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +186,7 @@ class AzureSpeechToText:
         if hotwords:
             logger.debug("hotwords Azure REST STT'de desteklenmiyor, yok sayıldı: %r", hotwords)
 
-        wav_bytes = self._pcm_to_wav(pcm_bytes)
+        wav_bytes = pcm_to_wav(pcm_bytes)
 
         import requests  # lazy import: bu modül olmadan da proje import edilebilsin
 
@@ -249,27 +248,3 @@ class AzureSpeechToText:
             f"Azure Speech API tanıma hatası döndürdü (RecognitionStatus={status!r})."
         )
 
-    @staticmethod
-    def _pcm_to_wav(pcm_bytes: bytes) -> bytes:
-        """Ham 16-bit PCM veriyi bellekte (diske yazmadan) bir WAV konteynerine sarar.
-
-        Azure'un REST API'si (Groq'un OpenAI-uyumlu ucu gibi) ham PCM
-        değil, konteynerlenmiş bir ses dosyası bekler. `voice.audio`
-        modülünün "ses verisi hiçbir zaman diske yazılmaz" ilkesine
-        uyularak dönüşüm tamamen `io.BytesIO` ile RAM'de yapılır — bkz.
-        `voice.stt_cloud.GroqSpeechToText._pcm_to_wav` (aynı desen).
-
-        Args:
-            pcm_bytes: 16 kHz, tek kanal, 16-bit little-endian PCM veri.
-
-        Returns:
-            Geçerli, tek kanallı/16 kHz/16-bit bir `.wav` dosyasının ham baytları.
-        """
-
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wav_file:
-            wav_file.setnchannels(CHANNELS)
-            wav_file.setsampwidth(SAMPLE_WIDTH_BYTES)
-            wav_file.setframerate(SAMPLE_RATE)
-            wav_file.writeframes(pcm_bytes)
-        return buffer.getvalue()
