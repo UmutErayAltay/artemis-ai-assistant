@@ -34,6 +34,7 @@ import logging
 import threading
 from collections.abc import Callable
 
+from utils.asyncio_guard import ensure_no_running_event_loop
 from voice.audio import rms_amplitude
 
 logger = logging.getLogger(__name__)
@@ -54,37 +55,6 @@ class CloudTextToSpeechUnavailableError(Exception):
     yerel `voice.tts.TextToSpeech` (Piper) ile devam eder — bu yüzden bu
     istisna asla yutulup sessizce yoksayılmamalı, her zaman fırlatılmalıdır.
     """
-
-
-def _ensure_no_running_event_loop() -> None:
-    """`asyncio.run()` çağrılmadan önce çalışan bir olay döngüsü olmadığını doğrular.
-
-    `asyncio.run()` zaten çalışan bir döngü içinden çağrılırsa zaten
-    `RuntimeError` fırlatır; bu fonksiyon aynı durumu daha erken ve daha
-    anlaşılır bir mesajla yakalar. Bu proje ses işçisini kendi thread'inde
-    çalıştırdığı için normal kullanımda buraya hiç düşülmez — yine de
-    savunmacı davranılır: sessizce (anlamsız bir alt seviye hatasıyla)
-    çökmek yerine açık bir `RuntimeError` verilir.
-
-    BİLEREK `CloudTextToSpeechUnavailableError`'a SARILMAZ: bu bir
-    kullanım/programlama hatasıdır, bulutun erişilemez olmasıyla ilgisi
-    yoktur. Yönlendiricinin bunu yutup sessizce yerel Piper'a düşmesi,
-    gerçek hatayı (yanlış thread'den çağrı) gizlemekten başka işe yaramaz.
-
-    Raises:
-        RuntimeError: Çağıran thread'de zaten çalışan bir asyncio olay
-            döngüsü varsa.
-    """
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return  # çalışan döngü yok -> beklenen/normal durum
-
-    raise RuntimeError(
-        "EdgeTextToSpeech.speak(), zaten çalışan bir asyncio olay döngüsü içinden "
-        "çağrılamaz (asyncio.run() iç içe çalışamaz). Sesi ayrı bir thread'de çalıştırın."
-    )
 
 
 class EdgeTextToSpeech:
@@ -156,7 +126,9 @@ class EdgeTextToSpeech:
         if not text:
             return
 
-        _ensure_no_running_event_loop()
+        ensure_no_running_event_loop(
+            "EdgeTextToSpeech.speak()", "Sesi ayrı bir thread'de çalıştırın."
+        )
         self._stop_event.clear()
 
         try:

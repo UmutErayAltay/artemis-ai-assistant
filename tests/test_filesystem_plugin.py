@@ -968,3 +968,36 @@ def test_safe_join_rejects_windows_absolute_path_on_every_platform() -> None:
 
     assert _safe_join(Path("/tmp/base"), "C:/Windows/System32") is None
     assert _safe_join(Path("/tmp/base"), "C:tmp") is None
+
+
+def test_copy_onto_itself_fails_instead_of_destroying_the_file(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """Kaynak ve hedef aynıysa kopyalama ANLAMSIZDIR ve tehlikelidir.
+
+    `.context` §6.14 aynı sınıf hatayı `rename`/`move`'da kaydediyor:
+    `overwrite=True` dalı önce hedefi SİLİP sonra kaynaktan taşımaya
+    çalışıyordu — ama kaynak ZATEN o hedefti. `copy`'de bu kontrol
+    eksikti; `shutil.copy2(x, x)` `SameFileError` fırlatır ve kullanıcı
+    "Beklenmeyen hata" görürdü.
+    """
+
+    settings.desktop_path.mkdir(parents=True, exist_ok=True)
+    dosya = settings.desktop_path / "veri.txt"
+    dosya.write_text("kaybolmamalı", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.copy",
+            "arguments": {
+                "target": "veri.txt",
+                "source_location": "desktop",
+                "destination_location": "desktop",
+                "overwrite": True,
+            },
+        }
+    )
+
+    assert result.success is False
+    assert dosya.exists()
+    assert dosya.read_text(encoding="utf-8") == "kaybolmamalı"

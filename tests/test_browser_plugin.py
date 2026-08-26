@@ -174,6 +174,7 @@ def _install_fake_win32(
     window_pids: dict[int, int],
     visible_hwnds: set[int],
     pid_names: dict[int, str],
+    foreground_refused: bool = False,
 ) -> dict[str, Any]:
     """`win32gui`/`win32process`/`psutil`'i sahte modüllerle değiştirir.
 
@@ -184,13 +185,23 @@ def _install_fake_win32(
 
     observed: dict[str, Any] = {"focused_hwnd": None}
 
+    # ÖN PLAN, KOMUT DEĞİL DURUMDUR. Gerçek `SetForegroundWindow` bir
+    # İSTEKTİR ve Windows'un ön plan kilidi onu reddedebilir; hangi
+    # pencerenin gerçekten önde olduğunu yalnızca `GetForegroundWindow`
+    # söyler. Fake bu ikisini ayırmazsa (yani "set" edileni "get"
+    # döndürmezse) plugin'in DOĞRU olan doğrulama mantığını
+    # yanlış-negatif kırar — `.context` §6.16'nın dersinin aynısı.
+    state: dict[str, int] = {"foreground": foreground_hwnd or 0}
+
     fake_win32gui = types.ModuleType("win32gui")
-    fake_win32gui.GetForegroundWindow = lambda: foreground_hwnd or 0
+    fake_win32gui.GetForegroundWindow = lambda: state["foreground"]
     fake_win32gui.IsWindowVisible = lambda hwnd: hwnd in visible_hwnds
     fake_win32gui.EnumWindows = lambda callback, extra: [callback(hwnd, extra) for hwnd in window_pids]
 
     def _set_foreground(hwnd: int) -> None:
         observed["focused_hwnd"] = hwnd
+        if not foreground_refused:
+            state["foreground"] = hwnd
 
     fake_win32gui.SetForegroundWindow = _set_foreground
 
@@ -363,3 +374,29 @@ def test_send_shortcut_reports_exception_honestly(monkeypatch: pytest.MonkeyPatc
 
     assert ok is False
     assert error is not None and "gönderilemedi" in error
+
+
+def test_browser_focus_failure_is_reported_instead_of_silently_assumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows ön plan kilidi isteği reddederse "odaklandı" DENMEMELİ.
+
+    Doğrulamadan dönmek, `_run_browser_shortcut`'ın "tarayıcı odakta"
+    sanıp `ctrl+w` gibi bir kısayolu YANLIŞ pencereye göndermesi
+    demekti — yani kullanıcının o an ne yaptığına bağlı olarak
+    beklenmedik bir sekme/pencere kapanabilirdi.
+    """
+
+    _install_fake_win32(
+        monkeypatch,
+        foreground_hwnd=99,  # ön planda tarayıcı YOK
+        window_pids={1: 100},
+        visible_hwnds={1},
+        pid_names={100: "chrome.exe"},
+        foreground_refused=True,  # Windows isteği reddediyor
+    )
+
+    ok, error = browser_plugin._ensure_browser_focused()
+
+    assert ok is False
+    assert error is not None

@@ -14,12 +14,13 @@ Kullanım:
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import signal
 import sys
 
-from config.settings import get_settings
+from config.settings import Settings, get_settings
 from core.conversation_loop import run as run_conversation_loop
 from core.dispatcher import ToolDispatcher
 from core.llm_client import OllamaLLMClient
@@ -52,6 +53,37 @@ def bootstrap() -> ToolDispatcher:
     logger.info("Artemis başlatıldı. Yüklü tool sayısı: %d", len(manifest))
 
     return ToolDispatcher(settings=settings)
+
+
+def _start_llm_session(settings: Settings) -> tuple[OllamaServerManager, OllamaLLMClient] | None:
+    """Ollama sunucusunu hazırlar, model seçtirir ve istemciyi kurar.
+
+    Bu üç adım `--chat` ve `--voice` yollarında birebir tekrarlanıyordu;
+    bir ayar eklendiğinde (örn. `ollama_timeout_seconds`) iki yeri birden
+    güncellemeyi unutmak kolaydı.
+
+    Returns:
+        (sunucu_yöneticisi, istemci) çifti; Ollama kullanılamıyorsa
+        `None` (sebep zaten kullanıcıya yazdırılmıştır). Sunucu
+        yöneticisi DÖNDÜRÜLÜR çünkü kapatma sorumluluğu çağırana aittir:
+        yalnızca çağıran, döngünün ne zaman bittiğini bilir.
+    """
+
+    server_manager = OllamaServerManager()
+    try:
+        server_manager.ensure_running()
+        selected_model = prompt_user_to_select_model(list_installed_models())
+    except OllamaUnavailableError as exc:
+        print(f"Artemis başlatılamadı: {exc}")
+        return None
+
+    client = OllamaLLMClient(
+        model=selected_model,
+        use_native_tool_calling=settings.use_native_tool_calling,
+        keep_alive=settings.ollama_keep_alive,
+        timeout_seconds=settings.ollama_timeout_seconds,
+    )
+    return server_manager, client
 
 
 def main() -> None:
@@ -99,7 +131,11 @@ def main_chat() -> None:
     """
 
     dispatcher = bootstrap()
-    server_manager = OllamaServerManager()
+
+    session = _start_llm_session(dispatcher.settings)
+    if session is None:
+        return
+    server_manager, llm_client = session
 
     def _handle_termination_signal(signum: int, frame: object) -> None:
         logger.info("Sinyal alındı (%s), Ollama sunucusu (varsa) kapatılıyor...", signum)
@@ -111,21 +147,6 @@ def main_chat() -> None:
         signal.signal(signal.SIGTERM, _handle_termination_signal)
     except (ValueError, AttributeError, OSError):
         pass  # bazı platformlar/thread bağlamları SIGTERM'i desteklemeyebilir
-
-    try:
-        server_manager.ensure_running()
-        models = list_installed_models()
-        selected_model = prompt_user_to_select_model(models)
-    except OllamaUnavailableError as exc:
-        print(f"Artemis başlatılamadı: {exc}")
-        return
-
-    llm_client = OllamaLLMClient(
-        model=selected_model,
-        use_native_tool_calling=dispatcher.settings.use_native_tool_calling,
-        keep_alive=dispatcher.settings.ollama_keep_alive,
-        timeout_seconds=dispatcher.settings.ollama_timeout_seconds,
-    )
 
     try:
         run_conversation_loop(dispatcher, llm_client)
@@ -173,21 +194,10 @@ def main_voice() -> None:
     from ui.overlay import ArtemisOverlay
     from ui.tray import ArtemisTray
 
-    server_manager = OllamaServerManager()
-
-    try:
-        server_manager.ensure_running()
-        selected_model = prompt_user_to_select_model(list_installed_models())
-    except OllamaUnavailableError as exc:
-        print(f"Artemis başlatılamadı: {exc}")
+    session = _start_llm_session(settings)
+    if session is None:
         return
-
-    llm_client = OllamaLLMClient(
-        model=selected_model,
-        use_native_tool_calling=settings.use_native_tool_calling,
-        keep_alive=settings.ollama_keep_alive,
-        timeout_seconds=settings.ollama_timeout_seconds,
-    )
+    server_manager, llm_client = session
 
     app = QApplication(sys.argv)
     # KRİTİK: overlay gizlendiğinde son pencere kapanmış sayılır. Bu bayrak
@@ -243,12 +253,38 @@ def main_stop_ollama() -> None:
         print("Çalışan bir ollama süreci bulunamadı.")
 
 
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Komut satırı seçeneklerini ayrıştırır.
+
+    Elle `sys.argv` taraması yerine `argparse`: yazım hatası yapan bir
+    kullanıcı (`--voise`) sessizce LLM'siz demo moduna düşüyordu, çünkü
+    tarama yalnızca bilinen üç dizeyi arıyor, bilinmeyeni yok sayıyordu.
+    Artık bilinmeyen seçenek hata verir ve `--help` çalışır.
+    """
+
+    parser = argparse.ArgumentParser(
+        prog="artemis",
+        description="Yerel çalışan, Türkçe konuşan Ollama tabanlı masaüstü asistanı.",
+    )
+    mod = parser.add_mutually_exclusive_group()
+    mod.add_argument("--chat", action="store_true", help="Terminal tabanlı sohbet döngüsü.")
+    mod.add_argument("--voice", action="store_true", help="Sesli asistan (tepsi + overlay).")
+    mod.add_argument(
+        "--stop-ollama",
+        action="store_true",
+        dest="stop_ollama",
+        help="RAM temizliği: yetim ollama süreçlerini kapatır.",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
-    if "--stop-ollama" in sys.argv:
+    args = _parse_args()
+    if args.stop_ollama:
         main_stop_ollama()
-    elif "--voice" in sys.argv:
+    elif args.voice:
         main_voice()
-    elif "--chat" in sys.argv:
+    elif args.chat:
         main_chat()
     else:
         main()
