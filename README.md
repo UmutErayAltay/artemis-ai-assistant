@@ -2013,3 +2013,272 @@ göz önünde bulunduran bir üst sınır. Yeni bir tool eklenecekse, bu
 
 Dört yeni aday model diskte 13.4 GB tutuyor, hiçbiri kazanmadı —
 kullanıcı onayıyla silinecek. `gemma4:e4b` varsayılan model olarak kaldı.
+
+## 35) Denetim teslimatı: iki sessiz güvenlik deliği + altyapı (v3.16)
+
+Bu bölüm bir özellik teslimatı değil, bir **denetim** teslimatıdır. Soru
+şuydu: "proje daha iyi nasıl olabilir?" Cevabı aramanın yolu yeni özellik
+düşünmek değil, **projenin kendi koyduğu kurallara uymadığı yerleri**
+aramak oldu — çünkü bu depoda kurallar zaten yazılı (`CLAUDE.md`), gerekçeli
+(bu dosya) ve pahalı öğrenilmiş (`.context` §5, §6).
+
+Bulunanların çoğu tam olarak o kuralların ihlaliydi. İkisi, projenin
+**tek güvenlik bariyerini** deliyordu ve hiçbir test onları yakalamıyordu.
+
+### 35a) Sesli onay, açık REDDİ ONAY sayıyordu
+
+`core/voice_loop.py` şunu yapıyordu:
+
+```python
+approved = any(word in answer for word in _AFFIRMATIVE_WORDS)  # ALT DİZE
+```
+
+Türkçe eklemeli bir dildir ve **olumsuzluk bir EKTİR** — yani olumlu kök,
+olumsuz sözcüğün İÇİNDE geçer:
+
+| kullanıcı ne dedi | içerdiği onay sözcüğü | sonuç |
+|---|---|---|
+| *"hayır **yap**ma"* | `yap` | **ONAYLANDI** |
+| *"**onayla**mıyorum"* | `onayla` | **ONAYLANDI** |
+| *"kabul et**mi**yorum"* | `kabul` | **ONAYLANDI** |
+| *"hayır **tamam**en vazgeçtim"* | `tamam` | **ONAYLANDI** |
+| *"**devam** etme"* | `devam` | **ONAYLANDI** |
+
+Ölçüldü: **14 doğal Türkçe reddetme cevabının 8'i onay sayılıyordu.** Yani
+kullanıcı `filesystem.delete` onayına *"hayır yapma"* dediğinde **dosya
+siliniyordu**.
+
+Hemen üstündeki docstring kuralı DOĞRU yazıyordu: *"yalnızca net bir onay
+duyarsam devam et"*. Kod tam tersini yapıyordu. `.context` §6.5 de aynı
+kuralı kayda geçirmişti. Kural üç yerde yazılıydı; uygulanmıyordu.
+
+**Neden hiçbir test yakalamadı:** mevcut test (`test_voice_loop.py`)
+"anlaşılmayan cevap" için *"kapıyı kapat"* kullanıyordu — bu tesadüfen
+hiçbir onay sözcüğünü alt dize olarak içermiyor. Hiçbir test **gerçek bir
+Türkçe reddi** denememişti.
+
+Düzeltme iki katmanlı ve bu sırayla: (1) olumsuzluk vetosu — sabit liste +
+Türkçe olumsuzluk EKİNİ yakalayan regex (`m[ıiuü]yor`, `m[ae]z`, `m[ae]m$`,
+`…m[ae]$`), (2) sözcük seviyesinde (alt dize DEĞİL) olumlu eşleşme.
+`_AFFIRMATIVE_WORDS`'ten `"yap"` ve `"devam"` çıkarıldı: olumsuz
+çekimlerinden ayırt edilmeleri kırılgandı. Yanlış pozitif (gereksiz red)
+**bilinçli olarak tercih edildi** — kapı asimetriktir, red ucuzdur, yanlış
+onay geri alınamaz.
+
+**Ders**: bir kuralı üç yere yazmak onu uygulatmaz. Bir güvenlik kuralının
+tek gerçek bekçisi, o kuralı **ihlal eden girdiyle** yazılmış bir testtir.
+24 regresyon testi eklendi ve her biri ESKİ kod üzerinde çalıştırılarak
+gerçekten kırıldıkları doğrulandı.
+
+### 35b) Aynı hatanın kardeşi: `"HAYIR".lower()` → `"hayir"`
+
+Python'ın `str.lower()`'ı Türkçe yerel ayarını kullanmaz. Türkçede büyük
+`I`'nın küçüğü noktasız `ı`'dır; Python ikisini de İngilizce kurallarına
+göre çevirir:
+
+```python
+"HAYIR".lower()  ->  "hayir"   # veto listesindeki "hayır" ile EŞLEŞMEZ
+"ÇIKIŞ".lower()  ->  "çikiş"   # _EXIT_COMMANDS ile EŞLEŞMEZ
+```
+
+Yani BÜYÜK HARFLE söylenen bir red, veto listesini ıskalıyordu; sohbetten
+çıkış komutu da öyle. `utils/text.py` (`turkish_lower` / `lower_variants`)
+iki çağrı yerinde de kullanılıyor. Tek kural yetmiyor:
+`turkish_lower("EXIT")` → `"exıt"`, ve `_EXIT_COMMANDS` iki dilden sözcük
+içeriyor — bu yüzden ikisi de deneniyor.
+
+### 35c) `MAX_PLAN_STEPS` ve tool adı yalnızca GRAMERDE vardı
+
+`_response_schema()` üç şeyi dayatır: her eleman `tool`/`arguments` alanlı
+bir nesne, `tool` GERÇEK bir tool adı, plan en fazla 5 adım. Ama `_chat`
+dört stratejiyi sırayla dener ve **son ikisinde (`format="json"` ve
+kısıtsız) şema hiç GÖNDERİLMEZ** — o düşüşte üç dayatma da kaybolur ve
+Python tarafında hiçbir şey onları yeniden uygulamıyordu (repo geneli
+`grep`: `MAX_PLAN_STEPS` yalnızca iki satırda geçiyordu, ikisi de şemada).
+
+Bu kuramsal bir açık değil. Şemanın kendi dokümantasyonu şunu yazıyor:
+*"gerçek bir olayda tek bir anlamsız cümle 25 tool çağrısı üretti ve içinde
+`filesystem.delete` vardı."* O olay, şema stratejisi düştüğü anda birebir
+tekrarlanabilirdi.
+
+Ayrıca bir **çökme** düzeltmesi: model `["filesystem.delete", ...]` gibi bir
+dize listesi üretirse (geçerli JSON, `format="json"` altında olası)
+`planner.execute_plan` bir `str` üzerinde `.get()` çağırıyor; `AttributeError`
+ne `conversation_loop.run`'da ne `voice_loop._handle_one_command`'da
+yakalanıyor — sohbet döngüsü ya da ses işçisi **ölüyordu**.
+
+`_validate_tool_calls` eklendi; hem metin hem native tool-calling yolu
+ondan geçiyor. Sınırı aşan plan sessizce **kırpılmaz**, reddedilir.
+
+**Ders**: bir güvence katmanı, ancak **en zayıf hâlinde de** geçerliyse
+güvencedir. Grammar bir katmandır, tek katman değil — geri düşüş yolları
+aynı sözleşmeyi konuşmak zorundadır.
+
+### 35d) "Koşulsuz `success=True` yasak" yedi yerde daha çiğneniyordu
+
+`CLAUDE.md` bu kuralın **üç kez tekrarlandığını** yazıyor. Yedi tane daha
+vardı:
+
+| Yer | Ne oluyordu |
+|---|---|
+| `windows.shutdown` / `restart` | `subprocess.run(check=False)` çıkış kodunu AÇIKÇA atıyordu. `shutdown.exe` başarısız olabilir (1190 zaten planlanmış, 1314 ayrıcalık yok, 5 erişim reddedildi) ve ikisi de `CONFIRM_REQUIRED` — yani kullanıcının **bilinçli onay verdiği** bir işlemde yalan söyleniyordu. `timeout` da yoktu. |
+| `windows.lock` | `LockWorkStation()` BOOL döner; etkileşimsiz oturumda 0 dönüp sessizce başarısız olur. |
+| `windows.sleep` | `SetSuspendState()` BOOLEAN döner. Uyku BIOS'ta kapalıysa 0 döner — geliştiricinin makinesinde **gerçekten böyle** (`.context` §6.6), yani asistan orada bugüne kadar *"uykuya alınıyor"* deyip hiçbir şey yapmıyordu. |
+| `windows.clipboard_copy` | Pano PAYLAŞILAN bir kaynak; yazdıktan sonra geri okunmuyordu. |
+| `windows.focus_window` | `SetForegroundWindow` bir İSTEKTİR ve Windows ön plan kilidi yüzünden RUTİN olarak reddedilir. Kardeş tool `windows.arrange_window` sonucu zaten `GetWindowPlacement` ile doğruluyordu; bu tek istisnaydı. |
+| `browser_plugin._focus_any_browser_window` | Aynı hata. Sonucu: `_run_browser_shortcut` "tarayıcı odakta" sanıp `ctrl+w` gibi bir kısayolu **yanlış pencereye** gönderebiliyordu. |
+| `stop_all_ollama_processes` | `terminate()` **çağrılarını** sayıyordu. `terminate` yalnızca sinyal gönderir; süreç yok sayabilir. Kullanıcı *"3 süreç kapatıldı"* okuyup RAM'in boşaldığını sanarken üçü de çalışıyor olabilirdi. Ayrıca eşleşme `if "ollama" in name` idi: kullanıcının `ollama-webui`/`ollama_bench.py` süreçlerini de öldürürdü. |
+
+**Ders (README §30'un tekrarı)**: bir "koşulsuz `success=True` yasak"
+düzeltmesi, ancak testteki sahte davranış **gerçek API semantiğini** doğru
+taklit ederse anlamlıdır. Bu turda üç fake gerçekçileştirildi:
+`SetForegroundWindow` istektir, sonuç değil (`GetForegroundWindow` söyler);
+`terminate()` sinyaldir, ölüm garantisi değil (`wait_procs` söyler);
+`LockWorkStation`/`SetSuspendState` BOOL döndürür.
+
+### 35e) `_safe_join`'in doğruluğu İŞLETİM SİSTEMİNE bağlıydı
+
+`.context` §5.3 yol doğrulamasının "üç sınıfı" (dışarı çıkan, yukarı çıkan,
+kendini gösteren) için yazılmıştı. Dördüncü bir sınıf vardı: **kontrolün
+kendisinin platforma bağlı olması.** Ölçüldü — POSIX'te:
+
+```python
+Path("C:/Windows/System32").anchor       # ''  -> MUTLAK DEĞİL, kabul edilir
+Path("AltKlasor\\..\\..\\x").parts       # tek parça -> '..' hiç görünmez
+```
+
+Artemis bir Windows uygulaması olduğu için üretimde bu fark görünmezdi. Ama
+bir güvenlik kontrolünün doğruluğu çalıştığı makinenin işletim sistemine
+bağlı OLMAMALIDIR. Artık `PureWindowsPath` ile de denetleniyor. (Yan
+faydası: bu üç senaryonun testleri Linux'ta artık geçiyor — CI'ın önü
+açıldı.)
+
+### 35f) Zaman aşımı: MCP dışında hiçbir bloke çağrının sınırı yoktu
+
+`ollama-python`'ın varsayılan istemcisinin **okuma zaman aşımı yoktur**.
+Modelin VRAM'e sığmadığı durumlarda `ollama serve`'in kilitlenmesi bilinen
+bir arıza; zaman aşımı olmayınca asistan süresiz askıda kalıyordu. Ses
+modunda bu, **mikrofonu tutan ve `stop()` ile durdurulamayan** bir işçi
+demek: `VoiceAssistant.stop` `join(timeout=3)` sonrası thread'i terk eder.
+
+Ayrıca bağlantı hatası ile "bu model bu stratejiyi desteklemiyor" aynı
+`except Exception: continue`'ya düşüyordu: `ollama serve` kapalıyken düz bir
+bağlantı reddi dört stratejinin dördünde de tekrarlanıyor, yalnızca DEBUG'a
+yazılıyordu — ve `get_tool_calls` tüm bunu üç kez tekrarladığından **tek bir
+söz 12 çağrıya** çıkabiliyordu.
+
+### 35g) `config.yaml`'daki yazım hatası SESSİZCE yok sayılıyordu
+
+`Settings` düz bir `BaseModel`'di, yani pydantic v2 varsayılanı
+`extra="ignore"`. `whisper_devcie: "cuda"` hiçbir uyarı üretmeden görmezden
+geliniyor ve kullanıcı, ayarı değiştirdiğini sanarak **var olmayan bir
+hatayı** ayıklıyordu. Aynı sessizlik `dangerous_tools` gibi GÜVENLİK
+ayarları için de geçerliydi — `windows.shutdow` yazan biri tool'u
+kısıtladığını sanırken tool onaysız çalışıyordu.
+
+`extra="forbid"` + `frozen=True` + `Literal` tipleri eklendi. Sonuncusu
+`whisper_device` docstring'inin **prosa olarak yalvardığı** kuralı
+(*"'auto' KULLANMAYIN"*) tip sistemine devrediyor.
+
+### 35h) 453 test vardı, hiçbiri otomatik çalışmıyordu
+
+CI yoktu. Üstelik test takımı bu ortamda **tam olarak koşmuyordu**: üç dosya
+toplama (collection) aşamasında patlıyordu (modül seviyesinde `import
+pyautogui` / PyQt6 — başlıksız bir makinede bu "skip" değil, tüm dosyayı
+düşüren bir hatadır) ve 21 test kırıktı.
+
+Ruff yoktu — ama depoda **ruff kural koduyla yazılmış 40 adet `# noqa`**
+vardı: hiç çalışmamış bir linter'ı susturuyorlardı. Açılınca 60 gerçek bulgu
+çıktı. Mypy yoktu, ama kod zaten tam anotasyonluydu; açılınca
+`plugin_loader.py`'de gerçek bir gizli hata buldu (`Path(package.__file__)` —
+`__file__` bir namespace package için `None`'dır).
+
+`--strict-markers` yoktu: `@pytest.mark.disruptiv` (bir harf eksik) sessizce
+kaydediliyor ve test **ÇALIŞIYORDU** — yani `disruptive` mekanizmasının var
+olma sebebi olan regresyon (geliştiricinin ekranının her test turunda
+kilitlenmesi) bir yazım hatasıyla geri gelebiliyordu. Kasıtlı yazım
+hatasıyla doğrulandı: artık toplama hatası veriyor.
+
+`tests/conftest.py` yoktu: `_load_all_plugins` DOKUZ dosyada, `dispatcher`
+fixture'ı SEKİZ dosyada kopyalanmıştı. Daha önemlisi, `.context` §6.13'ün
+kaydettiği `TOOL_REGISTRY` sızıntısı her testte elle önlenmeye çalışılıyordu;
+artık merkezî bir fixture o hata sınıfını kapatıyor.
+
+Paketleme de bozuktu: `packages.find` **`voice*` ve `ui*`'yi içermiyordu** ve
+`prompts/` package-data değildi — yani `pip install .` `voice.router`'ı
+import edemeyen, sistem promptunu bulamayan bir kurulum üretiyordu.
+`[project].dependencies` 6 paket sayıyordu, `requirements.txt` 15.
+`tests/test_packaging.py` artık bu ayrışmayı yakalıyor.
+
+### 35i) `mcp>=1.20` üst sınırsızdı ve MCP köprüsü BUGÜN kırıktı
+
+CI'ı ayağa kaldırırken ortaya çıktı: `mcp` 2.0 Python tarafındaki alan
+adlarını değiştirdi (`isError` → `is_error`, `structuredContent` →
+`structured_content`, `Tool.inputSchema` → `input_schema`) ve `FastMCP` →
+`MCPServer` oldu. `requirements.txt` üst sınır koymadığı için **temiz bir
+`pip install -r requirements.txt` MCP köprüsünün tamamını her tool
+çağrısında `AttributeError` ile kırıyordu.**
+
+Bu bir sürüm ölçüsünde bulundu, kod incelemesiyle değil — ve tam olarak
+`.context` §6.13'ün kutladığı şey sayesinde: MCP testleri **gerçek bir alt
+süreçle** koşuyor, mock'la değil. Mock'lansaydı testler yeşil kalır, kullanıcı
+kırık bir köprüyle karşılaşırdı.
+
+`_mcp_field` ile iki ad da destekleniyor: kullanıcının ortamındaki sürümü bu
+proje kontrol edemez.
+
+### 35j) Ölçüm aracı repoya girdi
+
+§21, §23 ve §34 bu projenin en önemli kararlarını ölçüme dayandırıyor — ama
+**o ölçümü yapan araç repoya hiç girmemişti.** Yalnızca sonuçlar (18/20,
+15/17, 11/17) kaydedilmişti. Yani §34'ün kendi dersi — *"Yeni bir tool
+eklenecekse, bu ölçüm YÖNTEMİYLE tekrar sınanmalı"* — uygulanamaz hâldeydi.
+Yöntem commit edilmediği sürece bu bir niyet beyanıdır, bir kapı değil.
+
+`scripts/bench_tool_selection.py` + `tests/data/tool_selection_scenarios.json`
+eklendi. Rapor **skoru değil hatanın yönünü** öne çıkarır (`.context` §6.9:
+aynı skoru alan iki modelden biri *"evi kapat"*'ı `windows.shutdown`
+sanabilir) ve sınıflandırma nüanslı: tehlikeli bir tool'u DOĞRU seçmek
+başarıdır, ceza değil.
+
+**Dürüstlük notu**: senaryolar §34'ün 17'lik setinin birebir aynısı DEĞİL —
+o set hiç commit edilmedi. README/`.context`/`system_prompt.md`'de somut
+olarak geçen her örnekten yeniden kuruldu. Bu yüzden buradan çıkan skorlar
+§34'ün sayılarıyla doğrudan kıyaslanamaz; **kıyaslanabilir olan bundan
+sonraki ölçümlerdir.**
+
+### 35k) Sayılar
+
+| | Önce | Sonra |
+|---|---|---|
+| Geçen test | 453 (21'i kırık, 3 dosya hiç toplanamıyor) | **590** |
+| CI | yok | Ubuntu × Python 3.11/3.12 |
+| Linter | yok (40 ölü `noqa`) | ruff, temiz |
+| Tip denetimi | yok | mypy, temiz |
+| Testsiz modül | `conversation_loop`, `assistant_plugin`, `settings`, `utils` | — |
+| Ölçüm aracı | yok | `bench_tool_selection.py` |
+
+### 35l) DOĞRULANMAYANLAR (bilerek açık bırakıldı)
+
+Bu değişiklikler Linux'ta geliştirildi. Aşağıdakiler **gerçek makinede
+denenmedi** ve kullanıcının doğrulaması gerekiyor:
+
+1. **Altı `windows.*` düzeltmesi** — sahte `win32`/`ctypes`/`subprocess`
+   nesneleriyle test edildi; gerçek Windows'ta çalıştırılmadı.
+2. **Sesli onay düzeltmesi** — sahte STT ile test edildi; gerçek mikrofonla
+   denenmedi.
+3. **`bench_tool_selection.py`** — mantığı sahte istemciyle uçtan uca
+   koşturuldu (rapor biçimi dahil); **gerçek bir modelle çalıştırılmadı.**
+   `python scripts/bench_tool_selection.py --model gemma4:e4b`
+4. **`browser.*` altı tool'unun tek tool'a indirilmesi YAPILMADI.** §34'ün
+   dersi gereği (her tool doğruluğu düşürür) bu bir kazanç olabilir — ama
+   aynı gerekçeyle **ölçülmeden yapılmamalı.** Yukarıdaki bench önce/sonra
+   koşulduktan sonra karar verilmeli.
+5. **`ruff format`** uygulanmadı ve CI'a eklenmedi: depo biçimlendiriciye
+   göre 42 dosyada farklı. Tamamen mekanik ama tek seferde uygulanırsa
+   anlamlı değişiklikleri gözden geçirilemez hâle getiren bir diff üretir.
+   Ayrı ve **tek başına** bir commit'te yapılmalı, sonra CI adımı açılmalı.
+
+**Ders (bu bölümün tamamı için)**: "doğrulanmadı"yı "doğrulandı" gibi
+yazmak, bu teslimatta düzeltilen hataların ta kendisidir. Bir denetim
+teslimatı, kendi sınırlarını da raporlamak zorundadır.
