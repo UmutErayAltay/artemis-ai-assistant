@@ -7,6 +7,8 @@ yazılmış) örnek çıktılarla sınar.
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 from core.llm_client import MAX_PLAN_STEPS, LLMResponseParseError, OllamaLLMClient
@@ -17,6 +19,29 @@ from core.prompt_builder import build_system_prompt
 @pytest.fixture(autouse=True)
 def _load_all_plugins() -> None:
     load_plugins()
+
+
+def _with_client(fake_ollama):
+    """Sahte `ollama` modülüne, GERÇEK kütüphanedeki gibi bir `Client`
+    sınıfı ekler.
+
+    `OllamaLLMClient` artık modül seviyesindeki `ollama.chat`'i değil,
+    `ollama.Client(timeout=...)` üzerinden gelen `chat`'i kullanıyor —
+    çünkü modül seviyesindeki varsayılan istemcinin OKUMA ZAMAN AŞIMI
+    YOKTUR ve kilitlenmiş bir sunucu asistanı süresiz askıda bırakır.
+    Sahte modül bu yapıyı taklit etmezse testler gerçek kod yolunu
+    sınamaz.
+    """
+
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            self.timeout = timeout
+
+        def chat(self, *args, **kwargs):
+            return fake_ollama.chat(*args, **kwargs)
+
+    fake_ollama.Client = _FakeClient
+    return fake_ollama
 
 
 def test_extract_plain_json_object() -> None:
@@ -100,7 +125,7 @@ def test_get_tool_calls_retries_after_invalid_output(monkeypatch: pytest.MonkeyP
     fake_ollama.chat = lambda model, messages, format=None, options=None, **extra: {
         "message": {"content": next(responses)}
     }
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model")
     calls = client.get_tool_calls("sistem promptu", "Orbit'i aç", max_retries=2)
@@ -114,7 +139,7 @@ def test_get_tool_calls_raises_after_exhausting_retries(monkeypatch: pytest.Monk
     fake_ollama.chat = lambda model, messages, format=None, options=None, **extra: {
         "message": {"content": "hep gecersiz kalacak"}
     }
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model")
     with pytest.raises(LLMResponseParseError):
@@ -151,7 +176,7 @@ def test_get_tool_calls_returns_multi_step_plan_under_schema_constrained_strateg
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model")
     calls = client.get_tool_calls("sistem promptu", "chrome'u ac ve rapor dosyasini bul")
@@ -176,7 +201,7 @@ def test_chat_falls_back_to_plain_json_format_on_schema_error(monkeypatch: pytes
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model")
     raw = client.get_raw_response("sistem promptu", "Orbit'i ac")
@@ -203,7 +228,7 @@ def test_native_tool_calling_returns_structured_calls_directly(monkeypatch: pyte
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model", use_native_tool_calling=True)
     calls = client.get_tool_calls("sistem promptu", "Orbit klasoru olustur")
@@ -220,7 +245,7 @@ def test_native_tool_calling_falls_back_to_text_when_model_ignores_tools(monkeyp
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model", use_native_tool_calling=True)
     calls = client.get_tool_calls("sistem promptu", "Orbit'i ac")
@@ -240,7 +265,7 @@ def test_keep_alive_is_passed_to_ollama_chat(monkeypatch: pytest.MonkeyPatch) ->
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     client = OllamaLLMClient(model="fake-model", keep_alive="2m")
     client.get_raw_response("sistem promptu", "Orbit'i ac")
@@ -268,7 +293,7 @@ def test_thinking_is_disabled_on_every_request(monkeypatch: pytest.MonkeyPatch) 
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     OllamaLLMClient(model="fake-model").get_raw_response("sistem promptu", "Orbit'i ac")
     assert received["think"] is False
@@ -292,7 +317,7 @@ def test_command_gate_also_disables_thinking(monkeypatch: pytest.MonkeyPatch) ->
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = _fake_chat
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     OllamaLLMClient(model="fake-model").should_engage("masaustunde klasor olustur")
     assert received["think"] is False
@@ -313,7 +338,7 @@ def test_gate_engages_for_questions_not_only_actions(monkeypatch: pytest.MonkeyP
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = lambda **kw: {"message": {"content": '{"karar": "YONELIK"}'}}
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     assert OllamaLLMClient(model="fake-model").should_engage("sen kimsin?") is True
 
@@ -325,7 +350,7 @@ def test_gate_rejects_background_noise(monkeypatch: pytest.MonkeyPatch) -> None:
 
     fake_ollama = types.ModuleType("ollama")
     fake_ollama.chat = lambda **kw: {"message": {"content": '{"karar": "GURULTU"}'}}
-    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    monkeypatch.setitem(__import__("sys").modules, "ollama", _with_client(fake_ollama))
 
     assert OllamaLLMClient(model="fake-model").should_engage("bilmiyorum ya öyle bir şey işte") is False
 
@@ -478,3 +503,101 @@ def test_command_gate_schema_enum_matches_the_gate_constants() -> None:
 
     assert set(enum_values) == {_GATE_ENGAGE, _GATE_NOISE}
     assert _GATE_ENGAGE != _GATE_NOISE
+
+
+# --- Zaman aşımı ve bağlantı hatası ayrımı (README §35) ------------------
+
+
+def test_ollama_client_is_constructed_with_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`ollama-python`'ın varsayılan istemcisinin OKUMA ZAMAN AŞIMI YOKTUR.
+
+    Modelin VRAM'e sığmadığı durumlarda `ollama serve`'in kilitlenmesi
+    bilinen bir arıza; zaman aşımı olmayınca asistan süresiz askıda
+    kalıyordu. Ses modunda bu, mikrofonu tutan ve `stop()` ile
+    durdurulamayan bir işçi demek: `VoiceAssistant.stop` `join(timeout=3)`
+    sonrası thread'i terk eder.
+    """
+
+    kurulan: list[float | None] = []
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            kurulan.append(timeout)
+
+        def chat(self, **kwargs):
+            return {"message": {"content": '[{"tool": "assistant.reply", "arguments": {"message": "x"}}]'}}
+
+    fake_ollama.Client = _FakeClient
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    OllamaLLMClient(model="test", timeout_seconds=42.0).get_tool_calls("sistem", "merhaba")
+
+    assert kurulan == [42.0]
+
+
+def test_connection_failure_is_not_retried_across_every_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sunucuya ULAŞILAMIYORSA başka strateji denemek anlamsızdır.
+
+    Tek bir `except Exception: continue` vardı: `ollama serve` kapalıyken
+    düz bir bağlantı reddi dört stratejinin dördünde de tekrarlanıyor,
+    yalnızca DEBUG'a yazılıyordu — üstelik `get_tool_calls` tüm bunu üç
+    kez tekrarladığından tek bir söz 12 çağrıya çıkabiliyordu.
+    """
+
+    cagrilar: list[int] = []
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            pass
+
+        def chat(self, **kwargs):
+            cagrilar.append(1)
+            raise ConnectionError("connection refused")
+
+    fake_ollama.Client = _FakeClient
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    with pytest.raises(ConnectionError):
+        OllamaLLMClient(model="test").get_tool_calls("sistem", "merhaba")
+
+    assert cagrilar == [1], f"bağlantı hatası {len(cagrilar)} kez tekrarlandı"
+
+
+def test_unsupported_strategy_still_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bağlantı ayrımı, ASIL geri düşüşü bozmamalı.
+
+    `gpt-oss:20b` gibi modeller `format` verildiğinde çalışmaz
+    (`.context` §6.10); o durumda sıradaki strateji denenmeli.
+    """
+
+    kullanilan: list[str] = []
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            pass
+
+        def chat(self, **kwargs):
+            if isinstance(kwargs.get("format"), dict):
+                kullanilan.append("sema")
+                raise ValueError("bu model şemayı desteklemiyor")
+            kullanilan.append("json")
+            return {"message": {"content": '[{"tool": "assistant.reply", "arguments": {"message": "x"}}]'}}
+
+    fake_ollama.Client = _FakeClient
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+
+    client = OllamaLLMClient(model="test")
+    assert len(client.get_tool_calls("sistem", "merhaba")) == 1
+    assert kullanilan == ["sema", "json"]
+
+    # İkinci komut, boşa giden şema denemesini TEKRARLAMAMALI: çalışan
+    # strateji hatırlanır (aksi halde bu modelle her komut bir başarısız
+    # istekle başlardı).
+    kullanilan.clear()
+    client.get_tool_calls("sistem", "tekrar")
+    assert kullanilan == ["json"]

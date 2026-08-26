@@ -7,6 +7,7 @@ burada `tmp_path` fixture'ı ile geçici bir "desktop" klasörü simüle edilir.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -162,3 +163,56 @@ def test_dangerous_tool_with_missing_argument_never_asks_for_confirmation(
     assert result.success is False
     assert result.requires_confirmation is False
     assert "target" in result.message
+
+
+def test_unknown_dangerous_tool_name_is_warned_about(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`dangerous_tools` bir GÜVENLİK ayarı; yazım hatası sessiz kalmamalı.
+
+    Liste hiçbir yerde doğrulanmıyordu: `windows.shutdow` gibi bir hata
+    ETKİSİZ bir kısıtlama demekti — kullanıcı tool'u kısıtladığını
+    sanarken tool onaysız çalışıyordu.
+    """
+
+    load_plugins()
+    settings = Settings(
+        desktop_path=tmp_path,
+        db_path=tmp_path / "m.db",
+        log_dir=tmp_path / "logs",
+        dangerous_tools=["windows.shutdow", "filesystem.open"],
+    )
+
+    with caplog.at_level(logging.WARNING):
+        ToolDispatcher(settings=settings, memory=ContextMemory(settings.db_path))
+
+    assert "windows.shutdow" in caplog.text
+    assert "filesystem.open" not in caplog.text, "gerçekten var olan ad uyarılmamalı"
+
+
+def test_unexpected_errors_do_not_leak_raw_exception_text_to_the_user(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GİZLİLİK: hata mesajı ses modunda YÜKSEK SESLE OKUNUYOR.
+
+    İstisna metinleri rutin olarak mutlak yol, kullanıcı adı ve WinError
+    kodu içerir. Ayrıntı log'a gitmeli, kullanıcıya değil.
+    """
+
+    from core.plugin_loader import TOOL_REGISTRY
+
+    load_plugins()
+    tool_cls = TOOL_REGISTRY["assistant.reply"]
+
+    def _patlar(self, arguments, context):
+        raise RuntimeError(r"C:\Users\umut\gizli\yol\anahtar.txt bulunamadı")
+
+    monkeypatch.setattr(tool_cls, "execute", _patlar)
+
+    result = dispatcher.dispatch({"tool": "assistant.reply", "arguments": {"message": "x"}})
+
+    assert result.success is False
+    assert "umut" not in result.message
+    assert "gizli" not in result.message
+    assert "RuntimeError" in result.message, "hata TÜRÜ kullanıcıya söylenebilir"
+    assert "log" in result.message.lower(), "kullanıcı nereye bakacağını bilmeli"

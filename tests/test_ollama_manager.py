@@ -28,6 +28,20 @@ def _install_fake_ollama(monkeypatch: pytest.MonkeyPatch, list_return, *, raise_
         return list_return
 
     fake_ollama.list = _fake_list
+
+    # GERÇEK kütüphanedeki `Client` sınıfı da taklit edilir:
+    # `_is_server_responding` artık modül seviyesindeki `ollama.list()`'i
+    # değil `ollama.Client(timeout=...).list()`'i çağırıyor, çünkü
+    # varsayılan istemcinin OKUMA ZAMAN AŞIMI YOKTUR ve bu yoklama
+    # `ensure_running`'in poll döngüsünün İÇİNDE çalışıyor.
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            self.timeout = timeout
+
+        def list(self):
+            return fake_ollama.list()
+
+    fake_ollama.Client = _FakeClient
     monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
 
 

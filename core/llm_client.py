@@ -124,6 +124,28 @@ sınır `_validate_tool_calls` içinde Python tarafında da uygulanır:
 bir güvence katmanı, yalnızca en zayıf hâlinde de geçerliyse güvencedir.
 """
 
+DEFAULT_LLM_TIMEOUT_SECONDS = 120.0
+"""Tek bir Ollama isteği için tanınan azami süre.
+
+`ollama-python`'ın varsayılan istemcisinin OKUMA ZAMAN AŞIMI YOKTUR.
+Modelin VRAM'e sığmadığı durumlarda `ollama serve`'in kilitlenmesi bilinen
+bir arızadır; zaman aşımı olmayınca asistan süresiz askıda kalır ve ses
+modunda mikrofonu tutan, `stop()` ile durdurulamayan bir işçi bırakır.
+
+Değer cömert seçildi (2 dakika): soğuk başlangıçta büyük bir modelin
+belleğe yüklenmesi 30 saniyeyi bulabiliyor ve zaman aşımının GERÇEK bir
+yavaşlığı arıza sanmaması gerekiyor. Amaç yavaş isteği kesmek değil,
+ASILI KALMIŞ isteği kesmek.
+"""
+
+_CONNECTION_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, OSError, TimeoutError)
+"""Sunucuya ULAŞILAMADIĞINI gösteren hatalar.
+
+Bunlar "bu model bu stratejiyi desteklemiyor"dan ayrı ele alınır: sunucu
+erişilemezken sıradaki stratejiyi denemek yalnızca aynı hatayı tekrar
+üretir ve gecikmeyi katlar (bkz. `_chat`).
+"""
+
 _CORRECTION_MESSAGE = (
     "Bu çıktı geçerli değildi. YALNIZCA şu formatta, başka hiçbir açıklama "
     'olmadan bir JSON listesi döndür: [{"tool": "<tool_adı>", "arguments": {...}}]'
@@ -227,10 +249,19 @@ class OllamaLLMClient:
             bkz. `config/config.yaml::ollama_keep_alive`.
     """
 
-    def __init__(self, model: str, use_native_tool_calling: bool = False, keep_alive: str = "5m") -> None:
+    def __init__(
+        self,
+        model: str,
+        use_native_tool_calling: bool = False,
+        keep_alive: str = "5m",
+        timeout_seconds: float = DEFAULT_LLM_TIMEOUT_SECONDS,
+    ) -> None:
         self.model = model
         self.use_native_tool_calling = use_native_tool_calling
         self.keep_alive = keep_alive
+        self.timeout_seconds = timeout_seconds
+        self._ollama_client: Any | None = None
+        self._working_strategy_index: int | None = None
 
     def get_raw_response(self, system_prompt: str, user_input: str) -> str:
         """Ollama'ya sistem promptu + kullanıcı mesajını gönderir, ham metni döndürür.
@@ -337,14 +368,12 @@ class OllamaLLMClient:
             kullanılamaz hale getirmemeli, yalnızca bu korumayı kaybeder.
         """
 
-        import ollama  # lazy import
-
         text = user_input.strip()
         if not text:
             return False
 
         try:
-            response = ollama.chat(
+            response = self._client().chat(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": _COMMAND_GATE_PROMPT},
@@ -374,7 +403,48 @@ class OllamaLLMClient:
             kendi ayrıştırmalıdır.
         """
 
-        import ollama  # lazy import: bu modül olmadan da proje import edilebilsin
+        strategies = self._strategies()
+
+        last_exc: Exception | None = None
+        for index, extra in enumerate(strategies):
+            try:
+                response = self._client().chat(
+                    model=self.model,
+                    messages=messages,
+                    options={"temperature": 0},
+                    keep_alive=self.keep_alive,
+                    think=False,
+                    **extra,
+                )
+            except _CONNECTION_ERRORS as exc:
+                # BAĞLANTI HATASI STRATEJİ HATASI DEĞİLDİR. Bu ayrım bir
+                # dönem yoktu: tek bir `except Exception: continue` vardı,
+                # yani `ollama serve` kapalıyken düz bir bağlantı reddi
+                # dört stratejinin dördünde de tekrarlanıyor, yalnızca
+                # DEBUG'a yazılıyor ve sonunda "bağlanılamadı" olarak
+                # görünüyordu — üstelik `get_tool_calls` tüm bunu üç kez
+                # tekrarladığı için tek bir söz 12 çağrıya çıkabiliyordu.
+                # Sunucuya ulaşılamıyorsa başka strateji denemek anlamsız.
+                raise ConnectionError(f"Ollama'ya ulaşılamıyor ('{self.model}'): {exc}") from exc
+            except Exception as exc:  # noqa: BLE001 - ollama/model bu stratejiyi desteklemeyebilir
+                last_exc = exc
+                logger.debug("Strateji basarisiz (%s): %s", extra, exc)
+                continue
+
+            # İlk çalışan strateji hatırlanır: `gpt-oss:20b` gibi bazı
+            # modellerde `format` verildiği anda ilk strateji hep
+            # başarısız olur (.context §6.10) ve o modelle çalışan her
+            # komut, boşa giden bir istekle başlardı.
+            self._working_strategy_index = index
+
+            message = response["message"]
+            native_calls = self._extract_native_tool_calls(message) if "tools" in extra else None
+            return message.get("content") or "", native_calls
+
+        raise ConnectionError(f"Ollama'ya bağlanılamadı ('{self.model}'): {last_exc}")
+
+    def _strategies(self) -> list[dict[str, Any]]:
+        """Denenecek istek stratejilerini, bilinen çalışanı başa alarak üretir."""
 
         strategies: list[dict[str, Any]] = []
         if self.use_native_tool_calling:
@@ -383,27 +453,28 @@ class OllamaLLMClient:
         strategies.append({"format": "json"})
         strategies.append({})  # son çare: hiçbir kısıtlama yok, yalnızca prompt talimatına güven
 
-        last_exc: Exception | None = None
-        for extra in strategies:
-            try:
-                response = ollama.chat(
-                    model=self.model,
-                    messages=messages,
-                    options={"temperature": 0},
-                    keep_alive=self.keep_alive,
-                    think=False,
-                    **extra,
-                )
-            except Exception as exc:  # noqa: BLE001 - ollama/model bu stratejiyi desteklemeyebilir
-                last_exc = exc
-                logger.debug("Strateji basarisiz (%s): %s", extra, exc)
-                continue
+        known = self._working_strategy_index
+        if known is not None and 0 <= known < len(strategies):
+            strategies = [strategies[known]] + [s for i, s in enumerate(strategies) if i != known]
+        return strategies
 
-            message = response["message"]
-            native_calls = self._extract_native_tool_calls(message) if "tools" in extra else None
-            return message.get("content") or "", native_calls
+    def _client(self) -> Any:
+        """Zaman aşımı ayarlanmış Ollama istemcisini döndürür (tembel kurulur).
 
-        raise ConnectionError(f"Ollama'ya bağlanılamadı ('{self.model}'): {last_exc}")
+        NEDEN MODÜL SEVİYESİ `ollama.chat` DEĞİL: o çağrı, kütüphanenin
+        varsayılan istemcisini kullanır ve o istemcinin OKUMA ZAMAN AŞIMI
+        YOKTUR. Modelin VRAM'e sığmadığı durumlarda `ollama serve`'in
+        kilitlenmesi bilinen bir arıza; zaman aşımı olmayınca asistan
+        süresiz askıda kalıyordu — ses modunda bu, mikrofonu tutan ve
+        `stop()` ile durdurulamayan bir işçi demek (`VoiceAssistant.stop`
+        `join(timeout=3)` sonrası thread'i terk eder).
+        """
+
+        if self._ollama_client is None:
+            import ollama  # lazy import: bu modül olmadan da proje import edilebilsin
+
+            self._ollama_client = ollama.Client(timeout=self.timeout_seconds)
+        return self._ollama_client
 
     @staticmethod
     def _extract_native_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] | None:

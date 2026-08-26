@@ -124,6 +124,7 @@ def main_chat() -> None:
         model=selected_model,
         use_native_tool_calling=dispatcher.settings.use_native_tool_calling,
         keep_alive=dispatcher.settings.ollama_keep_alive,
+        timeout_seconds=dispatcher.settings.ollama_timeout_seconds,
     )
 
     try:
@@ -180,6 +181,7 @@ def main_voice() -> None:
         model=selected_model,
         use_native_tool_calling=settings.use_native_tool_calling,
         keep_alive=settings.ollama_keep_alive,
+        timeout_seconds=settings.ollama_timeout_seconds,
     )
 
     app = QApplication(sys.argv)
