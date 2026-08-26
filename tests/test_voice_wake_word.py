@@ -53,7 +53,6 @@ from voice.wake_word import (
     normalize_turkish,
 )
 
-
 # --------------------------------------------------------------------------
 # Sentetik PCM üretimi (bkz. tests/test_voice_stt.py'deki aynı desen)
 # --------------------------------------------------------------------------
@@ -102,7 +101,7 @@ class _FakeWhisperModel:
     mu" sorularını gözlemlenen davranışa bakarak doğrulayabilir.
     """
 
-    def __init__(self, env: "_FakeWhisperEnvironment") -> None:
+    def __init__(self, env: _FakeWhisperEnvironment) -> None:
         self._env = env
 
     def transcribe(self, audio_array, language=None, hotwords=None, **kwargs):
@@ -163,7 +162,7 @@ class _FakeKaldiRecognizer:
     hem parça (partial) yoluna güvenmeden davranışı doğrulamasına yeter.
     """
 
-    def __init__(self, env: "_FakeVoskEnvironment") -> None:
+    def __init__(self, env: _FakeVoskEnvironment) -> None:
         self._env = env
 
     def AcceptWaveform(self, data: bytes) -> bool:

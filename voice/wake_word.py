@@ -271,7 +271,7 @@ class WakeWordDetector:
                 device=device,
                 compute_type=compute_type,
             )
-        except Exception as exc:  # noqa: BLE001 - model/ağ/donanım kaynaklı her hata
+        except Exception as exc:
             raise WakeWordUnavailableError(
                 f"Uyandırma sözcüğü modeli yüklenemedi "
                 f"('{self._model_size}', device={device}). "
@@ -485,7 +485,7 @@ class WakeWordDetector:
                     continue
                 kept.append(segment.text)
             text = "".join(kept).strip()
-        except Exception as exc:  # noqa: BLE001 - donanım/kütüphane kaynaklı her hata
+        except Exception as exc:
             raise WakeWordUnavailableError(
                 f"Uyandırma sözcüğü tanınamadı (device={self._device}, "
                 f"compute_type={self._compute_type}): {exc}"

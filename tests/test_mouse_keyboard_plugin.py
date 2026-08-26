@@ -13,21 +13,16 @@ CLAUDE.md'nin "gerçek makineyi etkileyen hiçbir şey varsayılan olarak
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
-import pyautogui
 import pytest
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.plugin_loader import load_plugins
 from memory.context_memory import ContextMemory
-
-
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
+from tests.conftest import install_fake_module
 
 
 @pytest.fixture
@@ -54,7 +49,7 @@ class _FakePyAutoGui:
         self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self.screen_size: tuple[int, int] = (1920, 1080)
 
-    def moveTo(self, x: int, y: int, duration: float = 0.0) -> None:  # noqa: N802 - pyautogui'nin kendi ismi
+    def moveTo(self, x: int, y: int, duration: float = 0.0) -> None:
         self.calls.append(("moveTo", (x, y), {"duration": duration}))
         self.pos = (x, y)
 
@@ -63,7 +58,7 @@ class _FakePyAutoGui:
         if "x" in kwargs and "y" in kwargs:
             self.pos = (kwargs["x"], kwargs["y"])
 
-    def doubleClick(self, **kwargs: Any) -> None:  # noqa: N802
+    def doubleClick(self, **kwargs: Any) -> None:
         self.calls.append(("doubleClick", (), kwargs))
         if "x" in kwargs and "y" in kwargs:
             self.pos = (kwargs["x"], kwargs["y"])
@@ -89,9 +84,24 @@ class _FakePyAutoGui:
 
 @pytest.fixture
 def fake_pyautogui(monkeypatch: pytest.MonkeyPatch) -> _FakePyAutoGui:
+    """Sahte `pyautogui`'yi `sys.modules`'a koyar.
+
+    GERÇEK modülü monkeypatch'lemek yerine `sys.modules`'a sahte bir
+    modül koymanın sebebi: `import pyautogui` satırının KENDİSİ bir
+    ekran/oturum ister ve başlıksız (headless) bir CI makinesinde patlar
+    — üstelik "skip" olarak değil, TOPLAMA (collection) hatası olarak,
+    yani tüm dosyayı düşürerek. Test edilen plugin bu modülü zaten
+    `execute()` içinde tembel import ediyor (CLAUDE.md kuralı), yani
+    sahte modül gerçek kod yolunu eksiksiz sınar. Testin gerçek paketi
+    import etmesi hiçbir zaman gerekmiyordu.
+    """
+
     fake = _FakePyAutoGui()
-    for attr in ("moveTo", "click", "doubleClick", "write", "press", "hotkey", "scroll", "position", "size"):
-        monkeypatch.setattr(pyautogui, attr, getattr(fake, attr))
+    attributes = {
+        attr: getattr(fake, attr)
+        for attr in ("moveTo", "click", "doubleClick", "write", "press", "hotkey", "scroll", "position", "size")
+    }
+    install_fake_module(monkeypatch, "pyautogui", **attributes)
     return fake
 
 
@@ -131,7 +141,7 @@ def test_move_mouse_reports_failure_when_position_does_not_match(
     """`pyautogui.moveTo` sessizce beklenenden farklı bir konuma giderse
     (ör. ekran kilidi/erişim kısıtı) dürüstçe başarısız dönmeli."""
 
-    monkeypatch.setattr(pyautogui, "moveTo", lambda x, y, duration=0.0: None)  # imleci hiç güncelleme
+    monkeypatch.setattr(sys.modules["pyautogui"], "moveTo", lambda x, y, duration=0.0: None)  # imleci hiç güncelleme
 
     result = dispatcher.dispatch({"tool": "mouse_keyboard.move_mouse", "arguments": {"x": 300, "y": 400}})
 
@@ -145,7 +155,7 @@ def test_move_mouse_reports_exception_honestly(
     def _raise(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("ekrana erişilemiyor")
 
-    monkeypatch.setattr(pyautogui, "moveTo", _raise)
+    monkeypatch.setattr(sys.modules["pyautogui"], "moveTo", _raise)
 
     result = dispatcher.dispatch({"tool": "mouse_keyboard.move_mouse", "arguments": {"x": 10, "y": 10}})
 
@@ -205,7 +215,7 @@ def test_click_rejects_invalid_button(dispatcher: ToolDispatcher, fake_pyautogui
 def test_click_reports_failure_when_position_does_not_match(
     dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(pyautogui, "click", lambda **kwargs: None)  # imleci hiç güncelleme
+    monkeypatch.setattr(sys.modules["pyautogui"], "click", lambda **kwargs: None)  # imleci hiç güncelleme
 
     result = dispatcher.dispatch(
         {"tool": "mouse_keyboard.click", "arguments": {"x": 500, "y": 500}}

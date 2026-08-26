@@ -8,9 +8,9 @@ yol/klasör gibi bilgileri kalıcı olarak tutar.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 _LOCK_TIMEOUT_SECONDS = 5.0
 """Eşzamanlı bir yazma sürerken kilidin serbest kalması için beklenecek süre."""

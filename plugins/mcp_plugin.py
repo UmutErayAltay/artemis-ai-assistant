@@ -117,18 +117,41 @@ async def _call_server_tool_async(server: Any, tool_name: str, arguments: dict[s
             return await session.call_tool(tool_name, arguments)
 
 
+def _mcp_field(obj: Any, *names: str, default: Any = None) -> Any:
+    """Bir MCP nesnesinden bir alanı, SÜRÜMDEN BAĞIMSIZ olarak okur.
+
+    NEDEN GEREKLİ — ölçülmüş bir kırılma: `mcp` paketi 2.0'da alan
+    adlarını Python tarafında camelCase'ten snake_case'e çevirdi
+    (`isError` -> `is_error`, `structuredContent` -> `structured_content`;
+    JSON tel biçimi aynı kaldı, yalnızca Python nitelikleri değişti).
+    `requirements.txt` `mcp>=1.20` diyor ve ÜST SINIRI YOKTU, yani bugün
+    temiz bir `pip install -r requirements.txt` MCP köprüsünün TAMAMINI
+    `AttributeError` ile kırıyordu — üstelik sessizce değil, her MCP tool
+    çağrısında.
+
+    İki adı da denemek, tek bir sürüme kilitlenmekten iyidir: kullanıcının
+    ortamında hangi sürümün bulunduğunu bu proje kontrol edemez.
+    """
+
+    for name in names:
+        if hasattr(obj, name):
+            return getattr(obj, name)
+    return default
+
+
 def _call_tool_result_to_tool_result(call_result: Any) -> ToolResult:
     """MCP'nin `CallToolResult`'ını Artemis'in `ToolResult`'ına çevirir."""
 
     from mcp import types
 
     text_parts = [block.text for block in call_result.content if isinstance(block, types.TextContent)]
-    message = "\n".join(text_parts).strip() or ("MCP tool hata döndürdü." if call_result.isError else "Tamamlandı.")
+    is_error = bool(_mcp_field(call_result, "is_error", "isError", default=False))
+    message = "\n".join(text_parts).strip() or ("MCP tool hata döndürdü." if is_error else "Tamamlandı.")
 
     return ToolResult(
-        success=not call_result.isError,
+        success=not is_error,
         message=message,
-        data=call_result.structuredContent,
+        data=_mcp_field(call_result, "structured_content", "structuredContent"),
     )
 
 
@@ -144,7 +167,8 @@ def _make_mcp_tool_class(server: Any, tool_def: Any) -> type[BaseTool]:
     resolved_name = f"{_TOOL_NAME_PREFIX}.{server.name}.{tool_def.name}"
     resolved_description = tool_def.description or f"'{server.name}' MCP sunucusundan '{tool_def.name}' tool'u."
     resolved_danger_level = DangerLevel.SAFE if server.trusted else DangerLevel.CONFIRM_REQUIRED
-    resolved_schema = dict(tool_def.inputSchema) if tool_def.inputSchema else {"type": "object", "properties": {}}
+    input_schema = _mcp_field(tool_def, "input_schema", "inputSchema")
+    resolved_schema = dict(input_schema) if input_schema else {"type": "object", "properties": {}}
 
     class _MCPTool(BaseTool):
         # NOT: sağdaki adlar `resolved_*` — soldakiyle AYNI olsaydı (örn.

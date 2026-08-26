@@ -206,7 +206,7 @@ class SpeechToText:
                 device=device,
                 compute_type=resolve_compute_type(device, self._compute_type),
             )
-        except Exception as exc:  # noqa: BLE001 - model/ağ/donanım kaynaklı her hata
+        except Exception as exc:
             raise SpeechRecognitionUnavailableError(
                 f"Whisper modeli yüklenemedi ('{self._model_size}'). İnternet "
                 "bağlantınızı kontrol edin ya da modeli önceden indirin: "

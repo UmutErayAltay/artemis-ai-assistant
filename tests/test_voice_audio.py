@@ -22,9 +22,9 @@ from voice.audio import (
     NOISE_FLOOR_MARGIN,
     NOISE_FLOOR_MAX_THRESHOLD,
     NOISE_FLOOR_MIN_THRESHOLD,
+    SAMPLE_RATE,
     MicrophoneStream,
     MicrophoneUnavailableError,
-    SAMPLE_RATE,
     measure_noise_floor,
     rms_amplitude,
 )

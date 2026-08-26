@@ -131,8 +131,18 @@ def test_mcp_tool_exception_becomes_a_failed_tool_result_not_a_crash(
 ) -> None:
     result = dispatcher.dispatch({"tool": "mcp.echotest.always_fails", "arguments": {}})
 
+    # ASIL SÖZLEŞME: sunucu tarafındaki bir istisna, Artemis'i ÇÖKERTMEZ;
+    # dürüst bir `success=False` sonuca dönüşür ve hangi tool'un
+    # başarısız olduğu anlaşılır.
+    #
+    # İstisnanın METNİNİN aynen iletilmesi ARANMAZ: `mcp` 2.0, sunucu
+    # tarafı istisna metinlerini istemciye iletmeyi bıraktı (jenerik
+    # "Error executing tool <ad>" gönderiyor). Bu sunucunun bilinçli bir
+    # davranış değişikliği, Artemis'in bir hatası değil — testin ona
+    # bağlanması, sınadığı şeyle ilgisiz bir kırılganlık olurdu.
     assert result.success is False
-    assert "kasıtlı test hatası" in result.message
+    assert result.message.strip(), "başarısızlık sessiz olmamalı"
+    assert "always_fails" in result.message or "kasıtlı test hatası" in result.message
 
 
 def test_missing_required_argument_is_caught_before_reaching_server(

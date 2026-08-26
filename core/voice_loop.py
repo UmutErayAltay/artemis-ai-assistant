@@ -41,6 +41,7 @@ from core.dispatcher import ToolDispatcher
 from core.llm_client import LLMResponseParseError, OllamaLLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from utils.text import turkish_lower
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,9 @@ def _is_affirmative(answer: str) -> bool:
         Yalnızca net bir onay duyulduysa True.
     """
 
-    words = {word for word in _WORD_SPLIT_RE.split(answer.strip().lower()) if word}
+    # Türkçe kuralıyla küçültülür: `str.lower()` `"HAYIR"` -> `"hayir"`
+    # verir ve veto listesiyle eşleşmezdi (bkz. `utils.text`).
+    words = {word for word in _WORD_SPLIT_RE.split(turkish_lower(answer.strip())) if word}
     if not words:
         return False
     if words & _NEGATIVE_WORDS:
@@ -354,7 +357,7 @@ class VoiceAssistant:
         except MicrophoneUnavailableError as exc:
             logger.error("Mikrofon açılamadı: %s", exc)
             self._overlay.show_error(f"Mikrofona erişilemiyor: {exc}")
-        except Exception:  # noqa: BLE001 - işçi iş parçacığı asla sessizce ölmemeli
+        except Exception:
             logger.exception("Sesli asistan döngüsünde beklenmeyen hata")
             self._overlay.show_error("Sesli asistanda beklenmeyen bir hata oluştu.")
 
@@ -487,7 +490,7 @@ class VoiceAssistant:
 
         try:
             return self._ensure_stt().transcribe(audio, hotwords=self._ensure_vocabulary())
-        except Exception:  # noqa: BLE001 - model yüklenemeyebilir
+        except Exception:
             logger.exception("Konuşma metne çevrilemedi")
             return ""
 
@@ -548,7 +551,7 @@ class VoiceAssistant:
                 self._overlay.set_amplitude(rms_amplitude(block))
                 if recorder.feed(block):
                     break
-        except Exception:  # noqa: BLE001 - mikrofon hatası = onay yok = red
+        except Exception:
             logger.exception("Onay dinlenirken mikrofon hatası")
             return ""
 
@@ -563,7 +566,7 @@ class VoiceAssistant:
             # sözlük vermek, modeli olmayacak bir kelimeye zorlardı.
             answer = self._ensure_stt().transcribe(audio, hotwords=", ".join(sorted(_AFFIRMATIVE_WORDS)))
             return answer.lower()
-        except Exception:  # noqa: BLE001 - anlaşılmayan cevap = red
+        except Exception:
             logger.exception("Onay cevabı çözümlenemedi")
             return ""
 
@@ -623,7 +626,7 @@ class VoiceAssistant:
 
         try:
             self._ensure_tts().speak(message, on_amplitude=self._overlay.set_amplitude)
-        except Exception:  # noqa: BLE001 - ses çıkışı yoksa asistan yine de çalışmalı
+        except Exception:
             # Hem bulut hem yerel başarısız oldu (internet yok + Piper modeli
             # kurulu değil gibi). Sessiz kalmak yerine, cevabın okunabilmesi
             # için pencereyi metin uzunluğuyla orantılı bir süre açık tut.
@@ -658,7 +661,7 @@ class VoiceAssistant:
             from plugins.windows_plugin import _app_resolver
 
             names.extend(_app_resolver.known_app_names())
-        except Exception:  # noqa: BLE001 - sözlük olmadan da tanıma çalışmalı
+        except Exception:
             logger.warning("Uygulama sözlüğü oluşturulamadı; ipucusuz devam ediliyor.", exc_info=True)
 
         # Türkçe komut fiilleri olmadan sözlük tamamen İngilizce kalır ve
@@ -710,7 +713,7 @@ class VoiceAssistant:
 
         try:
             self._silence_threshold = measure_noise_floor(mic)
-        except Exception:  # noqa: BLE001 - kalibrasyon başarısızlığı akışı durdurmasın
+        except Exception:
             logger.warning("Ortam gürültüsü ölçülemedi; varsayılan eşik kullanılacak.", exc_info=True)
             return
 
@@ -721,9 +724,7 @@ class VoiceAssistant:
 
     def _ensure_recorder(self):
         if self._recorder is None:
-            from voice.stt import SpeechRecorder
-
-            from voice.stt import DEFAULT_SILENCE_THRESHOLD
+            from voice.stt import DEFAULT_SILENCE_THRESHOLD, SpeechRecorder
 
             self._recorder = SpeechRecorder(
                 silence_timeout=self._settings.silence_timeout_seconds,

@@ -171,7 +171,7 @@ class _FallbackRouter:
         if self._cloud_allowed():
             try:
                 result = call(self._get_cloud())
-            except Exception as exc:  # noqa: BLE001 - her bulut hatası yerele düşme sebebidir
+            except Exception as exc:
                 if self._mode == ProviderMode.CLOUD:
                     raise
                 self._note_cloud_failure(exc)
@@ -243,5 +243,5 @@ class TextToSpeechRouter(_FallbackRouter):
                 continue
             try:
                 provider.stop()
-            except Exception:  # noqa: BLE001 - durdurma hatası akışı bozmamalı
+            except Exception:
                 logger.debug("Sağlayıcı durdurulurken hata yoksayıldı.", exc_info=True)

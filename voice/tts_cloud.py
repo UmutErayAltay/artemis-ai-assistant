@@ -34,7 +34,7 @@ import logging
 import threading
 from collections.abc import Callable
 
-from voice.audio import SAMPLE_RATE, rms_amplitude
+from voice.audio import rms_amplitude
 
 logger = logging.getLogger(__name__)
 
@@ -161,12 +161,12 @@ class EdgeTextToSpeech:
 
         try:
             mp3_bytes = self._synthesize(text)
-        except Exception as exc:  # noqa: BLE001 - ağ/servis kaynaklı her hata
+        except Exception as exc:
             raise CloudTextToSpeechUnavailableError(f"Edge TTS sentezi başarısız oldu: {exc}") from exc
 
         try:
             pcm_bytes, sample_rate = self._decode_mp3_to_pcm(mp3_bytes)
-        except Exception as exc:  # noqa: BLE001 - bozuk/boş mp3 dahil her çözme hatası
+        except Exception as exc:
             raise CloudTextToSpeechUnavailableError(f"Edge TTS ses çözme başarısız oldu: {exc}") from exc
 
         if not pcm_bytes:

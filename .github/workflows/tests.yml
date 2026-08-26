@@ -1,0 +1,62 @@
+# Artemis test iş akışı.
+#
+# NEDEN UBUNTU (proje bir Windows masaüstü asistanı olduğu hâlde):
+# testlerin ezici çoğunluğu platformdan bağımsız. Windows'a özgü
+# davranışlar ya `@pytest.mark.skipif(sys.platform != "win32")` ile
+# işaretli ya da sahte `win32`/`ctypes` nesneleriyle sınanıyor
+# (CLAUDE.md'nin lazy-import kuralı bunu mümkün kılıyor). Ubuntu hem
+# ücretsiz hem hızlı; Windows-özgü doğrulama zaten geliştiricinin
+# makinesinde yapılıyor.
+#
+# NEDEN requirements.txt DEĞİL requirements-dev.txt: testlerin ihtiyacı
+# olan üçüncü-parti paketler yalnızca pytest, numpy, pydantic, PyYAML ve
+# mcp. Tam liste PyQt6, faster-whisper (ve dolaylı olarak torch), av,
+# vosk içeriyor — gigabaytlarca indirme, üstelik hiçbiri testler için
+# GEREKLİ değil (ses/UI testleri sahte modüllerle çalışır).
+
+name: Testler
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Bağımlılıkları kur
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Testler
+        # `disruptive` işaretliler pyproject.toml::addopts ile zaten
+        # dışarıda; burada tekrar belirtmeye gerek yok.
+        run: pytest
+
+      - name: Linter (ruff)
+        run: ruff check .
+
+      # NOT: `ruff format --check` BİLEREK eklenmedi. Depo şu anda
+      # ruff'ın biçimlendiricisine göre 42 dosyada farklı; bu tamamen
+      # mekanik bir fark ama tek seferde uygulanırsa anlamlı
+      # değişiklikleri gözden geçirilemez hâle getiren dev bir diff
+      # üretir. Ayrı ve TEK BAŞINA bir commit'te yapılmalı, sonra bu
+      # adım açılmalı.
+
+      - name: Tip denetimi (mypy)
+        run: mypy

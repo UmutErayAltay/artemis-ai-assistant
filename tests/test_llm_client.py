@@ -12,13 +12,8 @@ import types
 import pytest
 
 from core.llm_client import MAX_PLAN_STEPS, LLMResponseParseError, OllamaLLMClient
-from core.plugin_loader import TOOL_REGISTRY, load_plugins
+from core.plugin_loader import TOOL_REGISTRY
 from core.prompt_builder import build_system_prompt
-
-
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
 
 
 def _with_client(fake_ollama):

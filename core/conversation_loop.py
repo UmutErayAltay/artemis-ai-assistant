@@ -26,6 +26,7 @@ from core.dispatcher import ToolDispatcher
 from core.llm_client import LLMResponseParseError, OllamaLLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from utils.text import lower_variants
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,11 @@ def run(dispatcher: ToolDispatcher, llm_client: OllamaLLMClient) -> None:
         user_input = input("Siz: ").strip()
         if not user_input:
             continue
-        if user_input.lower() in _EXIT_COMMANDS:
+        # `lower_variants`: Python'ın `str.lower()`'ı Türkçe yerel ayarını
+        # kullanmaz, `"ÇIKIŞ".lower()` -> `"çikiş"` verir ve listedeki
+        # hiçbir şeyle eşleşmez. Türkçe kuralı tek başına da yetmez
+        # (`"EXIT"` -> `"exıt"`), çünkü liste iki dilden sözcük içeriyor.
+        if lower_variants(user_input) & _EXIT_COMMANDS:
             print("Artemis: Görüşürüz.")
             break
 

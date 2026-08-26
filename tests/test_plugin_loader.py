@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 
-from core.enums import DangerLevel
 from core.exceptions import PluginLoadError
 from core.plugin_loader import TOOL_REGISTRY, load_plugins, register_tool
 from core.tool_base import BaseTool, ToolContext

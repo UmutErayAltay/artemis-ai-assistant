@@ -13,6 +13,12 @@ import sys
 
 import pytest
 
+# `ui.hotkey` modül seviyesinde PyQt6 import eder. PyQt6 kurulu değilse
+# (örn. başlıksız bir CI makinesi) bu satır TOPLAMA (collection) hatası
+# verip tüm dosyayı düşürürdü. `importorskip` onu dürüst bir "atlandı"ya
+# çevirir — testler yine kurulu olan her yerde çalışır.
+pytest.importorskip("PyQt6", reason="ui/ katmanı PyQt6 gerektirir")
+
 from ui.hotkey import GlobalHotkey, HotkeyParseError, parse_hotkey
 
 # --------------------------------------------------------------------------

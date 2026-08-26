@@ -7,6 +7,11 @@ name = "artemis"
 version = "0.1.0"
 description = "Yerel çalışan (offline-first), Türkçe konuşan, Ollama tabanlı masaüstü AI asistanı."
 requires-python = ">=3.11"
+# TEK KAYNAK: `requirements.txt` bu listenin insan-okur, yorumlu
+# karşılığıdır ve ikisi bir dönem AYRIŞMIŞTI — burada 6, orada 15 paket
+# vardı, yani `pip install .` sesi, arayüzü ve MCP'yi olmayan çalışmayan
+# bir kurulum üretiyordu. Bir paket eklerken İKİSİNİ de güncelleyin;
+# `tests/test_packaging.py` ayrışmayı yakalar.
 dependencies = [
     "pydantic>=2.7",
     "PyYAML>=6.0",
@@ -14,10 +19,22 @@ dependencies = [
     "psutil>=5.9",
     "pyautogui>=0.9.54",
     "pywin32>=306; sys_platform == 'win32'",
+    "PyQt6>=6.4",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+    "faster-whisper>=1.0",
+    "piper-tts>=1.2",
+    "requests>=2.31",
+    "edge-tts>=6.1",
+    "av>=11.0",
+    "vosk>=0.3.45",
+    "mcp>=1.20",
+    "nvidia-cublas-cu12; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
 
 # pytest>=7'nin yerleşik `pythonpath` seçeneği: bu dosyanın bulunduğu
 # dizini (yani `artemis/` kökünü) otomatik olarak sys.path'e ekler.
@@ -37,10 +54,117 @@ testpaths = ["tests"]
 #
 #     pytest -m disruptive          # yalnızca bunlar
 #     pytest -m ""                  # işaret filtresini tamamen kaldır
-addopts = "-m 'not disruptive'"
+# `--strict-markers`: BİLİNMEYEN bir işaret HATA olsun. Bu olmadan bir
+# yazım hatası (`@pytest.mark.disruptiv`) sessizce kaydedilir ve test
+# ÇALIŞIR — yani `disruptive` mekanizmasının var olma sebebi olan
+# regresyonun (geliştiricinin ekranının her test turunda kilitlenmesi)
+# aynısı, bir harf eksikliğiyle geri gelir.
+# `--strict-config`: pyproject'teki bir yapılandırma hatası da sessiz
+# kalmasın.
+addopts = "-m 'not disruptive' --strict-markers --strict-config"
 markers = [
     "disruptive: çalıştırıldığı gerçek makineyi etkiler (ekran kilidi, ses kapatma). Varsayılan olarak atlanır.",
 ]
 
 [tool.setuptools.packages.find]
-include = ["core*", "config*", "models*", "memory*", "plugins*", "utils*"]
+# `voice*` ve `ui*` bir dönem burada YOKTU: kurulan wheel `voice.router`
+# ya da `ui.overlay`'i import EDEMİYORDU, yani `pip install .` çalışmayan
+# bir kurulum üretiyordu.
+include = ["core*", "config*", "models*", "memory*", "plugins*", "utils*", "voice*", "ui*"]
+
+[tool.setuptools.package-data]
+# `core/prompt_builder.py` bu dosyayı ÇALIŞMA ZAMANINDA okur; paket
+# verisi olarak bildirilmezse wheel'e hiç girmez ve asistan sistem
+# promptunu bulamaz. Aynı şey `config.yaml` için de geçerli.
+prompts = ["*.md"]
+config = ["*.yaml"]
+
+
+# --- Statik denetim ------------------------------------------------------
+#
+# Bu bölümler eklenene kadar depoda ruff kural koduyla yazılmış KIRK adet
+# `# noqa: BLE001` / `# noqa: N802` bastırması vardı — hiç çalışmamış bir
+# linter'ı susturuyorlardı. Bastırmalar zaten yazılı olduğu için açmanın
+# maliyeti düşüktü.
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["voice_models", "logs"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort (import sırası)
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "BLE",      # blind except  <- mevcut noqa'ların çoğu bunun için
+    "N",        # pep8-naming   <- Windows API adları için noqa'lar var
+    "RUF",
+]
+ignore = [
+    # Uzun Türkçe docstring satırları; kodun kendisi 120'yi aşmıyor.
+    "E501",
+    # `raise ... from err` zorunluluğu: bu depoda hata mesajları
+    # kullanıcıya gösterilmek üzere ÖZELLİKLE sadeleştiriliyor.
+    "B904",
+    # "Belirsiz Unicode karakter" kuralları. Bu projenin kodu, yorumları ve
+    # kullanıcıya giden mesajları TÜRKÇE; `ı`, `ş`, `İ` gibi harfler
+    # kasıtlıdır ve her biri bir uyarı üretiyor (ölçüldü: 10.337 uyarının
+    # neredeyse tamamı buydu). Bu kural Latin-dışı gövdeli projeler için
+    # yazılmış; burada yalnızca gürültü.
+    "RUF001", "RUF002", "RUF003",
+    # `DangerLevel(str, Enum)` -> `StrEnum` önerisi. Değişiklik pydantic
+    # serileştirmesini etkileyebilir ve bu enum GÜVENLİK sınıflandırması
+    # taşıyor (`CONFIRM_REQUIRED`); ölçülmemiş bir modernleştirme için
+    # dokunulmuyor.
+    "UP042",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    # Sahte modüller kurmak için modül-içi/koşullu import gerekiyor.
+    "E402",
+    # Sahte nesneler GERÇEK API'lerin adlarını taşımak ZORUNDA:
+    # `AcceptWaveform`/`Result` (Vosk), `PostMessage` (win32),
+    # `NoSuchProcess`/`AccessDenied` (psutil). Bir fake'in değeri, taklit
+    # ettiği arayüzü birebir konuşmasından gelir (bkz. `.context` §6.16).
+    "N802", "N818",
+    # `x, y, w, h = rect` gibi açımlarda tüm parçaları adlandırmak
+    # okunabilirlik için; hepsini kullanmak zorunlu değil.
+    "RUF059",
+    # Sahte sınıflarda `ClassVar` şartı gereksiz tören.
+    "RUF012",
+]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["core", "config", "models", "memory", "plugins", "utils"]
+ignore_missing_imports = true      # ollama/pywin32/pyautogui'nin tip bilgisi yok
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+# `voice/` ve `ui/` şimdilik kapsam dışı: ikisi de tipi olmayan üçüncü
+# parti kütüphanelerle (sounddevice, PyQt6, faster-whisper) yoğun şekilde
+# konuşuyor. Kademeli olarak eklenebilir; hepsini birden açmak yüzlerce
+# gürültülü uyarı üretir ve aracın güvenilirliğini baştan yakardı.
+
+[[tool.mypy.overrides]]
+# Kapsam dışı modüller import yoluyla da RAPORLANMASIN.
+module = ["voice.*", "ui.*"]
+follow_imports = "silent"
+
+[[tool.mypy.overrides]]
+# WINDOWS'A ÖZGÜ API'LER. `os.startfile`, `ctypes.windll` ve `winreg.*`
+# GERÇEKTEN yalnızca Windows'ta vardır; mypy bu depoda Linux üzerinde
+# (CI) çalıştığı için POSIX stub'larını kullanır ve bunları "yok" sayar.
+# Bu bir hata değil, doğru bilgi — ama bu proje bilinçli olarak bir
+# Windows masaüstü asistanı ve bu çağrılar zaten CLAUDE.md'nin kuralı
+# gereği `execute()` içinde tembel import ediliyor, yani Linux'ta o
+# satırlara hiç ULAŞILMIYOR (ve testler sahte modüllerle koşuyor).
+#
+# Bastırma dosya değil KURAL bazında: aynı modüldeki gerçek tip
+# hataları görünmeye devam eder.
+module = ["plugins.windows_plugin", "plugins.filesystem_plugin", "plugins._app_resolver"]
+disable_error_code = ["attr-defined"]

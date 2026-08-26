@@ -33,13 +33,8 @@ import pytest
 import plugins.browser_plugin as browser_plugin
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.plugin_loader import load_plugins
 from memory.context_memory import ContextMemory
-
-
-@pytest.fixture(autouse=True)
-def _load_all_plugins() -> None:
-    load_plugins()
+from tests.conftest import install_fake_module
 
 
 @pytest.fixture
@@ -328,11 +323,13 @@ def test_ensure_browser_focused_fails_when_no_browser_anywhere(monkeypatch: pyte
 
 
 def test_send_shortcut_single_key_uses_press(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pyautogui
-
     calls: list[tuple[str, tuple[Any, ...]]] = []
-    monkeypatch.setattr(pyautogui, "press", lambda key: calls.append(("press", (key,))))
-    monkeypatch.setattr(pyautogui, "hotkey", lambda *keys: calls.append(("hotkey", keys)))
+    install_fake_module(
+        monkeypatch,
+        "pyautogui",
+        press=lambda key: calls.append(("press", (key,))),
+        hotkey=lambda *keys: calls.append(("hotkey", keys)),
+    )
 
     ok, error = browser_plugin._send_shortcut("f5")
 
@@ -342,11 +339,13 @@ def test_send_shortcut_single_key_uses_press(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_send_shortcut_multi_key_uses_hotkey(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pyautogui
-
     calls: list[tuple[str, tuple[Any, ...]]] = []
-    monkeypatch.setattr(pyautogui, "press", lambda key: calls.append(("press", (key,))))
-    monkeypatch.setattr(pyautogui, "hotkey", lambda *keys: calls.append(("hotkey", keys)))
+    install_fake_module(
+        monkeypatch,
+        "pyautogui",
+        press=lambda key: calls.append(("press", (key,))),
+        hotkey=lambda *keys: calls.append(("hotkey", keys)),
+    )
 
     ok, error = browser_plugin._send_shortcut("ctrl", "t")
 
@@ -355,12 +354,10 @@ def test_send_shortcut_multi_key_uses_hotkey(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_send_shortcut_reports_exception_honestly(monkeypatch: pytest.MonkeyPatch) -> None:
-    import pyautogui
-
     def _raise(*keys: str) -> None:
         raise RuntimeError("girdi erişimi kısıtlı")
 
-    monkeypatch.setattr(pyautogui, "hotkey", _raise)
+    install_fake_module(monkeypatch, "pyautogui", hotkey=_raise, press=_raise)
 
     ok, error = browser_plugin._send_shortcut("ctrl", "w")
 
