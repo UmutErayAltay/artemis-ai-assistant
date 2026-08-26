@@ -6,6 +6,7 @@ ve `subprocess.Popen`/`time.sleep` sahte (mock) sürümlerle değiştirilir.
 
 from __future__ import annotations
 
+import sys
 import types
 
 import pytest
@@ -122,18 +123,16 @@ def test_stop_if_we_started_it_does_nothing_when_we_did_not_start_server() -> No
     manager.stop_if_we_started_it()  # exception firlatmamali, hicbir sey yapmamali
 
 
-def test_stop_all_ollama_processes_terminates_matching_processes(monkeypatch: pytest.MonkeyPatch) -> None:
-    from core.ollama_manager import stop_all_ollama_processes
+def _make_fake_psutil(monkeypatch: pytest.MonkeyPatch, procs):
+    """GERÇEK psutil semantiğini taklit eden sahte modül.
 
-    class _FakeProc:
-        def __init__(self, name):
-            self.info = {"name": name}
-            self.terminated = False
-
-        def terminate(self):
-            self.terminated = True
-
-    procs = [_FakeProc("ollama.exe"), _FakeProc("chrome.exe"), _FakeProc("ollama")]
+    Kritik nokta (bkz. `.context` §6.16'nın dersi): `terminate()` bir
+    sinyal GÖNDERİR, öldürmeyi GARANTİ ETMEZ. Gerçekten kimin öldüğünü
+    yalnızca `wait_procs` söyler. Fake bu ayrımı yapmazsa,
+    `stop_all_ollama_processes`'in dürüst sayım mantığını sınayamaz —
+    yalnızca "terminate çağrıldı mı" diye sorardı ki asıl düzeltilen
+    hata tam olarak buydu.
+    """
 
     fake_psutil = types.ModuleType("psutil")
     fake_psutil.process_iter = lambda attrs=None: procs
@@ -146,10 +145,102 @@ def test_stop_all_ollama_processes_terminates_matching_processes(monkeypatch: py
 
     fake_psutil.NoSuchProcess = _NoSuchProcess
     fake_psutil.AccessDenied = _AccessDenied
-    monkeypatch.setitem(__import__("sys").modules, "psutil", fake_psutil)
+
+    def _wait_procs(watched, timeout=None):
+        gone = [p for p in watched if not p.alive]
+        alive = [p for p in watched if p.alive]
+        return gone, alive
+
+    fake_psutil.wait_procs = _wait_procs
+    monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
+    return fake_psutil
+
+
+class _FakeProc:
+    """Sahte süreç. `ignores_terminate=True` ise `terminate()` sinyalini
+    yok sayar ve yalnızca `kill()` ile ölür — gerçek dünyada olan şey."""
+
+    def __init__(self, name: str, pid: int = 1, ignores_terminate: bool = False) -> None:
+        self.info = {"name": name, "pid": pid}
+        self.pid = pid
+        self.alive = True
+        self.terminated = False
+        self.killed = False
+        self._ignores_terminate = ignores_terminate
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if not self._ignores_terminate:
+            self.alive = False
+
+    def kill(self) -> None:
+        self.killed = True
+        self.alive = False
+
+
+def test_stop_all_ollama_processes_terminates_matching_processes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.ollama_manager import stop_all_ollama_processes
+
+    procs = [_FakeProc("ollama.exe", 1), _FakeProc("chrome.exe", 2), _FakeProc("ollama", 3)]
+    _make_fake_psutil(monkeypatch, procs)
 
     count = stop_all_ollama_processes()
-    assert count == 2  # yalnızca adında "ollama" gecen 2 surec
-    assert procs[0].terminated is True
-    assert procs[1].terminated is False
-    assert procs[2].terminated is True
+
+    assert count == 2
+    assert procs[0].terminated and procs[2].terminated
+    assert not procs[1].terminated, "İlgisiz süreçlere DOKUNULMAMALI"
+
+
+def test_stop_all_counts_only_processes_that_actually_died(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DÜRÜSTLÜK: `terminate()` çağrısı sayılmaz, GERÇEKTEN ölen sayılır.
+
+    Bu fonksiyon bir dönem `terminate()` çağrılarını sayıyordu. Sinyali
+    yok sayan bir süreç de "kapatıldı" olarak raporlanıyordu; kullanıcı
+    RAM'in boşaldığını sanıyordu.
+    """
+
+    from core.ollama_manager import stop_all_ollama_processes
+
+    inatci = _FakeProc("ollama.exe", 1, ignores_terminate=True)
+    _make_fake_psutil(monkeypatch, [inatci])
+
+    count = stop_all_ollama_processes()
+
+    assert inatci.terminated, "önce nazikçe istenmeli"
+    assert inatci.killed, "yanıt vermeyene ısrar edilmeli"
+    assert count == 1, "kill sonrası gerçekten öldü, sayılmalı"
+
+
+def test_stop_all_does_not_report_processes_it_could_not_kill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`kill()` de işe yaramazsa o süreç SAYILMAMALI."""
+
+    from core.ollama_manager import stop_all_ollama_processes
+
+    olumsuz = _FakeProc("ollama.exe", 1, ignores_terminate=True)
+    olumsuz.kill = lambda: None  # kill de etkisiz: süreç `alive` kalır
+
+    _make_fake_psutil(monkeypatch, [olumsuz])
+
+    assert stop_all_ollama_processes() == 0
+
+
+def test_stop_all_ignores_unrelated_processes_with_ollama_in_the_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ollama-webui` / `ollama_bench.py` bir Ollama sunucusu DEĞİLDİR.
+
+    Kontrol bir dönem `if "ollama" in name` idi; bir "RAM temizleme"
+    komutunun kapsamı, adında bir alt dize geçen her şey olamaz.
+    """
+
+    from core.ollama_manager import stop_all_ollama_processes
+
+    procs = [_FakeProc("ollama-webui", 1), _FakeProc("ollama_bench.py", 2), _FakeProc("ollama", 3)]
+    _make_fake_psutil(monkeypatch, procs)
+
+    count = stop_all_ollama_processes()
+
+    assert count == 1
+    assert not procs[0].terminated
+    assert not procs[1].terminated
+    assert procs[2].terminated

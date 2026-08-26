@@ -51,6 +51,24 @@ def _nvidia_dll_directories() -> list[Path]:
     return directories
 
 
+def _cuda_runtime_is_loadable() -> bool:
+    """Windows dışında CUDA çalışma kütüphanelerinin GERÇEKTEN var olup
+    olmadığına bakar.
+
+    `ctypes.util.find_library` sistemin linker yolunu (ldconfig önbelleği,
+    `LD_LIBRARY_PATH`) sorgular; pip ile kurulmuş `nvidia-*` paketleri de
+    bu yola giren `.so` dosyaları sağlar. Bulunamazsa GPU denenmemelidir.
+
+    Neden `import torch` ya da `nvidia-smi` DEĞİL: torch bu projenin
+    bağımlılığı değil (faster-whisper CTranslate2 kullanır), `nvidia-smi`
+    ise bir alt süreç başlatmak demek — bu fonksiyon açılış yolunda.
+    """
+
+    from ctypes.util import find_library
+
+    return any(find_library(name) for name in ("cublas", "cudnn"))
+
+
 def prepare_cuda_libraries() -> bool:
     """CUDA DLL'lerini yüklenebilir hâle getirir. Birden fazla çağrı güvenlidir.
 
@@ -65,9 +83,19 @@ def prepare_cuda_libraries() -> bool:
         return True
 
     if sys.platform != "win32":
-        # Linux/macOS'ta pip paketleri zaten linker yolunda bulunur.
-        _prepared = True
-        return True
+        # Linux/macOS'ta pip paketleri zaten linker yolunda bulunur — ama
+        # "yol sorunu yok" ile "CUDA VAR" AYNI ŞEY DEĞİL. Burada bir dönem
+        # koşulsuz `True` dönülüyordu, yani `resolve_device("cuda")` GPU'su
+        # olmayan bir Linux makinesinde bile "cuda" diyordu. Sonuç:
+        # `whisper_device` varsayılanı "cuda" olduğu için ses katmanı, bu
+        # modülün vaat ettiği CPU'ya düşüş yerine ilk tanımada
+        # `SpeechRecognitionUnavailableError` ile ölüyordu. Yani geri
+        # düşüş yalnızca Windows'ta çalışıyordu.
+        available = _cuda_runtime_is_loadable()
+        if not available:
+            logger.info("CUDA çalışma kütüphaneleri bulunamadı; GPU kullanılamaz.")
+        _prepared = available
+        return available
 
     import ctypes
 

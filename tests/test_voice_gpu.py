@@ -81,17 +81,73 @@ def test_resolve_device_cuda_falls_back_to_cpu_and_logs_warning_when_libraries_m
     )
 
 
-def test_prepare_cuda_libraries_returns_true_without_ctypes_on_non_windows(
+def test_prepare_cuda_libraries_does_not_load_dlls_on_non_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Windows dışında DLL yükleme denenmez — ama sonuç yine ÖLÇÜLÜR.
+
+    Bu test bir dönem "Windows dışında her zaman True döner" diyordu;
+    yani KODUN HATASINI sözleşme sanıp sabitlemişti. Doğru sözleşme:
+    Windows'a özgü DLL kurulumu (`add_dll_directory` + `CDLL`) atlanır,
+    ama CUDA'nın gerçekten var olup olmadığı yine de kontrol edilir.
+    """
+
     # Gerçek işletim sistemi ne olursa olsun `sys.platform` sahtelenerek
     # Windows-dışı dal her ortamda doğrulanabiliyor.
     monkeypatch.setattr(sys, "platform", "linux")
 
     calls = []
     monkeypatch.setattr("ctypes.CDLL", lambda *args, **kwargs: calls.append(args) or object())
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: f"lib{name}.so")
 
     result = gpu.prepare_cuda_libraries()
 
-    assert result is True
-    assert calls == []  # Windows dışında DLL yükleme hiç denenmedi
+    assert result is True  # kütüphaneler bulundu
+    assert calls == []  # ama Windows'a özgü DLL yükleme hiç denenmedi
+
+
+# --- Windows dışında CPU'ya geri düşüş (README §35) ----------------------
+
+
+def test_prepare_returns_false_on_linux_without_cuda_libraries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CUDA kütüphanesi yoksa Windows DIŞINDA da `False` dönmeli.
+
+    Burada bir dönem koşulsuz `True` vardı: "Linux'ta pip paketleri zaten
+    linker yolundadır" gerekçesiyle. Ama "yol sorunu yok" ile "CUDA VAR"
+    aynı şey değil. `Settings.whisper_device` varsayılanı `"cuda"` olduğu
+    için sonuç, GPU'su olmayan her Linux makinesinde ses katmanının
+    bu modülün VAAT ETTİĞİ CPU'ya düşüş yerine ilk tanımada
+    `SpeechRecognitionUnavailableError` ile ölmesiydi — yani geri düşüş
+    yalnızca Windows'ta çalışıyordu.
+    """
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: None)
+
+    assert gpu.prepare_cuda_libraries() is False
+
+
+def test_prepare_returns_true_on_linux_when_cuda_libraries_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: f"lib{name}.so")
+
+    assert gpu.prepare_cuda_libraries() is True
+
+
+def test_resolve_device_falls_back_to_cpu_on_linux_without_cuda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uçtan uca: sahte `prepare` DEĞİL, gerçek zincir üzerinden.
+
+    `resolve_device("cuda")` -> `prepare_cuda_libraries()` -> CUDA yok ->
+    "cpu". Zincirin herhangi bir halkası koparsa bu test kırılır.
+    """
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: None)
+
+    assert resolve_device("cuda") == "cpu"

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import psutil
 import pytest
@@ -432,11 +433,15 @@ class _FakeWindow:
     """Sahte bir Windows penceresinin durumu (görünürlük, başlık,
     ShowWindow/MoveWindow'un etkilediği alanlar)."""
 
-    def __init__(self, title: str, visible: bool = True) -> None:
+    def __init__(self, title: str, visible: bool = True, foreground_refused: bool = False) -> None:
         self.title = title
         self.visible = visible
         self.show_cmd = 1  # SW_SHOWNORMAL
         self.rect = (0, 0, 800, 600)
+        # GERÇEK Windows davranışı: `SetForegroundWindow` bir istektir ve
+        # ön plan kilidi kuralları onu reddedebilir. Bu bayrak o reddi
+        # taklit eder — tool'un doğrulama mantığı ancak böyle sınanabilir.
+        self.foreground_refused = foreground_refused
 
 
 def _install_fake_win32_for_window_management(
@@ -461,10 +466,26 @@ def _install_fake_win32_for_window_management(
     fake_win32gui.IsWindowVisible = lambda hwnd: windows[hwnd].visible
     fake_win32gui.GetWindowText = lambda hwnd: windows[hwnd].title
     fake_win32gui.EnumWindows = lambda callback, extra: [callback(h, extra) for h in windows]
-    fake_win32gui.SetForegroundWindow = lambda hwnd: calls["foreground"].append(hwnd)
     fake_win32gui.GetWindowPlacement = lambda hwnd: (0, windows[hwnd].show_cmd, (0, 0), (0, 0), windows[hwnd].rect)
     fake_win32gui.GetWindowRect = lambda hwnd: windows[hwnd].rect
 
+    # ÖN PLAN, KOMUT DEĞİL DURUMDUR (aynı ders, bkz. aşağıdaki
+    # ShowWindow notu): GERÇEK `SetForegroundWindow` bir İSTEKTİR ve
+    # Windows'un ön plan kilidi kuralları yüzünden RUTİN OLARAK
+    # reddedilir; hangi pencerenin gerçekten önde olduğunu yalnızca
+    # `GetForegroundWindow` söyler. Fake bu ikisini ayırmazsa,
+    # `windows.focus_window`'un DOĞRU olan doğrulama mantığını sınayamaz.
+    # `foreground_refused` ile reddi de taklit edebiliyoruz.
+    state = {"foreground": None}
+
+    def _set_foreground(hwnd):
+        calls["foreground"].append(hwnd)
+        if not getattr(windows[hwnd], "foreground_refused", False):
+            state["foreground"] = hwnd
+        return not getattr(windows[hwnd], "foreground_refused", False)
+
+    fake_win32gui.SetForegroundWindow = _set_foreground
+    fake_win32gui.GetForegroundWindow = lambda: state["foreground"]
     # ShowWindow'a verilen KOMUT (SW_MINIMIZE=6) ile GetWindowPlacement'ın
     # döndürdüğü SONUÇ DURUMU (SW_SHOWMINIMIZED=2) GERÇEK Windows API'sinde
     # FARKLI sabitlerdir (yalnızca MAXIMIZE/SHOWMAXIMIZED değeri tesadüfen
@@ -620,3 +641,290 @@ def test_arrange_window_snap_restores_minimized_window_first(
     assert result.success is True
     assert (1, 9) in calls["show"]  # SW_RESTORE
     assert len(calls["move"]) == 1
+
+
+# --- "Koşulsuz success=True yasak" (CLAUDE.md) regresyon testleri --------
+#
+# Aşağıdaki tool'lar bir dönem altta yatan çağrının SONUCUNU hiç
+# denetlemeden success=True dönüyordu. Bu, projede üç kez tekrarlanmış
+# bir hata sınıfı (README §11, §16c) — bu yüzden her biri için hem
+# başarı hem BAŞARISIZLIK yolu test edilir. Bir doğrulamanın anlamlı
+# olması, testteki sahte davranışın GERÇEK API semantiğini doğru taklit
+# etmesine bağlıdır (bkz. `.context` §6.16, `_FakeWindow` notları).
+
+
+def _install_fake_ctypes(
+    monkeypatch: pytest.MonkeyPatch,
+    user32_lock_result: int = 1,
+    powrprof_suspend_result: int = 1,
+):
+    """`ctypes.windll`'i, GERÇEK API gibi BOOL döndüren sahte bir sürümle
+    değiştirir.
+
+    Kritik nokta: `LockWorkStation` ve `SetSuspendState` gerçek Windows'ta
+    bir BOOL döndürür ve başarısızlıkta 0'dır. Yalnızca "çağrıldı mı"
+    kaydeden bir fake, tool'un doğrulama mantığını hiç sınamazdı.
+    """
+
+    import types
+
+    class _User32:
+        def LockWorkStation(self) -> int:  # noqa: N802 - Windows API adı
+            return user32_lock_result
+
+    class _Powrprof:
+        def SetSuspendState(self, hibernate, force, wakeup_events_disabled) -> int:  # noqa: N802
+            return powrprof_suspend_result
+
+    fake_ctypes = types.ModuleType("ctypes")
+    fake_ctypes.windll = types.SimpleNamespace(user32=_User32(), powrprof=_Powrprof())
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+
+
+def _install_fake_clipboard(monkeypatch: pytest.MonkeyPatch, readback: str | None = None):
+    """Sahte `win32clipboard`: yazılanı saklar ve geri okutur.
+
+    `readback` verilirse, geri okuma YAZILANDAN FARKLI bir değer döndürür —
+    yani "başka bir uygulama panoyu değiştirdi" durumunu taklit eder.
+    """
+
+    import types
+
+    written: dict[str, Any] = {"text": None, "opened": 0, "closed": 0}
+
+    fake = types.ModuleType("win32clipboard")
+    fake.CF_UNICODETEXT = 13
+
+    def _open() -> None:
+        written["opened"] += 1
+
+    def _close() -> None:
+        written["closed"] += 1
+
+    def _set(text, fmt):
+        written["text"] = text
+
+    fake.OpenClipboard = _open
+    fake.CloseClipboard = _close
+    fake.EmptyClipboard = lambda: None
+    fake.SetClipboardText = _set
+    fake.GetClipboardData = lambda fmt: (readback if readback is not None else written["text"])
+
+    monkeypatch.setitem(sys.modules, "win32clipboard", fake)
+    return written
+
+
+def _install_fake_pyautogui_screenshot(monkeypatch: pytest.MonkeyPatch):
+    """Sahte `pyautogui.screenshot()`: GERÇEKTEN bir dosya yazar ama
+    ekrana dokunmaz (bkz. CLAUDE.md: gerçek makineyi etkileyen yan etki
+    varsayılan koşuda çalışmamalı)."""
+
+    import types
+
+    class _FakeImage:
+        def save(self, path) -> None:
+            Path(path).write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    fake = types.ModuleType("pyautogui")
+    fake.screenshot = lambda: _FakeImage()
+    monkeypatch.setitem(sys.modules, "pyautogui", fake)
+
+
+def _install_fake_subprocess(monkeypatch: pytest.MonkeyPatch, returncode: int, stderr: str = ""):
+    """`plugins.windows_plugin.subprocess.run`'ı, gerçekçi bir
+    `CompletedProcess` döndüren sahte bir sürümle değiştirir."""
+
+    import subprocess as real_subprocess
+
+    calls: list[list[str]] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return real_subprocess.CompletedProcess(cmd, returncode, stdout="", stderr=stderr)
+
+    monkeypatch.setattr("plugins.windows_plugin.subprocess.run", _fake_run)
+    return calls
+
+
+def test_shutdown_reports_failure_when_the_command_fails(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`shutdown.exe` hata döndürdüğünde "kapatılıyor" DENMEMELİ.
+
+    Gerçek hata kodları: 1190 (zaten planlanmış kapanma), 1314 (gerekli
+    ayrıcalık yok), 5 (erişim reddedildi). Bu tool CONFIRM_REQUIRED —
+    yani kullanıcının bilinçli onay verdiği bir işlemde yalan söylemek
+    özellikle kötü.
+    """
+
+    _install_fake_subprocess(monkeypatch, returncode=1314, stderr="Access is denied.")
+
+    result = dispatcher.dispatch({"tool": "windows.shutdown", "arguments": {}}, confirmed=True)
+
+    assert result.success is False
+    assert "1314" in result.message
+
+
+def test_shutdown_succeeds_when_the_command_succeeds(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _install_fake_subprocess(monkeypatch, returncode=0)
+
+    result = dispatcher.dispatch({"tool": "windows.shutdown", "arguments": {}}, confirmed=True)
+
+    assert result.success is True
+    assert calls == [["shutdown", "/s", "/t", "0"]]
+
+
+def test_restart_reports_failure_when_the_command_fails(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_subprocess(monkeypatch, returncode=1190, stderr="A system shutdown is already scheduled.")
+
+    result = dispatcher.dispatch({"tool": "windows.restart", "arguments": {}}, confirmed=True)
+
+    assert result.success is False
+
+
+def test_restart_succeeds_when_the_command_succeeds(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _install_fake_subprocess(monkeypatch, returncode=0)
+
+    result = dispatcher.dispatch({"tool": "windows.restart", "arguments": {}}, confirmed=True)
+
+    assert result.success is True
+    assert calls == [["shutdown", "/r", "/t", "0"]]
+
+
+def test_shutdown_does_not_hang_forever(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asılı bir `shutdown.exe` dispatcher'ı (ve ses işçisini) kilitlememeli."""
+
+    import subprocess as real_subprocess
+
+    def _fake_run(cmd, **kwargs):
+        assert kwargs.get("timeout"), "subprocess.run'a timeout geçilmiyor"
+        raise real_subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr("plugins.windows_plugin.subprocess.run", _fake_run)
+
+    result = dispatcher.dispatch({"tool": "windows.shutdown", "arguments": {}}, confirmed=True)
+
+    assert result.success is False
+    assert "cevap vermedi" in result.message
+
+
+def test_focus_window_reports_failure_when_windows_refuses(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows ön plan kilidi isteği reddettiğinde "öne getirildi" DENMEMELİ.
+
+    `SetForegroundWindow` bir İSTEKTİR; çağıran süreç ön planda değilse
+    sistem onu sessizce reddeder. Gerçek durumu `GetForegroundWindow`
+    söyler — kardeş tool `windows.arrange_window` zaten bu deseni
+    kullanıyordu, `focus_window` tek istisnaydı.
+    """
+
+    windows = {1: _FakeWindow("Discord", foreground_refused=True)}
+    _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch({"tool": "windows.focus_window", "arguments": {"title_query": "discord"}})
+
+    assert result.success is False
+    assert "öne getirilemedi" in result.message
+
+
+def test_lock_reports_failure_when_the_api_returns_zero(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`LockWorkStation` bir BOOL döner; 0 = kilitlenemedi."""
+
+    _install_fake_ctypes(monkeypatch, user32_lock_result=0)
+
+    result = dispatcher.dispatch({"tool": "windows.lock", "arguments": {}})
+
+    assert result.success is False
+
+
+def test_lock_succeeds_when_the_api_returns_nonzero(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_ctypes(monkeypatch, user32_lock_result=1)
+
+    result = dispatcher.dispatch({"tool": "windows.lock", "arguments": {}})
+
+    assert result.success is True
+
+
+def test_sleep_reports_failure_when_suspend_is_disabled(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`SetSuspendState` 0 döndüğünde "uykuya alınıyor" DENMEMELİ.
+
+    Bu, geliştiricinin makinesinde GERÇEKTEN olan durum (`.context` §6.6:
+    hall sensörü arızası yüzünden uyku BIOS seviyesinde kapalı) —
+    asistan bugüne kadar orada "uykuya alınıyor" deyip hiçbir şey
+    yapmıyordu.
+    """
+
+    _install_fake_ctypes(monkeypatch, powrprof_suspend_result=0)
+
+    result = dispatcher.dispatch({"tool": "windows.sleep", "arguments": {}})
+
+    assert result.success is False
+
+
+def test_sleep_succeeds_when_suspend_is_accepted(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_ctypes(monkeypatch, powrprof_suspend_result=1)
+
+    result = dispatcher.dispatch({"tool": "windows.sleep", "arguments": {}})
+
+    assert result.success is True
+
+
+def test_clipboard_copy_reports_failure_when_readback_differs(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pano PAYLAŞILAN bir kaynak: yazdıktan sonra başkası üzerine yazabilir."""
+
+    _install_fake_clipboard(monkeypatch, readback="baska bir sey")
+
+    result = dispatcher.dispatch({"tool": "windows.clipboard_copy", "arguments": {"text": "merhaba"}})
+
+    assert result.success is False
+
+
+def test_clipboard_copy_succeeds_when_readback_matches(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written = _install_fake_clipboard(monkeypatch)
+
+    result = dispatcher.dispatch({"tool": "windows.clipboard_copy", "arguments": {"text": "merhaba"}})
+
+    assert result.success is True
+    assert written["text"] == "merhaba"
+
+
+def test_screenshot_honours_the_same_location_contract_as_filesystem_tools(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`location` tam yol alabilmeli — sessizce indirilenlere düşmemeli.
+
+    Bir dönem `"desktop"` dışındaki HER değer (tam yol dahil, `"last"`
+    dahil) sessizce `downloads_path`'e yönlendiriliyordu: aynı argüman
+    adı, filesystem tool'larından FARKLI bir sözleşme konuşuyordu.
+    """
+
+    _install_fake_pyautogui_screenshot(monkeypatch)
+    hedef = tmp_path / "ss_hedef"
+
+    result = dispatcher.dispatch({"tool": "windows.screenshot", "arguments": {"location": str(hedef)}})
+
+    assert result.success is True
+    kaydedilen = Path(result.data["path"])
+    assert kaydedilen.parent == hedef, f"'{kaydedilen}' istenen konumda değil"
+    assert kaydedilen.parent != dispatcher.settings.downloads_path

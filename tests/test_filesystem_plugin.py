@@ -955,3 +955,22 @@ def test_last_location_updates_after_each_remembering_tool_call(
     assert follow_up.success is True
     assert (desktop / "Sonra" / "x.txt").exists()
     assert not (desktop / "Once" / "x.txt").exists()
+
+
+def test_safe_join_rejects_backslash_traversal_on_every_platform() -> None:
+    """`..` ters bölü ile yazıldığında da yakalanmalı.
+
+    POSIX'te `Path("AltKlasor\\..\\..\\x")` TEK bir parçadır — `..` hiç
+    görünmez. Bu koruma bir dönem yalnızca `Path` kullanıyordu, yani
+    doğruluğu çalıştığı işletim sistemine bağlıydı. Bir güvenlik
+    kontrolünün platforma bağlı olmaması gerekir.
+    """
+
+    assert _safe_join(Path("/tmp/base"), "AltKlasor\\..\\..\\disaridaki.txt") is None
+
+
+def test_safe_join_rejects_windows_absolute_path_on_every_platform() -> None:
+    """POSIX'te `Path("C:/x")` mutlak DEĞİLDİR; yine de reddedilmeli."""
+
+    assert _safe_join(Path("/tmp/base"), "C:/Windows/System32") is None
+    assert _safe_join(Path("/tmp/base"), "C:tmp") is None
