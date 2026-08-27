@@ -139,7 +139,16 @@ ignore = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+# `python_version` BİLEREK sabitlenmiyor. Sabitlenmişti ("3.11") ve bu,
+# CI'ın Python 3.12 kolunu kırdı: o kolda kurulan numpy sürümü, tip
+# dosyalarında (`.pyi`) yalnızca Python 3.12+'ta geçerli bir söz dizimi
+# (`type X = ...`, PEP 695) kullanıyor. mypy'ye "3.11 gibi davran"
+# dendiğinde, gerçekten 3.12 yorumlayıcısı altında çalışsa bile bu söz
+# dizimini sözdizimi hatası sayıp reddediyordu — kodda hata yokken CI
+# kırmızı çıkıyordu. Ayarı hiç vermemek, mypy'nin ÇALIŞTIĞI yorumlayıcının
+# sürümünü kullanmasını sağlar; CI matrisi 3.11 ve 3.12'yi ayrı ayrı
+# çalıştırdığı için bu, her kolun kendi numpy sürümüyle doğru eşleşmesini
+# garanti eder (bkz. .github/workflows/tests.yml).
 files = ["core", "config", "models", "memory", "plugins", "utils"]
 ignore_missing_imports = true      # ollama/pywin32/pyautogui'nin tip bilgisi yok
 warn_unused_ignores = true
