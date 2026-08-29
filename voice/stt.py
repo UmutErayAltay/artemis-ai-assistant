@@ -43,6 +43,19 @@ MIN_TRANSCRIBE_SECONDS = 0.2
 """Bundan kısa ses Whisper'a hiç gönderilmez — anlamlı bir söz olamayacak
 kadar kısadır ve modeli boşuna belleğe/çalışmaya zorlamanın alemi yok."""
 
+MAX_NO_SPEECH_PROB = 0.40
+"""Whisper'ın "burada konuşma yok" olasılığı bu değeri aşarsa segment yok sayılır.
+
+`voice/wake_word.py::MAX_NO_SPEECH_PROB` ile AYNI, orada ÖLÇÜLMÜŞ değer
+(gürültü: 0.59, gerçek "Artemis": 0.11) — burada tekrarlanıyor çünkü bu
+dosya `wake_word.py`'yi import ETMEZ (ayrı, bağımsız iki tanıma motoru,
+bkz. modül dokümantasyonu). Kullanıcı raporu ("Spotify'ı açar mısın" ->
+"izlediğiniz için teşekkür ederim"): `transcribe()`'ın `vad_filter=False`
+YEDEK denemesi bu filtre OLMADAN çalışıyordu — tam olarak `wake_word.py`'nin
+kendi yorumunda belgelediği tehlikeli yol ("vad_filter=False -> ortam
+gürültüsünden 'Hızlı, hızlı, hızlı'"). Whisper kendi şüphesini bildiriyor
+ama bu bilgi kullanılmıyordu."""
+
 
 class SpeechRecognitionUnavailableError(Exception):
     """faster-whisper modeli yüklenemediğinde/indirilemediğinde fırlatılır."""
@@ -293,10 +306,23 @@ class SpeechToText:
         # faster-whisper'ın Silero VAD varsayılanları (`min_silence_
         # duration_ms=2000` vb.) zaten muhafazakâr — yalnızca ≥2 sn'lik
         # sessizlikleri keser, cümle içi doğal duraklamalara dokunmaz.
+        def _extract_text(segments):
+            kept = []
+            for segment in segments:
+                no_speech_prob = getattr(segment, "no_speech_prob", 0.0)
+                if no_speech_prob > MAX_NO_SPEECH_PROB:
+                    logger.debug(
+                        "Segment yok sayıldı (no_speech_prob=%.2f): %r",
+                        no_speech_prob, segment.text,
+                    )
+                    continue
+                kept.append(segment.text)
+            return "".join(kept).strip()
+
         segments, _info = model.transcribe(
             audio_array, language="tr", hotwords=hotwords or None, vad_filter=True
         )
-        text = "".join(segment.text for segment in segments).strip()
+        text = _extract_text(segments)
 
         if not text:
             # Koşulsuz boş sonucu kabul etmek yasak (CLAUDE.md'nin
@@ -306,10 +332,14 @@ class SpeechToText:
             # duyamadım" duyar (bkz. `core/voice_loop.py::_handle_one_
             # command`) — bu, wake-word'deki bir yanlış negatiften daha
             # pahalıdır (orada kullanıcı basitçe tekrar dener). Bu yüzden
-            # BİR KEZ, VAD olmadan tekrar denenir.
+            # BİR KEZ, VAD olmadan tekrar denenir. `vad_filter=False`
+            # kapıyı ortam gürültüsüne açar (bkz. MAX_NO_SPEECH_PROB
+            # dokümantasyonu) — bu yüzden burada da aynı no_speech_prob
+            # filtresi uygulanır, yoksa bu YEDEK yol tam olarak
+            # raporlanan halüsinasyon bug'ını üretir.
             segments, _info = model.transcribe(
                 audio_array, language="tr", hotwords=hotwords or None, vad_filter=False
             )
-            text = "".join(segment.text for segment in segments).strip()
+            text = _extract_text(segments)
 
         return text

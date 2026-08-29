@@ -333,3 +333,64 @@ def test_transcribe_does_not_retry_when_vad_returns_text(monkeypatch: pytest.Mon
     SpeechToText().transcribe(_speech_block(duration=1.0))
 
     assert calls == [True], f"gereksiz ikinci çağrı yapıldı: {calls}"
+
+
+def test_transcribe_drops_vad_false_fallback_hallucination(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bildirilen bug: "Spotify'ı açar mısın" -> "izlediğiniz için teşekkür
+    ederim". VAD boş dönünce `vad_filter=False` YEDEK denemesi devreye
+    girer, ama bu deneme filtresizdir — ortam gürültüsünü Whisper'ın kendi
+    şüphesini (`no_speech_prob`) hesaba katmadan kabul ederse tam olarak bu
+    halüsinasyon oluşur. `no_speech_prob` eşiği aşan segment yok sayılmalı."""
+
+    class _FakeSegment:
+        def __init__(self, text: str, no_speech_prob: float) -> None:
+            self.text = text
+            self.no_speech_prob = no_speech_prob
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            if kwargs.get("vad_filter"):
+                return iter([]), types.SimpleNamespace()
+            return iter([
+                _FakeSegment("izlediğiniz için teşekkür ederim", no_speech_prob=0.59),
+            ]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    text = SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert text == ""
+
+
+def test_transcribe_keeps_vad_false_fallback_real_speech(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Düşük `no_speech_prob` (gerçek konuşma) filtreye takılmamalı —
+    aşırı agresif filtreleme regresyonuna karşı."""
+
+    class _FakeSegment:
+        def __init__(self, text: str, no_speech_prob: float) -> None:
+            self.text = text
+            self.no_speech_prob = no_speech_prob
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            if kwargs.get("vad_filter"):
+                return iter([]), types.SimpleNamespace()
+            return iter([
+                _FakeSegment("spotify'ı açar mısın", no_speech_prob=0.11),
+            ]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    text = SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert text == "spotify'ı açar mısın"
