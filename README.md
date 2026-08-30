@@ -2345,6 +2345,27 @@ VAD OLMADAN tekrar dener. `no_speech_prob` bazlı segment filtresi
 (çoğunlukla gürültü) bir akış için; komut STT'si zaten "kullanıcı
 konuştu" kararı verilmiş TEK bir klip üzerinde çalışıyor.
 
+**Güncelleme (2026-08-29):** yukarıdaki "taşınmadı" kararı yarı yarıya
+gözden geçirildi. Gerçek bir bug raporu ("Spotify'ı açar mısın" ->
+"izlediğiniz için teşekkür ederim") gösterdi ki `vad_filter=False` YEDEK
+denemesi — VAD'ın hiç bakmadığı ham ses — filtresiz bırakılınca gerçekten
+gürültüden halüsinasyon üretiyor; yani bu denemenin güvenli olduğu
+varsayımı pratikte doğru çıkmadı. `no_speech_prob` filtresi bu yüzden
+**sadece yedek (`vad_filter=False`) denemeye** eklendi.
+
+Ana (`vad_filter=True`) denemeye YİNE taşınmadı — buradaki orijinal
+gerekçe geçerliliğini koruyor: bu deneme zaten "kullanıcı konuştu" kararı
+verilmiş VAD-filtrelenmiş tek bir klip, filtre eklemek kısık/sessiz ama
+gerçek konuşan bir kullanıcı için tam olarak bu bölümün önlemeye
+çalıştığı yanlış-negatifi ("Sizi duyamadım") riske atar. Yedek denemede
+bu risk yok: filtre uygulanmasaydı zaten kabul edilecek olan (ve
+muhtemelen halüsinasyon olan) bir metin, filtrelenince en kötü ihtimalle
+"Sizi duyamadım" olur — halüsine edilmiş bir komutu sessizce
+çalıştırmaktan daha ucuz bir hata. Bkz. `voice/stt.py::MAX_NO_SPEECH_PROB`
+ve commit sonrası düzeltme (`code-review` bu asimetriyi gözden kaçırdığım
+ilk sürümde yakaladı — filtre yanlışlıkla her iki denemeye de
+uygulanmıştı).
+
 ### 36d) Ayrıca bulunan, ama bu şikayetle İLGİSİZ olduğu doğrulanan bir hata
 
 Araştırma sırasında `voice/wake_word.py::WakeWordDetector`'ın, kullanıcı

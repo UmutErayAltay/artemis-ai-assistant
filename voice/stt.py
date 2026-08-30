@@ -301,28 +301,21 @@ class SpeechToText:
         # yorumunda ölçülmüş kanıt var ("vad_filter=False -> ortam
         # gürültüsünden 'Hızlı, hızlı, hızlı'; vad_filter=True -> boş").
         # O düzeltme yalnızca uyandırma sözcüğüne uygulanmış, asıl komut
-        # tanımasına hiç taşınmamıştı — burada aynı, zaten kanıtlanmış
-        # desen uygulanıyor. Özel `vad_parameters` GEÇİLMEZ:
-        # faster-whisper'ın Silero VAD varsayılanları (`min_silence_
-        # duration_ms=2000` vb.) zaten muhafazakâr — yalnızca ≥2 sn'lik
-        # sessizlikleri keser, cümle içi doğal duraklamalara dokunmaz.
-        def _extract_text(segments):
-            kept = []
-            for segment in segments:
-                no_speech_prob = getattr(segment, "no_speech_prob", 0.0)
-                if no_speech_prob > MAX_NO_SPEECH_PROB:
-                    logger.debug(
-                        "Segment yok sayıldı (no_speech_prob=%.2f): %r",
-                        no_speech_prob, segment.text,
-                    )
-                    continue
-                kept.append(segment.text)
-            return "".join(kept).strip()
-
+        # tanımasına hiç taşınmamıştı. BURADA (ana `vad_filter=True`
+        # denemesinde) yine taşınmıyor, bilinçli olarak: bu tek klip zaten
+        # "kullanıcı konuştu" kararı verilmiş bir kayıt (bkz. §36c), VAD
+        # gürültüyü büyük ölçüde eledi; no_speech_prob eşiğini burada da
+        # uygulamak kısık/sessiz ama GERÇEK konuşan bir kullanıcı için
+        # yanlış-negatif riski taşır — tam olarak §36c'nin önlemek
+        # istediği "Sizi duyamadım" hatası. Özel `vad_parameters` de
+        # GEÇİLMEZ: faster-whisper'ın Silero VAD varsayılanları
+        # (`min_silence_duration_ms=2000` vb.) zaten muhafazakâr —
+        # yalnızca ≥2 sn'lik sessizlikleri keser, cümle içi doğal
+        # duraklamalara dokunmaz.
         segments, _info = model.transcribe(
             audio_array, language="tr", hotwords=hotwords or None, vad_filter=True
         )
-        text = _extract_text(segments)
+        text = "".join(segment.text for segment in segments).strip()
 
         if not text:
             # Koşulsuz boş sonucu kabul etmek yasak (CLAUDE.md'nin
@@ -332,11 +325,29 @@ class SpeechToText:
             # duyamadım" duyar (bkz. `core/voice_loop.py::_handle_one_
             # command`) — bu, wake-word'deki bir yanlış negatiften daha
             # pahalıdır (orada kullanıcı basitçe tekrar dener). Bu yüzden
-            # BİR KEZ, VAD olmadan tekrar denenir. `vad_filter=False`
-            # kapıyı ortam gürültüsüne açar (bkz. MAX_NO_SPEECH_PROB
-            # dokümantasyonu) — bu yüzden burada da aynı no_speech_prob
-            # filtresi uygulanır, yoksa bu YEDEK yol tam olarak
-            # raporlanan halüsinasyon bug'ını üretir.
+            # BİR KEZ, VAD olmadan tekrar denenir. Bu ikinci deneme,
+            # ana denemenin aksine, `no_speech_prob` filtresi ALIR:
+            # `vad_filter=False` burada VAD'ın hiç bakmadığı ham gürültüyü
+            # de kabul ediyor (bkz. MAX_NO_SPEECH_PROB dokümantasyonu,
+            # gerçek olay: "Spotify'ı açar mısın" -> "izlediğiniz için
+            # teşekkür ederim") — ana denemedeki yanlış-negatif riski
+            # burada YOK, çünkü filtre uygulanmazsa zaten kabul edilecek
+            # bir metin, filtre uygulanınca en kötü ihtimalle "Sizi
+            # duyamadım" olur; bu, halüsine edilmiş bir komutu sessizce
+            # çalıştırmaktan daha ucuz bir hata.
+            def _extract_text(segments):
+                kept = []
+                for segment in segments:
+                    no_speech_prob = getattr(segment, "no_speech_prob", 0.0)
+                    if no_speech_prob > MAX_NO_SPEECH_PROB:
+                        logger.debug(
+                            "Segment yok sayıldı (no_speech_prob=%.2f): %r",
+                            no_speech_prob, segment.text,
+                        )
+                        continue
+                    kept.append(segment.text)
+                return "".join(kept).strip()
+
             segments, _info = model.transcribe(
                 audio_array, language="tr", hotwords=hotwords or None, vad_filter=False
             )

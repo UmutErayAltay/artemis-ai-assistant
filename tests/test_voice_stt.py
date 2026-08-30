@@ -367,6 +367,39 @@ def test_transcribe_drops_vad_false_fallback_hallucination(monkeypatch: pytest.M
     assert text == ""
 
 
+def test_transcribe_does_not_filter_primary_vad_true_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`no_speech_prob` filtresi SADECE `vad_filter=False` yedek denemesine
+    uygulanır, ana `vad_filter=True` denemesine değil (bkz. README §36c
+    güncellemesi). Ana denemeye uygulamak, kısık/sessiz ama gerçek
+    konuşan bir kullanıcı için yanlış-negatif riski taşır — bu test o
+    regresyona karşı bekçi."""
+
+    class _FakeSegment:
+        def __init__(self, text: str, no_speech_prob: float) -> None:
+            self.text = text
+            self.no_speech_prob = no_speech_prob
+
+    class _FakeWhisperModel:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def transcribe(self, audio, language=None, **kwargs):
+            # Ana denemede VAD zaten "konuşma var" dedi ama Whisper'ın
+            # kendi şüphesi (no_speech_prob) yüksek çıktı — kısık/gerçek
+            # bir konuşma senaryosu.
+            return iter([
+                _FakeSegment("spotify'ı açar mısın", no_speech_prob=0.59),
+            ]), types.SimpleNamespace()
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = _FakeWhisperModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+
+    text = SpeechToText().transcribe(_speech_block(duration=1.0))
+
+    assert text == "spotify'ı açar mısın"
+
+
 def test_transcribe_keeps_vad_false_fallback_real_speech(monkeypatch: pytest.MonkeyPatch) -> None:
     """Düşük `no_speech_prob` (gerçek konuşma) filtreye takılmamalı —
     aşırı agresif filtreleme regresyonuna karşı."""
