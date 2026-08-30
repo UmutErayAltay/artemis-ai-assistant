@@ -505,6 +505,17 @@ class WindowsSetBrightnessTool(BaseTool):
         return ToolResult(success=True, message=f"Parlaklık %{level} olarak ayarlandı.")
 
 
+# Sesli mesajda konum söylenirken sembolik `location` değerleri (bkz.
+# filesystem_plugin._resolve_location) doğal bir Türkçe ifadeye çevrilir;
+# tam yol verilmişse (kullanıcının kendi seçtiği bir klasör) o zaten
+# anlamlı olduğu için olduğu gibi söylenir (bkz. WindowsScreenshotTool.execute).
+_SCREENSHOT_LOCATION_LABELS = {
+    "desktop": "masaüstüne",
+    "downloads": "indirilenler klasörüne",
+    "last": "önceki konuma",
+}
+
+
 @register_tool
 class WindowsScreenshotTool(BaseTool):
     """Ekran görüntüsü alır ve dosyaya kaydeder."""
@@ -560,9 +571,15 @@ class WindowsScreenshotTool(BaseTool):
             )
 
         context.memory.remember_last_path(str(full_path))
+        # Mesaj sesli okunuyor — zaman damgalı, anlamsız dosya adı
+        # (`artemis_screenshot_20260831_000341.png`) burada YOK, yalnızca
+        # konum söylenir; tam yol (dosya adı dahil) `data`'da kalır
+        # (test_screenshot zaten bunu doğruluyordu, mesaj `full_path`
+        # kullandığı için regresyona düşmüştü).
+        location_label = _SCREENSHOT_LOCATION_LABELS.get(location, f"'{base_path}' klasörüne")
         return ToolResult(
             success=True,
-            message=f"Ekran görüntüsü '{full_path}' olarak kaydedildi.",
+            message=f"Ekran görüntüsü {location_label} kaydedildi.",
             data={"path": str(full_path)},
         )
 

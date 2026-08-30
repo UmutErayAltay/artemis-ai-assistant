@@ -143,6 +143,11 @@ def test_groq_key_is_none_when_nowhere_to_be_found(
 
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setattr("config.settings.SECRETS_PATH", tmp_path / "yok.yaml")
+    # Üçüncü kaynak (Windows kayıt defteri) gerçek makineye bağlı — kullanıcı
+    # `setx GROQ_API_KEY ...` çalıştırmışsa (README'nin kendi belgelediği
+    # akış) bu test o makinede env/secrets izole edilmesine RAĞMEN gerçek
+    # bir anahtar bulup yanlışlıkla geçerdi. İzolasyon tam olmalı.
+    monkeypatch.setattr("config.settings._read_from_windows_environment", lambda variable: None)
 
     assert get_groq_api_key() is None
 
@@ -175,6 +180,9 @@ def test_corrupt_secrets_file_does_not_crash_the_app(
 
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setattr("config.settings.SECRETS_PATH", _write(tmp_path / "s.yaml", "a: [1,\n"))
+    # bkz. test_groq_key_is_none_when_nowhere_to_be_found — AYNI izolasyon
+    # eksikliği (gerçek Windows kayıt defterine düşebiliyordu).
+    monkeypatch.setattr("config.settings._read_from_windows_environment", lambda variable: None)
 
     assert get_groq_api_key() is None
 
@@ -185,6 +193,9 @@ def test_azure_credentials_need_both_key_and_region(
     monkeypatch.setenv("AZURE_SPEECH_KEY", "anahtar")
     monkeypatch.delenv("AZURE_SPEECH_REGION", raising=False)
     monkeypatch.setattr("config.settings.SECRETS_PATH", tmp_path / "yok.yaml")
+    # bkz. test_groq_key_is_none_when_nowhere_to_be_found — AYNI izolasyon
+    # eksikliği (gerçek Windows kayıt defterine düşebiliyordu).
+    monkeypatch.setattr("config.settings._read_from_windows_environment", lambda variable: None)
 
     key, region = get_azure_speech_credentials()
 
