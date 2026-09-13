@@ -27,7 +27,7 @@ from core.llm_client import LLMResponseParseError, OllamaLLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
 from utils.confirmation import format_confirmation_arguments
-from utils.text import lower_variants
+from utils.text import is_clear_affirmative_answer, lower_variants
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,37 @@ def _confirm_with_user(tool_name: str, arguments: dict[str, Any]) -> bool:
     biçimde gösterilir — aksi halde kullanıcı NEYİ onayladığını göremez
     (örn. `filesystem.delete` hangi dosyayı/klasörü sileceğini yalnızca
     argümanlardan bellidir; kör onay güvenlik açığıdır).
+
+    Onay yorumlaması `core/voice_loop.py::VoiceAssistant._confirm_by_voice`
+    ile AYNI `utils.text.is_clear_affirmative_answer`'ı kullanır. Bir
+    dönem bu iki yol AYRI mantık taşıyordu: burada düz TAM DİZE eşleşmesi
+    (`answer.lower() in {"e","evet","y","yes"}`) vardı, ses yolunda ise
+    sözcük seviyesinde çalışan, uzun uzun gerekçelenmiş bir olumsuzluk-
+    vetosu + Türkçe ek sezgiseli. Sonuç: "evet, öyle" gibi FAZLADAN sözcük
+    içeren net bir onay burada reddediliyordu (ses yolunda kabul
+    edilirdi), VE burada hiçbir olumsuzluk vetosu YOKTU (yalnızca şans
+    eseri, TAM DİZE eşleşmesi olduğu için bugüne kadar yanlışlıkla
+    tetiklenmedi). Ortak fonksiyona taşınınca iki yol da aynı, hem daha
+    esnek hem de olumsuzluk vetosuyla korunan sözleşmeyi konuşuyor. Yalnız
+    terminale özgü tek-harf kısayolları (`"e"`, `"y"`, `"yes"`) TAM DİZE
+    eşleşmesiyle ayrıca kabul edilmeye devam ediyor (aşağıya bkz.) — bu
+    kısayollar ses tanımada BİLEREK yok (bkz. `utils.text.AFFIRMATIVE_
+    WORDS` docstring'i).
     """
 
     print(f"  '{tool_name}' işlemi onay gerektiriyor. Argümanlar: {format_confirmation_arguments(arguments)}")
     answer = input("  Devam edilsin mi? (e/h): ")
-    return answer.strip().lower() in {"e", "evet", "y", "yes"}
+
+    # Terminal kısayolları ("e", "y", "yes") TAM DİZE eşleşmesiyle (alt dize
+    # değil) ayrıca kabul edilir — `is_clear_affirmative_answer`'ın kelime
+    # kümesi ses tanıma için seçilmiş TAM sözcüklerden oluşuyor ("evet",
+    # "tamam"...) ve bilerek tek harfli kısayollar İÇERMİYOR (STT'ye
+    # "e"/"y" gibi tek harfli bir onay sözcüğü vermek, gürültüden
+    # yanlış-pozitif üretmeye çok açık olurdu). TAM DİZE eşleşmesi güvenlidir:
+    # "hayır" gibi bir reddi asla yanlışlıkla kapsamaz.
+    if answer.strip().lower() in {"e", "y", "yes"}:
+        return True
+    return is_clear_affirmative_answer(answer)
 
 
 def run(dispatcher: ToolDispatcher, llm_client: OllamaLLMClient) -> None:
