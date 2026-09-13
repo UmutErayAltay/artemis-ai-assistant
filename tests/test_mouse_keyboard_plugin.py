@@ -163,6 +163,42 @@ def test_move_mouse_reports_exception_honestly(
     assert "taşınamadı" in result.message
 
 
+def test_move_mouse_reports_position_read_failure_honestly(
+    dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: eskiden `pyautogui.position()` çağrısı `try`
+    bloğunun DIŞINDAYDI. `moveTo` başarılı olup `position()` (ör. oturum/
+    ekran kaybı yüzünden) istisna fırlatırsa, bu artık yakalanmayan bir
+    istisna olarak dispatcher'a değil, dürüst bir başarısızlığa dönüşmeli."""
+
+    def _raise(*args: Any, **kwargs: Any) -> tuple[int, int]:
+        raise RuntimeError("konum okunamıyor")
+
+    monkeypatch.setattr(sys.modules["pyautogui"], "position", _raise)
+
+    result = dispatcher.dispatch({"tool": "mouse_keyboard.move_mouse", "arguments": {"x": 10, "y": 10}})
+
+    assert result.success is False
+    assert "taşınamadı" in result.message
+
+
+def test_move_mouse_accepts_a_small_position_tolerance(
+    dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: eskiden TAM eşitlik aranıyordu. DPI ölçeklemesi/
+    işaretçi hızlandırması yüzünden hedeften birkaç piksel sapan BAŞARILI
+    bir hareket artık yanlış-negatif başarısız SAYILMAMALI."""
+
+    def _move_with_small_drift(x: int, y: int, duration: float = 0.0) -> None:
+        fake_pyautogui.pos = (x + 2, y - 2)  # tolerans (3px) içinde bir sapma
+
+    monkeypatch.setattr(sys.modules["pyautogui"], "moveTo", _move_with_small_drift)
+
+    result = dispatcher.dispatch({"tool": "mouse_keyboard.move_mouse", "arguments": {"x": 100, "y": 200}})
+
+    assert result.success is True
+
+
 # --- mouse_keyboard.click ----------------------------------------------------
 
 
@@ -223,6 +259,41 @@ def test_click_reports_failure_when_position_does_not_match(
 
     assert result.success is False
     assert "şüpheli" in result.message
+
+
+def test_click_accepts_a_small_position_tolerance(
+    dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_move_mouse_accepts_a_small_position_tolerance` ile aynı
+    regresyon, `click` için: tıklama hedeften birkaç piksel sapan bir
+    konuma denk gelirse (DPI ölçeklemesi) başarısız SAYILMAMALI."""
+
+    def _click_with_small_drift(**kwargs: Any) -> None:
+        fake_pyautogui.pos = (kwargs["x"] - 2, kwargs["y"] + 2)
+
+    monkeypatch.setattr(sys.modules["pyautogui"], "click", _click_with_small_drift)
+
+    result = dispatcher.dispatch({"tool": "mouse_keyboard.click", "arguments": {"x": 100, "y": 200}})
+
+    assert result.success is True
+
+
+def test_click_reports_position_read_failure_honestly(
+    dispatcher: ToolDispatcher, fake_pyautogui: _FakePyAutoGui, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`test_move_mouse_reports_position_read_failure_honestly` ile aynı
+    regresyon, `click` için: `position()` çağrısı `click`'in kendi guarded
+    çağrısının İÇİNDE olmalı, dışında değil."""
+
+    def _raise() -> tuple[int, int]:
+        raise RuntimeError("konum okunamıyor")
+
+    monkeypatch.setattr(sys.modules["pyautogui"], "position", _raise)
+
+    result = dispatcher.dispatch({"tool": "mouse_keyboard.click", "arguments": {"x": 10, "y": 10}})
+
+    assert result.success is False
+    assert "gerçekleştirilemedi" in result.message
 
 
 def test_click_does_not_require_confirmation(

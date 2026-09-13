@@ -197,6 +197,11 @@ def _install_fake_win32(
     fake_win32gui.GetForegroundWindow = lambda: state["foreground"]
     fake_win32gui.IsWindowVisible = lambda hwnd: hwnd in visible_hwnds
     fake_win32gui.EnumWindows = lambda callback, extra: [callback(hwnd, extra) for hwnd in window_pids]
+    # `_focus_any_browser_window` artık kendi `EnumWindows` döngüsünü
+    # YAZMIYOR — `windows_plugin.iter_visible_windows()`'ı kullanıyor, o da
+    # görünürlüğün yanı sıra bir BAŞLIK da ister (`GetWindowText`). Gerçek
+    # başlık metni bu testler için önemsiz; yalnızca boş olmaması yeterli.
+    fake_win32gui.GetWindowText = lambda hwnd: f"pencere-{hwnd}"
 
     def _set_foreground(hwnd: int) -> None:
         observed["focused_hwnd"] = hwnd

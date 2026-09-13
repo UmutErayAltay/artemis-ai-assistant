@@ -26,7 +26,8 @@ from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
 from models.tool_models import ToolResult
 from plugins._app_resolver import AppResolver
-from plugins.filesystem_plugin import _resolve_location
+from utils.gui import run_pyautogui
+from utils.paths import resolve_location as _resolve_location
 
 # AppResolver'ın Başlat Menüsü kısayol taraması (yavaş) yalnızca ilk
 # ihtiyaç duyulduğunda yapılır ve modül ömrü boyunca (tüm launch_app
@@ -485,16 +486,15 @@ class WindowsSetVolumeTool(BaseTool):
 
         repeats = 1 if direction == "mute" else steps
 
-        try:
-            import pyautogui
-
+        def _press_volume_keys(pyautogui: Any) -> None:
             for _ in range(repeats):
                 pyautogui.press(key_map[direction])
-        except Exception as exc:  # noqa: BLE001 - pyautogui bu oturumda çalışamayabilir
-            return ToolResult(
-                success=False,
-                message=f"Ses ayarlanamadı (bu oturumda ekran/girdi erişimi kısıtlı olabilir): {exc}",
-            )
+
+        _, error = run_pyautogui(
+            _press_volume_keys, "Ses ayarlanamadı (bu oturumda ekran/girdi erişimi kısıtlı olabilir)"
+        )
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         return ToolResult(success=True, message=f"Ses '{direction}' olarak ayarlandı.")
 
@@ -533,7 +533,7 @@ class WindowsSetBrightnessTool(BaseTool):
 
 
 # Sesli mesajda konum söylenirken sembolik `location` değerleri (bkz.
-# filesystem_plugin._resolve_location) doğal bir Türkçe ifadeye çevrilir;
+# utils.paths.resolve_location) doğal bir Türkçe ifadeye çevrilir;
 # tam yol verilmişse (kullanıcının kendi seçtiği bir klasör) o zaten
 # anlamlı olduğu için olduğu gibi söylenir (bkz. WindowsScreenshotTool.execute).
 _SCREENSHOT_LOCATION_LABELS = {
@@ -564,8 +564,6 @@ class WindowsScreenshotTool(BaseTool):
         }
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
-        import pyautogui
-
         location = arguments.get("location", "desktop")
 
         # `location` çözümlemesi filesystem tool'larıyla AYNI yerden gelir.
@@ -585,17 +583,18 @@ class WindowsScreenshotTool(BaseTool):
         filename = f"artemis_screenshot_{datetime.now():%Y%m%d_%H%M%S}.png"
         full_path = base_path / filename
 
-        try:
-            image = pyautogui.screenshot()
-            image.save(full_path)
-        except Exception as exc:  # noqa: BLE001 - ekran kilitli/oturum masaüstüne erişilemiyor olabilir
-            return ToolResult(
-                success=False,
-                message=(
-                    "Ekran görüntüsü alınamadı (ekran kilitli olabilir ya da oturum masaüstüne "
-                    f"erişilemiyor olabilir): {exc}"
-                ),
-            )
+        # `import pyautogui` eskiden BURADA, `execute()`'un EN BAŞINDA,
+        # hiçbir `try` içinde olmadan yapılıyordu — `pyautogui` kurulu
+        # değilse ya da import anında ekran/oturuma erişilemiyorsa
+        # (Linux/CI, headless) bu, `_resolve_location` çağrılmadan ÖNCE
+        # yakalanmayan bir istisnaydı. Artık `run_pyautogui` ile hem
+        # import hem çekim tek bir korumalı çağrıda.
+        _, error = run_pyautogui(
+            lambda pyautogui: pyautogui.screenshot().save(full_path),
+            "Ekran görüntüsü alınamadı (ekran kilitli olabilir ya da oturum masaüstüne erişilemiyor olabilir)",
+        )
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         context.memory.remember_last_path(str(full_path))
         # Mesaj sesli okunuyor — zaman damgalı, anlamsız dosya adı

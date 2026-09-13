@@ -46,6 +46,7 @@ from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
 from models.tool_models import ToolResult
+from utils.gui import run_pyautogui
 
 # Bilinen masaüstü tarayıcı süreç adları (küçük harf). Yeni bir tarayıcı
 # desteklemek yalnızca bu kümeye tek satır eklemek demektir.
@@ -95,9 +96,12 @@ def _get_foreground_process_name() -> str | None:
 def _focus_any_browser_window() -> str | None:
     """Açık pencereler arasında bilinen bir tarayıcı bulup öne getirir.
 
-    `windows_plugin.WindowsFocusWindowTool` ile aynı `EnumWindows`
-    deseni kullanılır, ancak başlık sorgusu yerine süreç adı
-    `_BROWSER_PROCESS_NAMES` kümesiyle eşleştirilir.
+    `EnumWindows` numaralandırması ARTIK BURADA TEKRARLANMIYOR:
+    `windows_plugin.iter_visible_windows()` kullanılır (bu fonksiyonun
+    docstring'i bu tekrarı DÖRT kopyadan biri olarak adlandırıp kaldırmayı
+    hedefliyordu; bu son kopyaydı). Yalnızca pencere başına pid/süreç adı
+    çözümlemesi bu fonksiyona özgü kalır — `iter_visible_windows` yalnızca
+    `(hwnd, başlık)` verir, süreç adını bilmez.
 
     Returns:
         Öne getirilen tarayıcının süreç adı; hiçbiri bulunamazsa
@@ -111,30 +115,30 @@ def _focus_any_browser_window() -> str | None:
     except Exception:  # noqa: BLE001 - Linux/CI'da pywin32 hiç kurulu olmayabilir
         return None
 
-    match: dict[str, Any] = {}
+    from plugins.windows_plugin import iter_visible_windows
 
-    def _on_window(hwnd: int, _extra: Any) -> None:
-        if "hwnd" in match or not win32gui.IsWindowVisible(hwnd):
-            return
+    try:
+        windows = iter_visible_windows()
+    except Exception:  # noqa: BLE001 - numaralandırma ortama göre başarısız olabilir
+        return None
+
+    match_hwnd: int | None = None
+    match_name: str | None = None
+    for hwnd, _title in windows:
         try:
             _, pid = win32process.GetWindowThreadProcessId(hwnd)
             name = psutil.Process(pid).name().lower()
         except Exception:  # noqa: BLE001 - pencere/süreç bu sırada kapanmış olabilir
-            return
+            continue
         if name in _BROWSER_PROCESS_NAMES:
-            match["hwnd"] = hwnd
-            match["name"] = name
+            match_hwnd, match_name = hwnd, name
+            break
 
-    try:
-        win32gui.EnumWindows(_on_window, None)
-    except Exception:  # noqa: BLE001 - numaralandırma ortama göre başarısız olabilir
-        return None
-
-    if "hwnd" not in match:
+    if match_hwnd is None:
         return None
 
     try:
-        win32gui.SetForegroundWindow(match["hwnd"])
+        win32gui.SetForegroundWindow(match_hwnd)
     except Exception:  # noqa: BLE001 - Windows'un ön plan kısıtlaması engelleyebilir
         logger.warning("Tarayıcı penceresi öne getirilemedi (ön plan kısıtı).")
         return None
@@ -146,11 +150,11 @@ def _focus_any_browser_window() -> str | None:
     # dönmek, çağıranın "tarayıcı odakta" sanıp kısayolu YANLIŞ pencereye
     # göndermesi demekti — kardeş tool `windows.focus_window` da aynı
     # hatayı taşıyordu.
-    if win32gui.GetForegroundWindow() != match["hwnd"]:
+    if win32gui.GetForegroundWindow() != match_hwnd:
         logger.warning("Tarayıcı penceresi öne getirilemedi (Windows isteği reddetti).")
         return None
 
-    return match["name"]
+    return match_name
 
 
 def _ensure_browser_focused() -> tuple[bool, str | None]:
@@ -179,15 +183,15 @@ def _send_shortcut(*keys: str) -> tuple[bool, str | None]:
     """`_ensure_browser_focused` ile doğrulanmış ön plandaki pencereye bir
     klavye kısayolu gönderir (tek tuşsa `press`, birden fazlaysa `hotkey`)."""
 
-    try:
-        import pyautogui
-
+    def _send(pyautogui: Any) -> None:
         if len(keys) == 1:
             pyautogui.press(keys[0])
         else:
             pyautogui.hotkey(*keys)
-    except Exception as exc:  # noqa: BLE001 - girdi erişimi bu oturumda kısıtlı olabilir
-        return False, f"Kısayol gönderilemedi: {exc}"
+
+    _, error = run_pyautogui(_send, "Kısayol gönderilemedi")
+    if error is not None:
+        return False, error
 
     return True, None
 

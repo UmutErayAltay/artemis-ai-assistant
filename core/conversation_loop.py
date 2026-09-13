@@ -26,6 +26,7 @@ from core.dispatcher import ToolDispatcher
 from core.llm_client import LLMResponseParseError, OllamaLLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from utils.confirmation import format_confirmation_arguments
 from utils.text import lower_variants
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,7 @@ def _confirm_with_user(tool_name: str, arguments: dict[str, Any]) -> bool:
     argümanlardan bellidir; kör onay güvenlik açığıdır).
     """
 
-    print(f"  '{tool_name}' işlemi onay gerektiriyor.")
-    if arguments:
-        for key, value in arguments.items():
-            print(f"    {key}: {value}")
-    else:
-        print("    (argüman yok)")
+    print(f"  '{tool_name}' işlemi onay gerektiriyor. Argümanlar: {format_confirmation_arguments(arguments)}")
     answer = input("  Devam edilsin mi? (e/h): ")
     return answer.strip().lower() in {"e", "evet", "y", "yes"}
 

@@ -20,6 +20,7 @@ from core.plugin_loader import TOOL_REGISTRY
 from core.tool_base import ToolContext
 from memory.context_memory import ContextMemory
 from models.tool_models import ToolCall, ToolResult
+from utils.confirmation import format_confirmation_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -221,10 +222,7 @@ class ToolDispatcher:
         )
         if is_dangerous and not confirmed:
             logger.info("Onay gerektiren işlem beklemede: %s", call.tool)
-            if call.arguments:
-                args_text = ", ".join(f"{key}={value}" for key, value in call.arguments.items())
-            else:
-                args_text = "argüman yok"
+            args_text = format_confirmation_arguments(call.arguments)
             return ToolResult(
                 success=False,
                 message=f"'{call.tool}' işlemi onay gerektiriyor. Argümanlar: {args_text}",
