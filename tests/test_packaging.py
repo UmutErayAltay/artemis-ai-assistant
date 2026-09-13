@@ -68,6 +68,29 @@ def test_runtime_prompt_file_is_shipped_as_package_data() -> None:
     assert any(pattern.endswith(".md") for pattern in package_data["prompts"])
 
 
+def test_prompts_package_is_actually_discoverable_not_just_declared_as_data() -> None:
+    """Regresyon testi: `package-data`'da `prompts = ["*.md"]` YAZIYOR
+    olmak yetmez — `[tool.setuptools.packages.find].include`'da
+    `"prompts*"` YOKSA (ve `prompts/` dizininde `__init__.py` YOKSA),
+    `find` bu adı hiçbir zaman bir PAKET olarak keşfetmez ve ona bağlı
+    `package-data` girdisi SESSİZCE hiçbir şey yapmaz. Sonuç: `pip
+    install .` ile kurulan bir wheel, `core/prompt_builder.py`'nin
+    çalışma zamanında okumaya çalıştığı `system_prompt.md`'yi hiç
+    içermiyordu — üstteki test yalnızca TOML anahtarının varlığına
+    baktığı için bunu hiç yakalamamıştı."""
+
+    include_patterns = _pyproject()["tool"]["setuptools"]["packages"]["find"]["include"]
+
+    assert any(pattern.rstrip("*") == "prompts" for pattern in include_patterns), (
+        "'prompts*' packages.find.include listesinde yok; "
+        "package-data'daki 'prompts' girdisi sessizce etkisiz kalır"
+    )
+    assert (REPO_ROOT / "prompts" / "__init__.py").exists(), (
+        "'prompts/' bir PAKET olarak keşfedilmek için __init__.py içermeli "
+        "(config/ ve diğer tüm paketlenen dizinlerle aynı kural)"
+    )
+
+
 def test_pyproject_and_requirements_do_not_drift() -> None:
     """İki bağımlılık listesi AYRIŞMAMALI.
 
@@ -79,10 +102,6 @@ def test_pyproject_and_requirements_do_not_drift() -> None:
 
     declared = _requirement_names("\n".join(_pyproject()["project"]["dependencies"]))
     required = _requirement_names((REPO_ROOT / "requirements.txt").read_text(encoding="utf-8"))
-
-    # `pytest` yalnızca geliştirme bağımlılığıdır; requirements.txt'te
-    # bulunması tarihsel bir kalıntı, dağıtım bağımlılığı değil.
-    required -= {"pytest"}
 
     eksik = required - declared
     fazla = declared - required

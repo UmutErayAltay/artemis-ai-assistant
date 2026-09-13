@@ -1,7 +1,6 @@
 # --- v0.1 çekirdek ---
 pydantic>=2.7
 PyYAML>=6.0
-pytest>=8.0
 
 # --- LLM bağlantısı (bu teslimatta implemente edildi) ---
 ollama>=0.3
