@@ -1040,3 +1040,21 @@ def test_screenshot_honours_the_same_location_contract_as_filesystem_tools(
     kaydedilen = Path(result.data["path"])
     assert kaydedilen.parent == hedef, f"'{kaydedilen}' istenen konumda değil"
     assert kaydedilen.parent != dispatcher.settings.downloads_path
+
+
+def test_screenshot_reports_honest_failure_when_pyautogui_unavailable(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: `import pyautogui` eskiden `execute()`'un EN
+    BAŞINDA, hiçbir `try` içinde olmadan yapılıyordu. `pyautogui` kurulu
+    değilse (Linux/CI, headless) bu, `_resolve_location`/`mkdir`
+    çalışmadan ÖNCE yakalanmayan bir `ImportError` fırlatıyordu —
+    dispatcher'ın genel "beklenmeyen hata" mesajına düşüyordu, bu
+    tool'un kendi açıklayıcı "ekran kilitli olabilir" mesajına değil."""
+
+    monkeypatch.setitem(sys.modules, "pyautogui", None)
+
+    result = dispatcher.dispatch({"tool": "windows.screenshot", "arguments": {"location": "desktop"}})
+
+    assert result.success is False
+    assert "Ekran görüntüsü alınamadı" in result.message

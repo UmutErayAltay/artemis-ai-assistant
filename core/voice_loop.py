@@ -41,6 +41,7 @@ from core.dispatcher import ToolDispatcher
 from core.llm_client import LLMResponseParseError, OllamaLLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from utils.confirmation import format_confirmation_arguments
 from utils.text import turkish_lower
 
 logger = logging.getLogger(__name__)
@@ -514,7 +515,7 @@ class VoiceAssistant:
         ekranda gösterilir (bkz. README §16b: kör onay güvenlik açığıdır).
         """
 
-        argument_text = ", ".join(f"{k}: {v}" for k, v in arguments.items()) or "argüman yok"
+        argument_text = format_confirmation_arguments(arguments)
         self._overlay.show_error(f"Onay gerekiyor — {tool_name} ({argument_text}). 'Evet' deyin.")
         self._speak(f"{tool_name} işlemi onay gerektiriyor. Onaylıyor musunuz?")
 

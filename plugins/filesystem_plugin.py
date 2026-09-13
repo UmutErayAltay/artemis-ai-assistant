@@ -12,92 +12,28 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Iterator
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
 from models.tool_models import ToolResult
+from utils.paths import resolve_location as _resolve_location
+from utils.paths import safe_join as _safe_join
+from utils.paths import unsafe_target_result as _unsafe_target_result
+
+# `_resolve_location`/`_safe_join`/`_unsafe_target_result` artık GERÇEKTEN
+# `utils/paths.py`'de tanımlı — burada yalnızca YENİDEN DIŞA VERİLİYOR.
+# `plugins/windows_plugin.py`'nin bu isim alanının PRIVATE bir sembolüne
+# (`from plugins.filesystem_plugin import _resolve_location`) erişmesi
+# gerekmesin diye taşındı; bu üç `_`-önekli ad burada yalnızca GERİYE
+# DÖNÜK UYUMLULUK için tutuluyor (mevcut testler ve bu dosyanın kendi iç
+# çağrıları bu adları kullanıyor).
 
 
-def _resolve_location(location: str, context: ToolContext) -> Path:
-    """"desktop", "downloads", "last" gibi sembolik konumları gerçek Path'e çevirir.
-
-    Tüm filesystem tool'ları aynı çözümlemeyi kullandığı için bu mantık
-    tek bir yerde tutulur (kod tekrarını önleyen ortak yardımcı fonksiyon).
-    """
-
-    aliases = {
-        "desktop": context.settings.desktop_path,
-        "downloads": context.settings.downloads_path,
-    }
-    if location in aliases:
-        return aliases[location]
-    if location == "last":
-        last = context.memory.get_last_path()
-        return Path(last) if last else Path.home()
-    return Path(location).expanduser()
 
 
-def _safe_join(base: Path, target: str) -> Path | None:
-    """`target`'ı `base` altında kalan güvenli bir alt yola çevirir.
-
-    `target` LLM tarafından üretilir ve HALÜSİNASYON içerebilir. Şemaların
-    açıklaması `target`/`name` için bir dosya/klasör *adı* (gerekirse göreli
-    bir alt yol, örn. "Orbit/app.py") bekler — mutlak bir yol beklemez.
-    Ama `target` mutlak bir yol olursa `Path(base) / Path(target)` pathlib
-    davranışı gereği `base`'i tamamen görmezden gelir; `target` içinde ".."
-    olursa da üst dizinlere çıkılabilir. İkisi de `location` ile ifade
-    edilen (ve kullanıcının onayladığı varsayılan) konumun dışına çıkışa,
-    yani dizin dışına sızmaya yol açar.
-
-    Üçüncü bir tehlike de `target`'ın `base`'in KENDİSİNE sadeleşmesidir:
-    boş dize, "." veya "./" (ve "././." gibi tekrarları) pathlib'de hiç
-    parçası olmayan (`candidate.parts == ()`) bir yola karşılık gelir ve
-    `base / candidate` doğrudan `base`'in kendisine eşitlenir. Kullanıcı
-    "masaüstündeki Orbit'i sil" derken masaüstünün kendisini değil, içindeki
-    bir şeyi kastediyor; `location`'ın kendisini işaret eden bir `target` de
-    (özellikle `filesystem.delete` için) dizin dışına sızma kadar tehlikeli
-    olduğundan aynı şekilde reddedilmelidir.
-
-    Bu yüzden `target` şu durumlarda REDDEDİLİR (None döner):
-        - mutlak bir yol veya bir sürücü/kök içeriyorsa (`candidate.anchor`
-          hem `Path.is_absolute()` hem de yalnızca sürücü/kök içeren
-          "C:tmp" gibi sınır durumları kapsar),
-        - parçalarından biri ".." ise (üst dizine çıkış),
-        - hiç parçası yoksa (`candidate.parts == ()`) — yani boş dize, "."
-          veya "./" gibi `base`'in kendisine sadeleşen bir değerse
-          (`location`'ın kendisini hedefleme).
-    Bunların dışındaki göreli alt yollar (örn. "AltKlasor/dosya.txt")
-    kısıtlanmadan `base / target` olarak döndürülür.
-
-    Reddetme durumunda exception fırlatmak yerine None döndürülür; çağıran
-    tool bunu kontrol edip kullanıcıya açıklayıcı bir Türkçe mesajla
-    `ToolResult(success=False, ...)` döndürür (bkz. `_unsafe_target_result`).
-    """
-
-    candidate = Path(target)
-
-    # Yol, HEM çalıştığımız platformun kurallarına HEM de Windows
-    # kurallarına göre denetlenir. Sebep ölçüldü: POSIX'te
-    # `Path("C:/Windows/System32")` MUTLAK DEĞİLDİR (`anchor == ""`),
-    # parçaları `("C:", "Windows", "System32")` olur — yani bu koruma
-    # Linux/macOS'ta çalışırken tam olarak engellemesi gereken girdiyi
-    # KABUL EDİYORDU. Aynı şekilde `"AltKlasor\..\..\x"` POSIX'te tek
-    # bir parçadır, `..` hiç görünmez.
-    #
-    # Artemis bir Windows uygulaması, yani üretimde bu fark görünmezdi;
-    # ama bu bir güvenlik kontrolü ve bir güvenlik kontrolünün doğruluğu
-    # çalıştığı makinenin işletim sistemine BAĞLI OLMAMALIDIR. (Pratik
-    # sonucu da var: bu üç senaryonun testleri Linux CI'da kırılıyordu.)
-    windows_candidate = PureWindowsPath(target)
-
-    for parsed in (candidate, windows_candidate):
-        if parsed.anchor or ".." in parsed.parts or not parsed.parts:
-            return None
-
-    return base / candidate
 
 
 def _walk_limited(root: Path, max_depth: int) -> Iterator[Path]:
@@ -122,27 +58,6 @@ def _walk_limited(root: Path, max_depth: int) -> Iterator[Path]:
             yield current / name
 
 
-def _unsafe_target_result(target: str) -> ToolResult:
-    """`_safe_join` tarafından reddedilen bir `target/name` için tutarlı,
-    açıklayıcı bir başarısızlık sonucu üretir (mesaj tüm tool'larda ortak).
-
-    `_safe_join` üç ayrı durumda (mutlak yol, ".." veya `location`'ın
-    kendisine sadeleşme) da aynı şekilde `None` döndürür (`Path | None`
-    tasarımı, bkz. `_safe_join` docstring'i) — yani çağıran taraf reddin asıl
-    sebebini bilmez. Bu yüzden burada tek bir mesaj her üç durumu da
-    kapsayacak şekilde genelleştirilmiştir.
-    """
-
-    return ToolResult(
-        success=False,
-        message=(
-            f"'{target}' geçersiz: 'target'/'name', 'location' içindeki bir "
-            "dosya/klasör adı ya da göreli bir alt yol olmalı; mutlak yol, "
-            "'..' içeremez ve 'location'ın kendisini (boş, '.' gibi bir "
-            "değerle) işaret edemez. Farklı bir konum hedeflemek için "
-            "'location' argümanını kullanın."
-        ),
-    )
 
 
 _OVERWRITE_HINT = "üzerine yazmak için overwrite=true gönderin."

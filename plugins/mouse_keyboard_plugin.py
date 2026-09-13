@@ -37,9 +37,15 @@ from core.enums import DangerLevel
 from core.plugin_loader import register_tool
 from core.tool_base import BaseTool, ToolContext
 from models.tool_models import ToolResult
+from utils.gui import run_pyautogui
 
 # pyautogui'nin tanıdığı fare düğmesi adları.
 _VALID_MOUSE_BUTTONS = frozenset({"left", "right", "middle"})
+
+_POSITION_TOLERANCE_PIXELS = 3
+"""İmleç hedef doğrulamasında kabul edilen sapma. DPI ölçeklemesi/işaretçi
+hızlandırması `pyautogui`'yi rutin olarak birkaç piksel kaydırabilir; TAM
+eşitlik başarılı bir hareketi yanlış-negatif başarısız sayardı."""
 
 
 def _validate_coordinates(x: int, y: int) -> str | None:
@@ -58,12 +64,10 @@ def _validate_coordinates(x: int, y: int) -> str | None:
     if x < 0 or y < 0:
         return f"Koordinatlar negatif olamaz: ({x}, {y})."
 
-    try:
-        import pyautogui
-
-        width, height = pyautogui.size()
-    except Exception:  # noqa: BLE001 - ekran boyutu okunamıyorsa doğrulamayı atla
-        return None
+    size, error = run_pyautogui(lambda pyautogui: pyautogui.size(), "boyut okunamadı")
+    if error is not None or size is None:
+        return None  # ekran boyutu okunamıyorsa doğrulamayı atla, asıl çağrı kendi hatasını raporlar
+    width, height = size
 
     if x > width or y > height:
         return f"Koordinatlar ekran sınırlarının dışında: ({x}, {y}), ekran {width}x{height}."
@@ -102,17 +106,26 @@ class MouseMoveTool(BaseTool):
         if error is not None:
             return ToolResult(success=False, message=error)
 
-        try:
-            import pyautogui
-
+        def _move_and_read_position(pyautogui: Any) -> tuple[int, int]:
             pyautogui.moveTo(x, y, duration=duration)
-        except Exception as exc:  # noqa: BLE001 - ekran/girdi erişimi bu oturumda kısıtlı olabilir
-            return ToolResult(success=False, message=f"İmleç taşınamadı: {exc}")
+            # `pyautogui.position()` BİLEREK aynı `run_pyautogui` çağrısının
+            # içinde okunuyor: eskiden bu satır `try` bloğunun DIŞINDAYDI —
+            # `moveTo` başarılı olup `position()` (ör. oturum/ekran kaybı
+            # nedeniyle) başarısız olursa yakalanmayan bir istisna fırlardı.
+            return pyautogui.position()
 
-        # Koşulsuz success=True yasak: imlecin gerçekten hedefe ulaştığını,
-        # `pyautogui.position()` ile son konumu okuyup doğrula.
-        final_x, final_y = pyautogui.position()
-        if (final_x, final_y) != (x, y):
+        final_position, error = run_pyautogui(_move_and_read_position, "İmleç taşınamadı")
+        if error is not None or final_position is None:
+            return ToolResult(success=False, message=error or "İmleç taşınamadı: bilinmeyen hata.")
+
+        # Koşulsuz success=True yasak: imlecin gerçekten hedefe ulaştığını
+        # doğrula. TAM eşitlik DEĞİL, küçük bir TOLERANSLA: DPI ölçeklemesi
+        # ya da işaretçi hızlandırması pyautogui'yi rutin olarak birkaç
+        # piksel kaydırabilir — tam eşitlik, BAŞARILI bir hareketi yanlış-
+        # negatif olarak başarısız sayardı (`_snap_window`'ın geometri
+        # doğrulamasıyla aynı tasarım, bkz. `windows_plugin.py`).
+        final_x, final_y = final_position
+        if abs(final_x - x) > _POSITION_TOLERANCE_PIXELS or abs(final_y - y) > _POSITION_TOLERANCE_PIXELS:
             return ToolResult(
                 success=False,
                 message=f"İmleç hedefe ulaşmadı: istenen ({x}, {y}), gerçek ({final_x}, {final_y}).",
@@ -170,30 +183,35 @@ class MouseClickTool(BaseTool):
             if error is not None:
                 return ToolResult(success=False, message=error)
 
-        try:
-            import pyautogui
+        click_kwargs: dict[str, Any] = {"button": button}
+        if x is not None and y is not None:
+            click_kwargs["x"] = x
+            click_kwargs["y"] = y
 
-            click_kwargs: dict[str, Any] = {"button": button}
-            if x is not None and y is not None:
-                click_kwargs["x"] = x
-                click_kwargs["y"] = y
-
+        def _click_and_read_position(pyautogui: Any) -> tuple[int, int] | None:
             if double:
                 pyautogui.doubleClick(**click_kwargs)
             else:
                 pyautogui.click(**click_kwargs)
-        except Exception as exc:  # noqa: BLE001 - ekran/girdi erişimi bu oturumda kısıtlı olabilir
-            return ToolResult(success=False, message=f"Tıklama gerçekleştirilemedi: {exc}")
+            # `position()` BİLEREK aynı guarded çağrının içinde okunuyor —
+            # bkz. `MouseMoveTool`'daki aynı düzeltmenin gerekçesi.
+            return pyautogui.position() if x is not None and y is not None else None
+
+        final_position, error = run_pyautogui(_click_and_read_position, "Tıklama gerçekleştirilemedi")
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         # Tıklamanın kendisinin "başarılı" olup olmadığını gözlemlemenin bir
         # yolu yok (hangi uygulamanın tepki verdiğini bilemeyiz); en azından
         # hedef koordinat verildiyse imlecin gerçekten oraya ulaştığını
         # doğrulayarak "koşulsuz success=True" yasağına uyuyoruz. Koordinat
         # verilmediyse (mevcut konumda tıklama) exception fırlamaması tek
-        # doğrulama sinyalidir.
+        # doğrulama sinyalidir. TAM eşitlik DEĞİL, `MouseMoveTool` ile aynı
+        # toleransla (DPI ölçeklemesi yanlış-negatif üretmesin diye).
         if x is not None and y is not None:
-            final_x, final_y = pyautogui.position()
-            if (final_x, final_y) != (x, y):
+            assert final_position is not None  # _click_and_read_position bu durumda hep bir konum döner
+            final_x, final_y = final_position
+            if abs(final_x - x) > _POSITION_TOLERANCE_PIXELS or abs(final_y - y) > _POSITION_TOLERANCE_PIXELS:
                 return ToolResult(
                     success=False,
                     message=f"İmleç hedefe ulaşmadı, tıklama şüpheli: istenen ({x}, {y}), gerçek ({final_x}, {final_y}).",
@@ -233,12 +251,9 @@ class KeyboardTypeTextTool(BaseTool):
         if not text:
             return ToolResult(success=False, message="Yazılacak metin boş olamaz.")
 
-        try:
-            import pyautogui
-
-            pyautogui.write(text, interval=interval)
-        except Exception as exc:  # noqa: BLE001 - ekran/girdi erişimi bu oturumda kısıtlı olabilir
-            return ToolResult(success=False, message=f"Metin yazılamadı: {exc}")
+        _, error = run_pyautogui(lambda pyautogui: pyautogui.write(text, interval=interval), "Metin yazılamadı")
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         # `pyautogui.write` hangi alana yazıldığını doğrulayamaz (odak
         # kontrolümüzde değil); exception fırlamaması bu tool için elde
@@ -288,15 +303,15 @@ class KeyboardPressKeyTool(BaseTool):
         if not key_parts:
             return ToolResult(success=False, message=f"Geçersiz tuş/kısayol: '{raw_keys}'.")
 
-        try:
-            import pyautogui
-
+        def _press(pyautogui: Any) -> None:
             if len(key_parts) == 1:
                 pyautogui.press(key_parts[0])
             else:
                 pyautogui.hotkey(*key_parts)
-        except Exception as exc:  # noqa: BLE001 - bilinmeyen tuş adı ya da girdi erişimi kısıtlı olabilir
-            return ToolResult(success=False, message=f"'{raw_keys}' tuşuna basılamadı: {exc}")
+
+        _, error = run_pyautogui(_press, f"'{raw_keys}' tuşuna basılamadı")
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         return ToolResult(success=True, message=f"'{raw_keys}' tuşuna basıldı.")
 
@@ -345,12 +360,9 @@ class MouseScrollTool(BaseTool):
                 return ToolResult(success=False, message=error)
             scroll_kwargs = {"x": x, "y": y}
 
-        try:
-            import pyautogui
-
-            pyautogui.scroll(amount, **scroll_kwargs)
-        except Exception as exc:  # noqa: BLE001 - ekran/girdi erişimi bu oturumda kısıtlı olabilir
-            return ToolResult(success=False, message=f"Kaydırma yapılamadı: {exc}")
+        _, error = run_pyautogui(lambda pyautogui: pyautogui.scroll(amount, **scroll_kwargs), "Kaydırma yapılamadı")
+        if error is not None:
+            return ToolResult(success=False, message=error)
 
         direction_label = "yukarı" if amount > 0 else "aşağı"
         return ToolResult(success=True, message=f"{abs(amount)} birim {direction_label} kaydırıldı.")
