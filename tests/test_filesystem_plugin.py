@@ -158,6 +158,10 @@ def test_create_folder_twice_is_idempotent(dispatcher: ToolDispatcher, desktop: 
     assert first.success is True
     assert second.success is True
     assert (desktop / "Orbit").is_dir()
+    # Regresyon: ikinci çağrı "oluşturuldu" DEMEMELİ — klasör zaten vardı,
+    # "oluşturuldu" demek kullanıcıya yanlış bir bilgi verirdi.
+    assert "oluşturuldu" in first.message
+    assert "zaten vardı" in second.message
 
 
 def test_create_folder_at_explicit_absolute_location_creates_missing_parents(
@@ -231,6 +235,39 @@ def test_create_file_rejects_absolute_name(dispatcher: ToolDispatcher, tmp_path:
     assert not outside.exists()
 
 
+def test_create_file_refuses_to_overwrite_existing_file_by_default(
+    dispatcher: ToolDispatcher, desktop: Path
+) -> None:
+    """Regresyon testi: `create_file` eskiden `overwrite` bayrağı hiç
+    yokken var olan bir dosyanın üzerine SESSİZCE yazıyordu — aynı dosyada
+    `copy`/`rename`/`move`'un hepsi bu korumayı `_prepare_destination`
+    ile zaten kazanmıştı, `create_file` unutulmuştu (CLAUDE.md: sessiz
+    veri kaybı yasak)."""
+
+    (desktop / "notlar.txt").write_text("eski içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.create_file", "arguments": {"name": "notlar.txt", "content": "yeni içerik"}}
+    )
+
+    assert result.success is False
+    assert (desktop / "notlar.txt").read_text(encoding="utf-8") == "eski içerik"
+
+
+def test_create_file_overwrites_when_explicitly_requested(dispatcher: ToolDispatcher, desktop: Path) -> None:
+    (desktop / "notlar.txt").write_text("eski içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch(
+        {
+            "tool": "filesystem.create_file",
+            "arguments": {"name": "notlar.txt", "content": "yeni içerik", "overwrite": True},
+        }
+    )
+
+    assert result.success is True
+    assert (desktop / "notlar.txt").read_text(encoding="utf-8") == "yeni içerik"
+
+
 def test_create_file_relative_subpath_name_still_works(dispatcher: ToolDispatcher, desktop: Path) -> None:
     """Aşırı kısıtlama yapmadığının kanıtı: `name` içindeki meşru göreli
     alt yol (var olan bir alt klasör altında) hâlâ çalışmalı."""
@@ -280,6 +317,89 @@ def test_search_missing_base_location_fails(dispatcher: ToolDispatcher, tmp_path
     )
 
     assert result.success is False
+
+
+def test_search_results_are_capped_at_search_max_results(
+    desktop: Path, downloads: Path, tmp_path: Path
+) -> None:
+    """Regresyon testi: `Path.rglob("*")` sınırsızdı — geniş bir kökte
+    binlerce sonuç dispatcher'ı bloke edip LLM bağlamını dolduruyordu.
+    `search_max_results` bu listeyi kırpmalı ve mesajda kırpıldığını
+    söylemeli."""
+
+    for i in range(10):
+        (desktop / f"rapor-{i}.txt").write_text("x", encoding="utf-8")
+
+    settings = Settings(
+        desktop_path=desktop,
+        downloads_path=downloads,
+        db_path=tmp_path / "memory.db",
+        log_dir=tmp_path / "logs",
+        search_max_results=3,
+    )
+    dispatcher = ToolDispatcher(settings=settings, memory=ContextMemory(settings.db_path))
+
+    result = dispatcher.dispatch({"tool": "filesystem.search", "arguments": {"query": "rapor"}})
+
+    assert result.success is True
+    assert result.data is not None
+    assert len(result.data["matches"]) == 3
+    assert "3 sonuç" in result.message
+    assert "daha fazlası olabilir" in result.message
+
+
+def test_search_respects_max_depth(desktop: Path, downloads: Path, tmp_path: Path) -> None:
+    """Regresyon testi: derinlik sınırı olmadan `rglob` her seviyeye
+    ininiyordu. `search_max_depth=1` iken kökün BİR alt seviyesindeki
+    dosya bulunmalı, İKİ alt seviyedeki bulunmamalı."""
+
+    (desktop / "A").mkdir()
+    (desktop / "A" / "rapor-yakin.txt").write_text("x", encoding="utf-8")
+    (desktop / "A" / "B").mkdir()
+    (desktop / "A" / "B" / "rapor-uzak.txt").write_text("x", encoding="utf-8")
+
+    settings = Settings(
+        desktop_path=desktop,
+        downloads_path=downloads,
+        db_path=tmp_path / "memory.db",
+        log_dir=tmp_path / "logs",
+        search_max_depth=1,
+    )
+    dispatcher = ToolDispatcher(settings=settings, memory=ContextMemory(settings.db_path))
+
+    result = dispatcher.dispatch({"tool": "filesystem.search", "arguments": {"query": "rapor"}})
+
+    assert result.success is True
+    assert result.data is not None
+    matches = result.data["matches"]
+    assert any("rapor-yakin.txt" in m for m in matches)
+    assert not any("rapor-uzak.txt" in m for m in matches)
+
+
+def test_search_skips_unreadable_subdirectory_instead_of_failing_entirely(
+    dispatcher: ToolDispatcher, desktop: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: eskiden `Path.rglob("*")` erişim reddedilen TEK
+    bir alt klasörde `PermissionError` fırlatıp aramanın TAMAMINI
+    düşürüyordu. `os.walk(..., onerror=...)`'a geçildiği için artık
+    yalnızca hatalı alt ağaç atlanır, geri kalan sonuçlar dönmeye devam
+    eder — bunu, `os.walk`'ı gerçekten bir `PermissionError` bildiren
+    sahte bir sürümle değiştirerek sınıyoruz."""
+
+    (desktop / "rapor-erisilebilir.txt").write_text("x", encoding="utf-8")
+
+    def _fake_walk(top, onerror=None, **kwargs):
+        if onerror is not None:
+            onerror(PermissionError("erişim reddedildi: kilitli-klasor"))
+        yield str(top), [], ["rapor-erisilebilir.txt"]
+
+    monkeypatch.setattr(os, "walk", _fake_walk)
+
+    result = dispatcher.dispatch({"tool": "filesystem.search", "arguments": {"query": "rapor"}})
+
+    assert result.success is True
+    assert result.data is not None
+    assert any("rapor-erisilebilir.txt" in m for m in result.data["matches"])
 
 
 # --- filesystem.copy ---
@@ -822,6 +942,31 @@ def test_delete_legitimate_relative_subpath_still_works(
     assert not nested_file.exists()
 
 
+def test_delete_reports_honest_failure_instead_of_generic_error_on_os_error(
+    dispatcher: ToolDispatcher, desktop: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: `shutil.rmtree`/`unlink` `try/except` içinde
+    DEĞİLDİ; bir `OSError` (izin reddi, açık dosya, salt-okunur disk...)
+    doğrudan dispatcher'ın GENEL "beklenmeyen hata" dalına düşüyordu
+    (bkz. `core/dispatcher.py::dispatch`) — CLAUDE.md'nin düzelttiğini
+    söylediği tam olarak bu UX hatası. Artık bu tool'a özgü, açıklayıcı
+    bir mesajla `success=False` dönmeli."""
+
+    target = desktop / "kilitli.txt"
+    target.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        Path, "unlink", lambda self: (_ for _ in ()).throw(PermissionError("erişim reddedildi"))
+    )
+
+    result = dispatcher.dispatch(
+        {"tool": "filesystem.delete", "arguments": {"target": "kilitli.txt"}}, confirmed=True
+    )
+
+    assert result.success is False
+    assert "silinemedi" in result.message
+    assert result.requires_confirmation is False
+
+
 # --- _resolve_location ---
 
 
@@ -949,6 +1094,22 @@ def test_last_location_updates_after_each_remembering_tool_call(
     assert follow_up.success is True
     assert (desktop / "Sonra" / "x.txt").exists()
     assert not (desktop / "Once" / "x.txt").exists()
+
+
+def test_copy_also_updates_last_location(dispatcher: ToolDispatcher, desktop: Path, downloads: Path) -> None:
+    """Regresyon testi: `rename`/`move` `remember_last_path` çağırıyordu,
+    ama `copy` aynı dosyadaki tek mutasyon tool'u olarak bunu ÇAĞIRMIYORDU
+    — `location: "last"` bir kopyadan sonra tutarsız davranıyordu. (`rename`/
+    `move` gibi, hatırlanan da kopyalanan ÖĞENİN kendi yoludur; bir dosya
+    kopyalandıysa "last" o dosyanın yoluna eşitlenir — klasöre değil, tıpkı
+    `rename`/`move`'da olduğu gibi.)"""
+
+    (desktop / "kaynak.txt").write_text("içerik", encoding="utf-8")
+    dispatcher.dispatch(
+        {"tool": "filesystem.copy", "arguments": {"target": "kaynak.txt", "destination_location": "downloads"}}
+    )
+
+    assert dispatcher.memory.get_last_path() == str(downloads / "kaynak.txt")
 
 
 def test_safe_join_rejects_backslash_traversal_on_every_platform() -> None:

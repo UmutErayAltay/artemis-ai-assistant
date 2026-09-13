@@ -141,7 +141,12 @@ _SYSTEM_COMMANDS: dict[str, str] = {
     "notepad": "notepad.exe",
     "calculator": "calc.exe",
     "explorer": "explorer.exe",
-    "chrome": "chrome",
+    # `.exe` UZANTISI GEREKLİ: `windows_plugin.WindowsLaunchAppTool` artık
+    # bunu `cmd /c start`'a değil doğrudan `subprocess.Popen`'a veriyor;
+    # `cmd`'nin PATHEXT çözümlemesi (uzantısız "chrome" -> chrome.exe)
+    # doğrudan `Popen`'da geçerli değildir, uzantısız verilirse Windows'ta
+    # `FileNotFoundError` alınır.
+    "chrome": "chrome.exe",
 }
 
 
