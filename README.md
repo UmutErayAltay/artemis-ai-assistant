@@ -2395,3 +2395,164 @@ bakarak öncesi/sonrasını karşılaştırmalı. Yetersizse sıradaki adaylar
 (öncelik sırasına göre): mikrofonun fiziksel konumu / Windows ses
 geliştirmelerinin (audio enhancements) kapalı olup olmadığı, ardından
 `beam_size`/`best_of` ayarının varsayılandan yükseltilmesi.
+
+## 37) Denetim teslimatı: 21 sessiz hata düzeltildi, dördü uçtan uca kanıtlandı (v3.18)
+
+Kullanıcı bir kod incelemesi istedi ("neler geliştirilebilir"). Depo
+taban durumu ölçüldü: 596 test geçiyor, `ruff check` temiz, `mypy` temiz
+— yani bu bir kırık depoyu tamir etme işi değil, sağlam bir depodaki
+**sessiz** kusurları kapatma işiydi. Yeni tool EKLENMEDİ: §34'ün ölçtüğü
+"her yeni tool mevcut tool'ların doğru seçilme olasılığını düşürür"
+dersine sadık kalındı.
+
+Metodoloji, CLAUDE.md'nin "koşulsuz `success=True` yasak" ve "mock
+kullanma, gerçek `ToolDispatcher` üzerinden test et" ilkelerinin bir
+adım ötesine taşındı: her düzeltme için önce **eski koda karşı kırmızı**
+olduğu `git stash` ile kanıtlandı, sonra düzeltmeyle **yeşil** olduğu
+doğrulandı. Bu, "muhtemelen düzeltir" ile "gerçekten düzeltti"
+arasındaki farkı somutlaştırdı — birkaç düzeltme (aşağıda işaretli)
+ilk denemede beklenenden farklı sonuç verdi ve yeniden tasarlanmak
+zorunda kaldı.
+
+### 37a) Dört gerçek davranış hatası (Faz 1)
+
+1. **`core/llm_client.py::_chat/_strategies`** — çalışan LLM isteği
+   stratejisi önbelleği POZİSYONA göre tutuluyordu
+   (`_working_strategy_index`), ama `_strategies()` bilinen çalışanı her
+   çağrıda başa alıp listeyi yeniden sıralıyordu. Sonuç: önbellek her
+   iki çağrıda bir kendi kendini geçersiz kılıyordu — tam olarak
+   önlemek için var olduğu boşa giden round-trip'i, ÇAĞRILARIN
+   YARISINDA yeniden ödüyordu. Bu alan hiç test edilmemişti. Düzeltme:
+   önbellek artık pozisyon değil KİMLİK (`"native"/"schema"/"json"/
+   "none"`) ile tutuluyor.
+2. **`core/planner.py::_resolve_step_references`** — `{{step_N.alan}}`
+   referansları yalnızca argümanın EN ÜST SEVİYESİNDEKİ string
+   değerlerde çözülüyordu; bir liste (`{"paths": ["{{step_1.path}}"]}`)
+   ya da dict içindeki referans YER TUTUCU METNİN KENDİSİ olarak
+   tool'a gidiyordu — sessizce yanlış, hata bile vermeden. Düzeltme:
+   liste/dict içine özyinelemeli inen bir çözümleyici.
+3. **`core/voice_loop.py::_listen_for_confirmation`** — STT çıktısı önce
+   sıradan `str.lower()` ile küçültülüyor, sonra `_is_affirmative` aynı
+   metne Türkçe kurallı `turkish_lower()` uyguluyordu; `"İ".lower()` bir
+   BİRLEŞTİRİCİ NOKTA (U+0307) ürettiği için ikinci küçültme bunu bir
+   daha düzeltemiyordu. Somut kanıt: `"İptal evet"` cevabı eski kodla
+   **yanlışlıkla onay sayılıyordu** — gerçek bir güvenlik hatası, test
+   kırmızı çıkararak doğrulandı.
+4. **`main.py::main_voice`** — `app.installNativeEventFilter(hotkey)`
+   kayıttan ÖNCE çağrılıyordu; `register()` başarısız olunca Python son
+   referansı düşürüyor ama Qt native event filter listesinden hiç
+   çıkarmıyordu (potansiyel bellek sızıntısı). Düzeltme: filtre yalnızca
+   kayıt başarılıysa kuruluyor, teardown'da da kaldırılıyor.
+
+### 37b) Altı dürüstlük ihlali — "koşulsuz success=True yasak" (Faz 2)
+
+- `windows.launch_app` sistem-komutu dalı (notepad/calc/explorer/chrome)
+  `cmd /c start` ile sarılıyordu — `cmd` hedef program bulunamasa/hemen
+  çökse bile HER ZAMAN başarıyla çıkar. §11'in kaldırdığını söylediği
+  hatanın başka bir dalda geri gelmiş hâliydi. Artık doğrudan `Popen` +
+  anlık çökme kontrolü.
+- `memory.forget` hiçbir şey silinmediğinde de `success=True`
+  dönüyordu; aynı dosyadaki `memory.recall` "bulunamadı"yı dürüstçe
+  `success=False` ile bildiriyordu — artık tutarlı.
+- `windows.arrange_window::restore` `GetWindowPlacement` doğrulamasının
+  DIŞINDA bırakılmıştı; uygulama isteği reddetse bile koşulsuz başarı
+  dönüyordu.
+- `filesystem.create_file`: `copy`/`rename`/`move` `overwrite` bayrağı +
+  `_prepare_destination` korumasını kazanmıştı, `create_file`
+  unutulmuştu — var olan dosyanın üzerine SESSİZCE yazıyordu.
+- `filesystem_plugin.py`'daki mutasyon çağrılarının (mkdir, write_text,
+  copytree/copy2, rename, shutil.move, rmtree/unlink) hiçbiri
+  `try/except` içinde değildi; bir `OSError` dispatcher'ın genel
+  "beklenmeyen hata" mesajına düşüyordu.
+- `filesystem.search`: `Path.rglob("*")` sınırsızdı (derinlik/sonuç
+  sayısı sınırı, `PermissionError` toleransı yok). `Settings.
+  search_max_results`/`search_max_depth` eklendi, `os.walk(...,
+  onerror=...)`'a geçildi.
+
+### 37c) Yapısal tekrar temizliği (Faz 3)
+
+Dört ayrı kopya birleştirildi: onay-metni biçimlendirme
+(`utils/confirmation.py`), `EnumWindows` sarmalayıcısının son kopyası
+(`browser_plugin._focus_any_browser_window` artık `windows_plugin.
+iter_visible_windows`'ı kullanıyor), sibling plugin'in private isim
+alanından import (`_resolve_location`/`_safe_join`/
+`_unsafe_target_result` artık `utils/paths.py`'de), `pyautogui` import
+sarmalayıcısının 9 kopyası (`utils/gui.py::run_pyautogui`).
+
+Bu konsolidasyon SIRASINDA üç gerçek hata daha ortaya çıktı: `windows.
+screenshot`'ta `import pyautogui` hiçbir `try` içinde değildi (dispatcher
+genel hatasına düşüyordu); `mouse_keyboard.move_mouse`/`click`'te
+`pyautogui.position()` doğrulaması `try` dışındaydı VE tam eşitlik
+arıyordu (DPI ölçeklemesinde başarılı bir hareketi yanlış-negatif
+sayıyordu — 3 piksellik tolerans eklendi).
+
+Ayrıca `core/voice_loop.py::_is_affirmative` (Türkçe olumsuzluk-eki
+vetosu) `utils/text.py::is_clear_affirmative_answer` olarak paylaşılan
+altyapıya taşındı ve `core/conversation_loop.py::_confirm_with_user`
+(metin modu) da ona bağlandı — metin modu bir dönem yalnızca TAM DİZE
+eşleşmesi yapıyordu ("evet, öyle" gibi net ama fazladan sözcük içeren
+bir onayı reddediyordu) ve hiçbir olumsuzluk vetosu taşımıyordu.
+Terminale özgü tek-harf kısayolları (`"e"`/`"y"`/`"yes"`) TAM DİZE
+eşleşmesiyle ayrıca korundu (ses tanımada bilerek yok).
+
+Altı küçük ama gerçek sessiz hata da düzeltildi: `filesystem.copy`/
+`move`'da `destination_location`'ın hem `required` hem `default` olması
+(varsayılan asla uygulanamıyordu); `register_tool`'un `issubclass`
+kontrolü hiç yapmaması; `Settings.dangerous_tools`'un `list` olması
+(`frozen=True` içeriğin yerinde değiştirilmesini engellemiyor);
+`list_installed_models`'in zaman aşımsız istemci kullanması (kilitlenmiş
+sunucu Artemis'i UI açılmadan süresiz askıda bırakabiliyordu);
+`stop_if_we_started_it`'in `kill()` sonrası reap etmemesi/`_process`'i
+temizlememesi; `_ensure_shortcut_index`'in `ImportError`'da boş sonucu
+KALICI önbelleğe alması.
+
+### 37d) Paketleme (Faz 4)
+
+`pip install .` ile GERÇEKTEN bir wheel derlenerek (`python -m build`)
+kanıtlandı: `prompts*`, `[tool.setuptools.packages.find].include`'da
+yoktu (ve `prompts/`'ta `__init__.py` yoktu), yani `package-data`'daki
+`prompts = ["*.md"]` girdisi sessizce etkisizdi — kurulan wheel
+`core/prompt_builder.py`'nin çalışma zamanında okumaya çalıştığı
+`system_prompt.md`'yi hiç içermiyordu. `requirements.txt`'teki
+`pytest>=8.0` (bir runtime bağımlılığı değil) de kaldırıldı.
+
+### 37e) Sayılar
+
+| | Önce | Sonra |
+|---|---|---|
+| Geçen test | 596 | **638** |
+| `ruff check` | temiz | temiz |
+| `mypy` | temiz | temiz |
+| Kırmızı/yeşil kanıtlanan gerçek hata | — | 14 |
+
+### 37f) DOĞRULANMAYANLAR ve bilinçli olarak yapılmayanlar
+
+Bu ortamda gerçek Windows/mikrofon/Ollama yok. Aşağıdakiler sahte
+nesnelerle test edildi ama **gerçek makinede denenmedi**:
+
+- Faz 2/3'teki tüm `windows.*`/`mouse_keyboard.*`/`browser.*`
+  düzeltmeleri (sahte `win32gui`/`pyautogui`/`psutil` ile test edildi).
+- Faz 1'deki sesli onay ve Qt native-event-filter düzeltmeleri.
+
+Bilinçli olarak bu teslimatın DIŞINDA bırakılanlar (gerekçeli):
+
+- **`filesystem_plugin._resolve_location`'a yol allowlist'i eklenmedi.**
+  `location`'ın tam yol kabul etmesi CLAUDE.md'de açık bir karar; bir
+  bulgu değil, bir tasarım tercihi.
+- **`browser.*` altı tool'u tek enum'lu tool'a indirilmedi.** §35l madde
+  4 bunu "ölçülmeden yapılmamalı" diye askıya almış; bu ortamda gerçek
+  bir Ollama modeli yok, `bench_tool_selection.py` koşulamıyor.
+- **`ruff format` uygulanmadı.** Depo hâlâ biçimlendiriciye göre 49
+  dosyada farklı (doğrulandı); §35l madde 5'in gerekçesi (tek başına
+  ayrı bir commit, sonra CI adımı) hâlâ geçerli — bu teslimatın kapsamı
+  dışında bırakıldı.
+- **CI'a bir `ui`/PyQt6 job'ı eklenmedi.** `tests/test_ui_hotkey.py`'nin
+  sekiz testi hâlâ CI'da sessizce atlanıyor (PyQt6 kurulu değil).
+  Kararı ölçüye bağlamak (PyQt6 kurulumunun CI süresine etkisi) bu
+  oturumun kapsamı dışında kaldı.
+- **`plugins/mcp_plugin.py`'deki korumasız `register_tool` çağrısı**
+  (iki MCP sunucusunun aynı tool adını vermesi `load_plugins`'i komple
+  çökertebiliyor), **`core/llm_client.py`'nin açgözlü regex'i ve boş
+  `raw_text` retry'ı**, **`memory/context_memory.py`'nin WAL modu/hata
+  yakalaması eksikliği** — bulundu, düzeltilmedi; bir sonraki turda ele
+  alınmalı.
