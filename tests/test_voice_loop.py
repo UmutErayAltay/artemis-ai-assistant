@@ -350,6 +350,17 @@ REDDEDILMESI_GEREKEN_CEVAPLAR = [
     "vazgeçtim",
     "",
     "kapıyı kapat",
+    # BÜYÜK "İ" İLE BAŞLAYAN cevap + bir onay sözcüğü: `_listen_for_confirmation`
+    # bir dönem STT çıktısını sıradan `str.lower()` ile küçültüyordu, ki bu
+    # `"İ".lower()` -> `"i" + BİRLEŞTİRİCİ NOKTA (U+0307)` üretir ve
+    # `turkish_lower()` bu bozuk girdiyi bir daha düzeltemiyordu. Sonuç:
+    # "iptal" sözcüğü `_NEGATIVE_WORDS` ile ARTIK EŞLEŞMİYORDU ve olumsuzluk
+    # vetosu hiç devreye girmiyordu — cümledeki "evet" tek başına onay
+    # sayılıyor, kullanıcı "İptal evet" dediğinde (örn. "iptal, evet demiştim
+    # ama...") işlem GERÇEKTEN ONAYLANIYORDU. Bu, `.lower()` kaldırılmadan
+    # önce bu depoda GERÇEKTEN GÖZLENMİŞ bir sonuçtur (bkz. yukarıdaki fonksiyon
+    # düzeltmesi); doğru davranış bu cevabı REDDETMEK.
+    "İptal evet",
 ]
 
 ONAYLANMASI_GEREKEN_CEVAPLAR = [

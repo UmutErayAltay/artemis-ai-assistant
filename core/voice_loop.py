@@ -155,8 +155,10 @@ def _is_affirmative(answer: str) -> bool:
     *"hayır yapma"* dediğinde işlem ÇALIŞIYORDU (README §35).
 
     Args:
-        answer: `_listen_for_confirmation`'dan gelen, küçük harfe
-            çevrilmiş ham metin (duyulamadıysa boş dize).
+        answer: `_listen_for_confirmation`'dan gelen ham metin (duyulamadıysa
+            boş dize). Küçültme burada, `turkish_lower()` ile yapılır —
+            `_listen_for_confirmation` KENDİSİ küçültmez (bkz. orada
+            silinen çifte-küçültme hatasının açıklaması).
 
     Returns:
         Yalnızca net bir onay duyulduysa True.
@@ -564,8 +566,18 @@ class VoiceAssistant:
             # Burada uygulama sözlüğü DEĞİL, onay sözcükleri ipucu verilir:
             # beklenen cevap "evet"/"hayır"tır, "Discord" değil. Yanlış
             # sözlük vermek, modeli olmayacak bir kelimeye zorlardı.
-            answer = self._ensure_stt().transcribe(audio, hotwords=", ".join(sorted(_AFFIRMATIVE_WORDS)))
-            return answer.lower()
+            # `.lower()` BİLEREK yapılmaz: `_is_affirmative` zaten
+            # `turkish_lower()` uyguluyor (bkz. `_NEGATIVE_WORDS` docstring'i
+            # — sıradan `str.lower()` Türkçe'de "İ" -> "i" + BİRLEŞTİRİCİ
+            # NOKTA (U+0307) üretir, `_TURKISH_LOWER_MAP` bunu artık
+            # düzeltemez). Burada önceden yapılan bir `.lower()`, aşağı
+            # akıştaki `turkish_lower()`'a ZATEN küçültülmüş ama YANLIŞ
+            # küçültülmüş bir metin veriyordu — "İptal" -> "i̇ptal" oluyor
+            # ve `_NEGATIVE_WORDS`'teki "iptal" ile eşleşmiyordu. Bugün
+            # güvenli tarafa (RED) düşüyor çünkü olumlu listeyle de
+            # eşleşmiyor — ama bu, modülün eklenme sebebi olan olumsuzluk
+            # veto katmanını sessizce devre dışı bırakıyordu.
+            return self._ensure_stt().transcribe(audio, hotwords=", ".join(sorted(_AFFIRMATIVE_WORDS)))
         except Exception:
             logger.exception("Onay cevabı çözümlenemedi")
             return ""

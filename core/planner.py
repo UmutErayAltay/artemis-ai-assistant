@@ -70,6 +70,79 @@ hata mesajlarını basit tutar ve gerçek ihtiyaç zaten "bütün değeri
 önceki adımdan al" biçiminde (bkz. modül dokümantasyonu örneği)."""
 
 
+def _resolve_reference_string(
+    key_path: str, value: str, step_results: list[StepResult]
+) -> tuple[Any, str | None]:
+    """Tek bir string değerdeki `{{step_N.alan}}` referansını çözer.
+
+    `key_path`, hata mesajlarında hangi argümanın (iç içe olsa bile,
+    örn. "paths[0]" ya da "opts.dir") söz konusu olduğunu bildirmek
+    içindir; çözümlemenin kendisini etkilemez.
+
+    Returns:
+        (çözümlenmiş_değer, hata_mesajı) çifti. Referans YOKSA
+        (`value` düz bir metinse) `value`'nun kendisi hatasız döner.
+    """
+
+    match = _STEP_REFERENCE_RE.match(value.strip())
+    if match is None:
+        return value, None
+
+    ref_index, field = int(match.group(1)), match.group(2)
+    source = next((s for s in step_results if s.index == ref_index), None)
+
+    if source is None:
+        return None, (
+            f"'{key_path}' argümanı henüz çalışmamış ya da var olmayan {ref_index}. "
+            "adıma referans veriyor"
+        )
+    if not source.result.success:
+        return None, f"'{key_path}' argümanı başarısız olan {ref_index}. adıma referans veriyor"
+    if not source.result.data or field not in source.result.data:
+        return None, (
+            f"'{key_path}' argümanı {ref_index}. adımın sonucunda olmayan bir alana "
+            f"('{field}') referans veriyor"
+        )
+
+    return source.result.data[field], None
+
+
+def _resolve_value(key_path: str, value: Any, step_results: list[StepResult]) -> tuple[Any, str | None]:
+    """`value`'daki `{{step_N.alan}}` referanslarını, ne kadar İÇ İÇE
+    olursa olsun (liste/dict içinde liste/dict...) özyinelemeli olarak çözer.
+
+    NEDEN ÖZYİNELEMELİ: eskiden yalnızca argümanın EN ÜST SEVİYESİNDEKİ
+    string değerler kontrol ediliyordu — `{"paths": ["{{step_1.path}}"]}`
+    ya da `{"opts": {"dir": "{{step_1.path}}"}}` gibi bir argüman, hiç
+    çözülmeden YER TUTUCU METNİN KENDİSİ olarak tool'a gidiyordu (örn.
+    dosya sistemine gerçek bir klasör adı olarak yazılıyordu) — sessizce
+    yanlış, "adım başarısız" gibi görünür bir hata bile vermeden. Bu,
+    modül dokümantasyonunun yalnızca *gömülü kısmi* referansı (örn.
+    "Rapor/{{step_1.path}}/x") bilinçli olarak dışladığı vakadan farklı
+    bir üçüncü durumdu ve hiç ele alınmamıştı.
+    """
+
+    if isinstance(value, str):
+        return _resolve_reference_string(key_path, value, step_results)
+    if isinstance(value, list):
+        resolved_list: list[Any] = []
+        for index, item in enumerate(value):
+            resolved_item, error = _resolve_value(f"{key_path}[{index}]", item, step_results)
+            if error is not None:
+                return None, error
+            resolved_list.append(resolved_item)
+        return resolved_list, None
+    if isinstance(value, dict):
+        resolved_dict: dict[str, Any] = {}
+        for sub_key, item in value.items():
+            resolved_item, error = _resolve_value(f"{key_path}.{sub_key}", item, step_results)
+            if error is not None:
+                return None, error
+            resolved_dict[sub_key] = resolved_item
+        return resolved_dict, None
+    return value, None
+
+
 def _resolve_step_references(
     arguments: dict[str, Any], step_results: list[StepResult]
 ) -> tuple[dict[str, Any], str | None]:
@@ -91,31 +164,12 @@ def _resolve_step_references(
         ve adım hiç dispatch EDİLMEMELİDİR.
     """
 
-    resolved = dict(arguments)
+    resolved: dict[str, Any] = {}
     for key, value in arguments.items():
-        if not isinstance(value, str):
-            continue
-        match = _STEP_REFERENCE_RE.match(value.strip())
-        if match is None:
-            continue
-
-        ref_index, field = int(match.group(1)), match.group(2)
-        source = next((s for s in step_results if s.index == ref_index), None)
-
-        if source is None:
-            return arguments, (
-                f"'{key}' argümanı henüz çalışmamış ya da var olmayan {ref_index}. "
-                "adıma referans veriyor"
-            )
-        if not source.result.success:
-            return arguments, f"'{key}' argümanı başarısız olan {ref_index}. adıma referans veriyor"
-        if not source.result.data or field not in source.result.data:
-            return arguments, (
-                f"'{key}' argümanı {ref_index}. adımın sonucunda olmayan bir alana "
-                f"('{field}') referans veriyor"
-            )
-
-        resolved[key] = source.result.data[field]
+        resolved_value, error = _resolve_value(key, value, step_results)
+        if error is not None:
+            return arguments, error
+        resolved[key] = resolved_value
 
     return resolved, None
 
