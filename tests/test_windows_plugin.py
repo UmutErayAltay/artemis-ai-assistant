@@ -360,6 +360,78 @@ def test_launch_app_reports_honest_failure_when_unresolvable(
     assert result.success is False
 
 
+class _FakeLaunchedProcess:
+    """`subprocess.Popen` yerine geçer; `poll()` sonucunu senaryoya göre ayarlar."""
+
+    def __init__(self, exit_code: int | None) -> None:
+        self._exit_code = exit_code
+
+    def poll(self) -> int | None:
+        return self._exit_code
+
+
+def test_launch_app_system_command_verifies_process_did_not_crash_immediately(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: sistem-komutu dalı (`notepad`/`calc`/`explorer`)
+    eskiden `cmd /c start` ile sarılıyordu — `cmd` hedef program hemen
+    çökse bile HER ZAMAN başarıyla çıkar, yani `success=True` doğrulanmamış
+    bir iddiaydı. Artık doğrudan `Popen` kullanılıyor ve anlık çökme
+    `poll()` ile yakalanıyor.
+    """
+
+    import plugins.windows_plugin as windows_plugin
+
+    monkeypatch.setattr(windows_plugin.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        windows_plugin.subprocess, "Popen", lambda args, shell=False: _FakeLaunchedProcess(exit_code=None)
+    )
+
+    result = dispatcher.dispatch({"tool": "windows.launch_app", "arguments": {"name": "not defteri"}})
+
+    assert result.success is True
+    assert result.data == {"executable": "notepad.exe"}
+
+
+def test_launch_app_system_command_reports_immediate_crash_honestly(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Süreç anında sıfır olmayan bir kodla çökerse, `windows.launch_app`
+    'başlatıldı' DEMEMELİ — eski `cmd /c start` yolunun tam olarak
+    gizlediği hata sınıfı budur."""
+
+    import plugins.windows_plugin as windows_plugin
+
+    monkeypatch.setattr(windows_plugin.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(
+        windows_plugin.subprocess, "Popen", lambda args, shell=False: _FakeLaunchedProcess(exit_code=1)
+    )
+
+    result = dispatcher.dispatch({"tool": "windows.launch_app", "arguments": {"name": "hesap makinesi"}})
+
+    assert result.success is False
+    assert "hemen kapandı" in result.message
+
+
+def test_launch_app_system_command_not_found_is_honest_failure(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Popen` doğrudan `FileNotFoundError` fırlatırsa (program PATH'te
+    yok), bu artık `cmd`'nin arkasında gizlenmiyor — doğrudan dürüst bir
+    başarısızlığa dönüşüyor."""
+
+    import plugins.windows_plugin as windows_plugin
+
+    def _raise_not_found(args, shell=False):
+        raise FileNotFoundError("no such file")
+
+    monkeypatch.setattr(windows_plugin.subprocess, "Popen", _raise_not_found)
+
+    result = dispatcher.dispatch({"tool": "windows.launch_app", "arguments": {"name": "dosya gezgini"}})
+
+    assert result.success is False
+
+
 @pytest.mark.disruptive
 @WINDOWS_ONLY
 def test_lock_workstation(dispatcher: ToolDispatcher) -> None:
@@ -427,7 +499,13 @@ class _FakeWindow:
     """Sahte bir Windows penceresinin durumu (görünürlük, başlık,
     ShowWindow/MoveWindow'un etkilediği alanlar)."""
 
-    def __init__(self, title: str, visible: bool = True, foreground_refused: bool = False) -> None:
+    def __init__(
+        self,
+        title: str,
+        visible: bool = True,
+        foreground_refused: bool = False,
+        show_command_refused: bool = False,
+    ) -> None:
         self.title = title
         self.visible = visible
         self.show_cmd = 1  # SW_SHOWNORMAL
@@ -436,6 +514,11 @@ class _FakeWindow:
         # ön plan kilidi kuralları onu reddedebilir. Bu bayrak o reddi
         # taklit eder — tool'un doğrulama mantığı ancak böyle sınanabilir.
         self.foreground_refused = foreground_refused
+        # Aynı ders `ShowWindow` için de geçerli: bazı uygulamalar
+        # (örn. modal bir diyalog açıkken) minimize/maximize/restore
+        # isteğini yoksayabilir. Bu bayrak `show_cmd`'nin GÜNCELLENMEMESİNİ
+        # taklit eder.
+        self.show_command_refused = show_command_refused
 
 
 def _install_fake_win32_for_window_management(
@@ -489,6 +572,8 @@ def _install_fake_win32_for_window_management(
 
     def _show_window(hwnd, cmd):
         calls["show"].append((hwnd, cmd))
+        if windows[hwnd].show_command_refused:
+            return
         windows[hwnd].show_cmd = _command_to_resulting_state.get(cmd, cmd)
 
     def _move_window(hwnd, x, y, w, h, repaint):
@@ -582,6 +667,39 @@ def test_arrange_window_no_match_fails(dispatcher: ToolDispatcher, monkeypatch: 
 
     result = dispatcher.dispatch(
         {"tool": "windows.arrange_window", "arguments": {"title_query": "olmayan", "position": "minimize"}}
+    )
+
+    assert result.success is False
+
+
+def test_arrange_window_restore(dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1: _FakeWindow("Discord")}
+    windows[1].show_cmd = 2  # önceden küçültülmüş (SW_SHOWMINIMIZED)
+    calls = _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "restore"}}
+    )
+
+    assert result.success is True
+    assert calls["show"] == [(1, 9)]  # SW_RESTORE
+    assert windows[1].show_cmd == 1  # SW_SHOWNORMAL
+
+
+def test_arrange_window_restore_reports_failure_when_windows_refuses(
+    dispatcher: ToolDispatcher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regresyon testi: `restore` eskiden `GetWindowPlacement`
+    doğrulamasının DIŞINDA bırakılmıştı — `ShowWindow(..., SW_RESTORE)`
+    uygulama tarafından reddedilse bile koşulsuz `success=True` dönerdi
+    (CLAUDE.md'nin "koşulsuz success=True yasak" ilkesinin ihlali)."""
+
+    windows = {1: _FakeWindow("Discord", show_command_refused=True)}
+    windows[1].show_cmd = 2  # önceden küçültülmüş, istek REDDEDİLECEK
+    _install_fake_win32_for_window_management(monkeypatch, windows)
+
+    result = dispatcher.dispatch(
+        {"tool": "windows.arrange_window", "arguments": {"title_query": "discord", "position": "restore"}}
     )
 
     assert result.success is False

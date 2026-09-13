@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -99,6 +100,28 @@ def _safe_join(base: Path, target: str) -> Path | None:
     return base / candidate
 
 
+def _walk_limited(root: Path, max_depth: int) -> Iterator[Path]:
+    """`root` altındaki her dosya/klasörü, en fazla `max_depth` seviye
+    inerek ve erişim reddedilen alt ağaçları ATLAYARAK gezer.
+
+    `Path.rglob("*")`'in YERİNE geçer: `rglob` ne bir derinlik sınırı
+    tanır ne de bir `PermissionError`'ı tolere eder — erişilemeyen TEK
+    bir alt klasör (örn. bir sistem klasörü) aramanın TAMAMINI
+    `PermissionError` ile düşürür. `os.walk(..., onerror=...)` bu ikisini
+    de doğal olarak sağlar: `onerror` verilirse hatalı bir dizin
+    sessizce atlanır, listeleme durmaz.
+    """
+
+    root_depth = len(root.parts)
+    for dirpath, dirnames, filenames in os.walk(root, onerror=lambda exc: None):
+        current = Path(dirpath)
+        depth = len(current.parts) - root_depth
+        if depth >= max_depth:
+            dirnames[:] = []  # bu seviyede dur, daha derine inme
+        for name in dirnames + filenames:
+            yield current / name
+
+
 def _unsafe_target_result(target: str) -> ToolResult:
     """`_safe_join` tarafından reddedilen bir `target/name` için tutarlı,
     açıklayıcı bir başarısızlık sonucu üretir (mesaj tüm tool'larda ortak).
@@ -123,6 +146,21 @@ def _unsafe_target_result(target: str) -> ToolResult:
 
 
 _OVERWRITE_HINT = "üzerine yazmak için overwrite=true gönderin."
+
+
+def _fs_failure(op_description: str, path: Path, exc: OSError) -> ToolResult:
+    """Bir dosya sistemi mutasyonu (kopyalama/taşıma/yeniden adlandırma/
+    silme) başarısız olduğunda tutarlı bir `ToolResult` üretir.
+
+    NEDEN GEREKLİ: bu çağrılar (`shutil.copytree`, `.rename()`,
+    `shutil.move`, `shutil.rmtree`, `.unlink()`) hiçbiri `try/except`
+    içinde değildi; `PermissionError`/`OSError` doğrudan dispatcher'ın
+    genel "beklenmeyen hata" dalına düşüyordu (bkz. `core/dispatcher.
+    py::dispatch`) — tam olarak CLAUDE.md'nin düzeltildiğini söylediği
+    "kullanıcı 'target' diye anlaşılmaz bir hata görüyordu" sınıfı.
+    """
+
+    return ToolResult(success=False, message=f"'{path}' {op_description}: {exc}")
 
 
 def _prepare_destination(destination: Path, overwrite: bool) -> ToolResult | None:
@@ -241,11 +279,22 @@ class FilesystemCreateFolderTool(BaseTool):
         if new_folder is None:
             return _unsafe_target_result(name)
 
-        new_folder.mkdir(parents=True, exist_ok=True)
+        already_existed = new_folder.exists()
+        try:
+            new_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return ToolResult(success=False, message=f"'{new_folder}' oluşturulamadı: {exc}")
+
         context.memory.remember_last_path(str(new_folder))
+        # `exist_ok=True` var olan bir klasörü de sessizce kabul eder;
+        # bu durumda "oluşturuldu" demek yanıltıcıdır — kullanıcı klasörün
+        # YENİ oluştuğunu sanır. Mesaj gerçek durumu yansıtır, ama bu bir
+        # HATA değildir (idempotent davranış bilinçli — bkz. modül üstü
+        # docstring).
+        verb = "zaten vardı" if already_existed else "klasörü oluşturuldu"
         return ToolResult(
             success=True,
-            message=f"'{new_folder}' klasörü oluşturuldu.",
+            message=f"'{new_folder}' {verb}.",
             data={"path": str(new_folder)},
         )
 
@@ -265,6 +314,11 @@ class FilesystemCreateFileTool(BaseTool):
                 "name": {"type": "string"},
                 "location": {"type": "string", "default": "desktop"},
                 "content": {"type": "string", "default": ""},
+                "overwrite": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Aynı isimde bir dosya zaten varsa üzerine yazılsın mı.",
+                },
             },
             "required": ["name"],
         }
@@ -273,20 +327,42 @@ class FilesystemCreateFileTool(BaseTool):
         name = arguments["name"]
         location = arguments.get("location", "desktop")
         content = arguments.get("content", "")
+        overwrite = bool(arguments.get("overwrite", False))
         base_path = _resolve_location(location, context)
         new_file = _safe_join(base_path, name)
         if new_file is None:
             return _unsafe_target_result(name)
-        base_path.mkdir(parents=True, exist_ok=True)
 
-        new_file.write_text(content, encoding="utf-8")
+        # `copy`/`rename`/`move` üçü de `_prepare_destination` ile aynı
+        # şekilde davranıyor; `create_file` eskiden bunlardan HİÇBİRİNE
+        # sahip değildi ve `write_text` var olan bir dosyanın üzerine
+        # SESSİZCE yazıyordu — `danger_level=SAFE` altında veri kaybı
+        # (CLAUDE.md: koşulsuz success=True/sessiz veri kaybı yasak).
+        blocked = _prepare_destination(new_file, overwrite)
+        if blocked is not None:
+            return blocked
+
+        try:
+            base_path.mkdir(parents=True, exist_ok=True)
+            new_file.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            return ToolResult(success=False, message=f"'{new_file}' oluşturulamadı: {exc}")
+
         context.memory.remember_last_path(str(new_file))
         return ToolResult(success=True, message=f"'{new_file}' oluşturuldu.", data={"path": str(new_file)})
 
 
 @register_tool
 class FilesystemSearchTool(BaseTool):
-    """Bir klasör altında isme göre dosya/klasör arar."""
+    """Bir klasör altında isme göre dosya/klasör arar.
+
+    SINIRLIDIR (derinlik + sonuç sayısı): eskiden `Path.rglob("*")`
+    sınırsızdı — `location:"C:/"` gibi geniş bir kök dispatcher'ı (ve ses
+    işçisini) dakikalarca bloke edip sınırsız bir listeyi LLM bağlamına
+    dolduruyordu. Ayrıca `PermissionError` veren alt dizinler (erişim
+    reddedilen sistem klasörleri gibi) artık aramanın TAMAMINI
+    düşürmüyor, yalnızca o alt ağacı atlıyor.
+    """
 
     name = "filesystem.search"
     description = "Dosya veya klasör arar."
@@ -309,8 +385,22 @@ class FilesystemSearchTool(BaseTool):
         if not base_path.exists():
             return ToolResult(success=False, message=f"'{base_path}' bulunamadı.")
 
-        matches = [str(p) for p in base_path.rglob("*") if query in p.name.lower()]
-        return ToolResult(success=True, message=f"{len(matches)} sonuç bulundu.", data={"matches": matches})
+        max_results = context.settings.search_max_results
+        max_depth = context.settings.search_max_depth
+
+        matches: list[str] = []
+        truncated = False
+        for path in _walk_limited(base_path, max_depth):
+            if query in path.name.lower():
+                if len(matches) >= max_results:
+                    truncated = True
+                    break
+                matches.append(str(path))
+
+        message = f"{len(matches)} sonuç bulundu."
+        if truncated:
+            message += f" (İlk {max_results} sonuç gösteriliyor, daha fazlası olabilir.)"
+        return ToolResult(success=True, message=message, data={"matches": matches})
 
 
 @register_tool
@@ -361,11 +451,19 @@ class FilesystemCopyTool(BaseTool):
         if engel is not None:
             return engel
 
-        if source.is_dir():
-            shutil.copytree(source, destination, dirs_exist_ok=overwrite)
-        else:
-            shutil.copy2(source, destination)
+        try:
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=overwrite)
+            else:
+                shutil.copy2(source, destination)
+        except OSError as exc:
+            return _fs_failure("kopyalanamadı", source, exc)
 
+        # `rename`/`move` `remember_last_path` çağırır ama `copy` eskiden
+        # çağırmıyordu — `location: "last"` bir kopyadan sonra tutarsız
+        # davranıyordu (aynı dosyada üç mutasyon tool'unun ikisi hatırlıyor,
+        # biri hatırlamıyordu).
+        context.memory.remember_last_path(str(destination))
         return ToolResult(
             success=True,
             message=f"'{source.name}', {destination.parent.name} klasörüne kopyalandı.",
@@ -430,7 +528,11 @@ class FilesystemRenameTool(BaseTool):
         if engel is not None:
             return engel
 
-        source.rename(destination)
+        try:
+            source.rename(destination)
+        except OSError as exc:
+            return _fs_failure("yeniden adlandırılamadı", source, exc)
+
         context.memory.remember_last_path(str(destination))
         return ToolResult(
             success=True,
@@ -489,7 +591,11 @@ class FilesystemMoveTool(BaseTool):
         if engel is not None:
             return engel
 
-        shutil.move(str(source), str(destination))
+        try:
+            shutil.move(str(source), str(destination))
+        except OSError as exc:
+            return _fs_failure("taşınamadı", source, exc)
+
         context.memory.remember_last_path(str(destination))
         return ToolResult(
             success=True,
@@ -530,9 +636,12 @@ class FilesystemDeleteTool(BaseTool):
         if not full_path.exists():
             return ToolResult(success=False, message=f"'{full_path}' bulunamadı.")
 
-        if full_path.is_dir():
-            shutil.rmtree(full_path)
-        else:
-            full_path.unlink()
+        try:
+            if full_path.is_dir():
+                shutil.rmtree(full_path)
+            else:
+                full_path.unlink()
+        except OSError as exc:
+            return _fs_failure("silinemedi", full_path, exc)
 
         return ToolResult(success=True, message=f"'{full_path}' silindi.")

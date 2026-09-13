@@ -71,14 +71,18 @@ def test_forget_removes_a_remembered_fact(dispatcher: ToolDispatcher) -> None:
     assert recall_result.success is False
 
 
-def test_forget_unknown_key_is_a_safe_noop(dispatcher: ToolDispatcher) -> None:
-    """Hiç hatırlanmamış bir şeyi 'unutmak' hata değil — dürüst, zararsız
-    bir mesajla başarı dönmeli (kullanıcı için önemli değil, sistem için
-    tehlikeli değil)."""
+def test_forget_unknown_key_is_an_honest_failure_not_a_silent_success(dispatcher: ToolDispatcher) -> None:
+    """Hiç hatırlanmamış bir şeyi 'unutmak' TEHLİKELİ bir işlem değil, ama
+    KOŞULSUZ success=True de OLAMAZ (CLAUDE.md: "koşulsuz success=True
+    yasak"). Bu tool bir dönem hiçbir şey silinmese de `success=True`
+    dönüyordu — tam da `memory.recall`'un aynı dosyada dürüstçe
+    `success=False` döndürdüğü "bulunamadı" durumunu. Mesaj zararsız ve
+    bilgilendirici kalır; yalnızca `success` alanı artık gerçeği yansıtır.
+    """
 
     result = dispatcher.dispatch({"tool": "memory.forget", "arguments": {"key": "hiç var olmamış"}})
 
-    assert result.success is True
+    assert result.success is False
     assert "zaten" in result.message
 
 
@@ -91,9 +95,7 @@ def test_missing_required_argument_fails_cleanly(dispatcher: ToolDispatcher) -> 
     assert "value" in result.message
 
 
-def test_remembering_key_named_last_path_does_not_break_location_last(
-    dispatcher: ToolDispatcher, tmp_path: Path
-) -> None:
+def test_remembering_key_named_last_path_does_not_break_location_last(dispatcher: ToolDispatcher) -> None:
     """UÇTAN UCA KRİTİK REGRESYON: `memory.remember` ile `key="last_path"`
     gönderilse bile, `filesystem.open(location="last")`'ın dayandığı
     GERÇEK son-yol bilgisi bozulmamalı (bkz. `tests/test_memory_context.py`
@@ -101,8 +103,11 @@ def test_remembering_key_named_last_path_does_not_break_location_last(
     katmanından uçtan uca doğrular).
     """
 
-    real_file = tmp_path / "gercek.txt"
-    real_file.write_text("x", encoding="utf-8")
+    # `filesystem.create_file`'ın KENDİSİ gerçek dosyayı oluşturur; ayrıca
+    # ELLE bir ön-yazma YAPILMAZ — `create_file` artık üzerine yazmayı
+    # `overwrite=True` verilmeden reddediyor (bkz. Faz 2 düzeltmesi), ayrı
+    # bir ön-yazma bu dispatch'i sessizce başarısız kılıp `remember_last_path`
+    # hiç çağrılmamasına yol açardı.
     dispatcher.dispatch({"tool": "filesystem.create_file", "arguments": {"name": "gercek.txt"}})
 
     # Kullanıcı kazayla (ya da meraktan) "last_path" adıyla bir şey hatırlatıyor.

@@ -33,6 +33,13 @@ from plugins.filesystem_plugin import _resolve_location
 # çağrıları arasında) paylaşılan tek bir örnekte önbelleğe alınır.
 _app_resolver = AppResolver()
 
+_LAUNCH_CRASH_CHECK_SECONDS: float = 0.2
+"""`windows.launch_app`'in sistem-komutu dalında, süreç başlatıldıktan
+sonra ANINDA çöküp çökmediğini kontrol etmek için beklenen kısa süre.
+Normal bir uygulamanın açılışını geciktirmeyecek kadar kısa, ama tipik bir
+"argüman hatası / eksik DLL" tarzı anlık çökmeyi yakalayacak kadar
+yeterli."""
+
 
 @register_tool
 class WindowsLaunchAppTool(BaseTool):
@@ -76,10 +83,30 @@ class WindowsLaunchAppTool(BaseTool):
             return ToolResult(success=True, message=f"'{name}' başlatıldı.", data={"path": str(resolved_path)})
 
         if system_command is not None:
+            # DOĞRUDAN başlatılır, `cmd /c start` İLE SARILMAZ: `cmd`
+            # kendisi her zaman başarıyla çıkar (exit code 0), hedef
+            # program bulunamasa/hemen çökse bile — yani `success=True`
+            # burada tam olarak DOĞRULANMAMIŞ bir başarı iddiasıydı, bu
+            # dosyanın kendi docstring'inin (yukarıda) "cmd /c start
+            # sessizce başarısız olabiliyordu" diye kaldırdığını söylediği
+            # hatanın bu ikinci dalda geri gelmiş hâli. Doğrudan `Popen`,
+            # program PATH'te yoksa GERÇEKTEN `FileNotFoundError` fırlatır.
             try:
-                subprocess.Popen(["cmd", "/c", "start", "", system_command], shell=False)
+                process = subprocess.Popen([system_command], shell=False)
             except (OSError, FileNotFoundError) as exc:
                 return ToolResult(success=False, message=f"'{name}' başlatılamadı: {exc}")
+
+            # Süreç anında (kısa bir kontrol penceresinde) çökerse bunu da
+            # yakala — "başlatıldı" derken aslında hemen ölmüş bir süreci
+            # başarı saymamak için (koşulsuz success=True yasağı).
+            time.sleep(_LAUNCH_CRASH_CHECK_SECONDS)
+            exit_code = process.poll()
+            if exit_code is not None and exit_code != 0:
+                return ToolResult(
+                    success=False,
+                    message=f"'{name}' başlatıldı ama hemen kapandı (çıkış kodu {exit_code}).",
+                )
+
             context.memory.set("last_launched_app", system_command)
             return ToolResult(success=True, message=f"'{name}' başlatıldı.", data={"executable": system_command})
 
@@ -801,6 +828,16 @@ class WindowsArrangeWindowTool(BaseTool):
             return ToolResult(success=False, message="Pencere küçültülemedi (uygulama reddetmiş olabilir).")
         if position == "maximize" and show_cmd != win32con.SW_SHOWMAXIMIZED:
             return ToolResult(success=False, message="Pencere büyütülemedi.")
+        # `restore` eskiden bu doğrulamanın DIŞINDA bırakılmıştı — yani
+        # `ShowWindow(..., SW_RESTORE)` reddedilse bile koşulsuz
+        # `success=True` dönüyordu. `snap_left`/`snap_right` zaten
+        # `_snap_window`'ın kendi `GetWindowRect` doğrulamasından geçiyor
+        # (yukarıda `error is not None` kontrolü); yalnızca `restore`
+        # eksikti.
+        if position == "restore" and show_cmd != win32con.SW_SHOWNORMAL:
+            return ToolResult(
+                success=False, message="Pencere eski haline getirilemedi (uygulama reddetmiş olabilir)."
+            )
 
         labels = {
             "minimize": "küçültüldü",

@@ -115,7 +115,14 @@ class MemoryForgetTool(BaseTool):
         key = str(arguments["key"]).strip()
         existed = context.memory.forget_fact(key)
 
+        # KOŞULSUZ success=True YASAK (CLAUDE.md): "unut" denen bir şey
+        # zaten hiç hatırlanmıyorsa, bu bir BAŞARI değil — kullanıcı
+        # "unuttun mu?" diye sorduğunda model, aslında hiç var olmayan
+        # bir şeyi "unuttum" diyerek yanlış bir kesinlik verir. Aynı
+        # dosyadaki `memory.recall`, "bulunamadı" durumunu zaten dürüstçe
+        # `success=False` ile bildiriyor (bkz. aşağıdaki `MemoryRecallTool`)
+        # — bu iki tool'un sözleşmesi tutarlı olmalı.
         if not existed:
-            return ToolResult(success=True, message=f"'{key}' diye bir şey zaten hatırlamıyordum.")
+            return ToolResult(success=False, message=f"'{key}' diye bir şey zaten hatırlamıyordum.")
 
         return ToolResult(success=True, message=f"'{key}' unutuldu.")

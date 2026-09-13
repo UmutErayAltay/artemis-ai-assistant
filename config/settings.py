@@ -69,6 +69,12 @@ class Settings(BaseModel):
     Attributes:
         desktop_path: Kullanıcının masaüstü klasörü.
         downloads_path: Kullanıcının indirilenler klasörü.
+        search_max_results: `filesystem.search`'ün döndüreceği en fazla
+            sonuç sayısı. `Path.rglob("*")` sınırsızdı — `location:"C:/"`
+            gibi geniş bir kök, dispatcher'ı (ve ses işçisini) dakikalarca
+            bloke edip sınırsız bir listeyi LLM bağlamına dolduruyordu.
+        search_max_depth: `filesystem.search`'ün ineceği en fazla alt
+            dizin derinliği (kök `location`'ın kendisi derinlik 0'dır).
         log_dir: Log dosyalarının yazılacağı klasör.
         db_path: Hafıza (context memory) SQLite veritabanı dosyası.
         ollama_model: Kullanılacak yerel Ollama model adı.
@@ -196,6 +202,8 @@ class Settings(BaseModel):
 
     desktop_path: Path = Field(default_factory=lambda: Path.home() / "Desktop")
     downloads_path: Path = Field(default_factory=lambda: Path.home() / "Downloads")
+    search_max_results: int = 50
+    search_max_depth: int = 6
     log_dir: Path = Field(
         default_factory=lambda: Path(__file__).resolve().parent.parent / "logs"
     )
