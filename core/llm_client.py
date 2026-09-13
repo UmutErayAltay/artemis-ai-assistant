@@ -261,7 +261,7 @@ class OllamaLLMClient:
         self.keep_alive = keep_alive
         self.timeout_seconds = timeout_seconds
         self._ollama_client: Any | None = None
-        self._working_strategy_index: int | None = None
+        self._working_strategy_key: str | None = None
 
     def get_raw_response(self, system_prompt: str, user_input: str) -> str:
         """Ollama'ya sistem promptu + kullanıcı mesajını gönderir, ham metni döndürür.
@@ -406,7 +406,7 @@ class OllamaLLMClient:
         strategies = self._strategies()
 
         last_exc: Exception | None = None
-        for index, extra in enumerate(strategies):
+        for key, extra in strategies:
             try:
                 response = self._client().chat(
                     model=self.model,
@@ -434,8 +434,14 @@ class OllamaLLMClient:
             # İlk çalışan strateji hatırlanır: `gpt-oss:20b` gibi bazı
             # modellerde `format` verildiği anda ilk strateji hep
             # başarısız olur (.context §6.10) ve o modelle çalışan her
-            # komut, boşa giden bir istekle başlardı.
-            self._working_strategy_index = index
+            # komut, boşa giden bir istekle başlardı. KİMLİK (`key`)
+            # saklanır, POZİSYON DEĞİL: `_strategies()` bilinen çalışanı
+            # her çağrıda başa alıp listeyi yeniden sıralıyor, yani bir
+            # pozisyon (`index`) farklı çağrılarda farklı stratejilere
+            # karşılık gelebilir — önceki sürüm tam olarak bu yüzden
+            # önbelleği her iki çağrıda bir kendi kendine geçersiz
+            # kılıyordu (bkz. modül testleri).
+            self._working_strategy_key = key
 
             message = response["message"]
             native_calls = self._extract_native_tool_calls(message) if "tools" in extra else None
@@ -443,19 +449,26 @@ class OllamaLLMClient:
 
         raise ConnectionError(f"Ollama'ya bağlanılamadı ('{self.model}'): {last_exc}")
 
-    def _strategies(self) -> list[dict[str, Any]]:
-        """Denenecek istek stratejilerini, bilinen çalışanı başa alarak üretir."""
+    def _strategies(self) -> list[tuple[str, dict[str, Any]]]:
+        """Denenecek istek stratejilerini, bilinen çalışanı başa alarak üretir.
 
-        strategies: list[dict[str, Any]] = []
+        Her strateji sabit bir `key` (`"native"`/`"schema"`/`"json"`/`"none"`)
+        ile eşleşir; `_working_strategy_key` bu kimliği saklar, listedeki
+        POZİSYONU değil — pozisyon, `use_native_tool_calling`'e göre kayabilir
+        ve bilinen strateji her çağrıda başa taşındığı için pozisyonlar
+        çağrılar arasında sabit değildir.
+        """
+
+        strategies: list[tuple[str, dict[str, Any]]] = []
         if self.use_native_tool_calling:
-            strategies.append({"tools": self._build_native_tools()})
-        strategies.append({"format": self._response_schema()})
-        strategies.append({"format": "json"})
-        strategies.append({})  # son çare: hiçbir kısıtlama yok, yalnızca prompt talimatına güven
+            strategies.append(("native", {"tools": self._build_native_tools()}))
+        strategies.append(("schema", {"format": self._response_schema()}))
+        strategies.append(("json", {"format": "json"}))
+        strategies.append(("none", {}))  # son çare: hiçbir kısıtlama yok, yalnızca prompt talimatına güven
 
-        known = self._working_strategy_index
-        if known is not None and 0 <= known < len(strategies):
-            strategies = [strategies[known]] + [s for i, s in enumerate(strategies) if i != known]
+        known = self._working_strategy_key
+        if known is not None:
+            strategies.sort(key=lambda item: item[0] != known)
         return strategies
 
     def _client(self) -> Any:

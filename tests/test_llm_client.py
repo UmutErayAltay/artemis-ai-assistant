@@ -596,3 +596,14 @@ def test_unsupported_strategy_still_falls_back(monkeypatch: pytest.MonkeyPatch) 
     kullanilan.clear()
     client.get_tool_calls("sistem", "tekrar")
     assert kullanilan == ["json"]
+
+    # ÜÇÜNCÜ komut da aynı şekilde davranmalı. Önbellek POZİSYONA göre
+    # tutulursa (`_working_strategy_index`), ikinci çağrıda "json" listenin
+    # 0. sırasına taşınır ve 0 saklanır; üçüncü çağrıda liste YENİDEN
+    # `[schema, json, none]` olarak kurulduğu için 0 = "schema" tekrar
+    # denenir ve tekrar başarısız olur — önbellek her iki çağrıda bir kendi
+    # kendini geçersiz kılar. Kimliğe (`"schema"`/`"json"`) göre tutulan bir
+    # önbellek bu salınımı yapmaz.
+    kullanilan.clear()
+    client.get_tool_calls("sistem", "bir daha")
+    assert kullanilan == ["json"]

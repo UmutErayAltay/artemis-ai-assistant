@@ -210,10 +210,18 @@ def main_voice() -> None:
     hotkey_text = settings.voice_hotkey
     hotkey: GlobalHotkey | None = None
     try:
-        hotkey = GlobalHotkey(hotkey_text, assistant.trigger)
-        app.installNativeEventFilter(hotkey)
-        if not hotkey.register():
-            hotkey = None
+        candidate = GlobalHotkey(hotkey_text, assistant.trigger)
+        # ÖNCE kaydet, SONRA filtreyi kur. `app.installNativeEventFilter`
+        # Qt tarafında C++ seviyesinde bir referans tutar; eskiden filtre
+        # `register()`'dan ÖNCE kuruluyordu ve kayıt başarısız olduğunda
+        # Python tarafı `hotkey = None` ile son referansını düşürüyordu —
+        # Qt ise `removeNativeEventFilter` hiç çağrılmadığı için ham
+        # işaretçiyi tutmaya devam ediyordu (bellek sızıntısı / potansiyel
+        # kullanım-sonrası-serbest bırakma riski). Şimdi filtre yalnızca
+        # kayıt GERÇEKTEN başarılıysa kurulur.
+        if candidate.register():
+            app.installNativeEventFilter(candidate)
+            hotkey = candidate
     except HotkeyParseError as exc:
         logger.warning("Kısayol ayarı geçersiz (%s); kısayol olmadan devam ediliyor.", exc)
         hotkey = None
@@ -237,6 +245,9 @@ def main_voice() -> None:
     finally:
         assistant.stop()
         if hotkey is not None:
+            # Kayıt sırasıyla ters: önce Qt'nin native event filter
+            # listesinden çıkar, sonra işletim sistemi kaydını kaldır.
+            app.removeNativeEventFilter(hotkey)
             hotkey.unregister()
         tray.hide()
         server_manager.stop_if_we_started_it()

@@ -13,7 +13,7 @@ import pytest
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.planner import TaskPlanner
+from core.planner import StepResult, TaskPlanner, _resolve_step_references
 from memory.context_memory import ContextMemory
 
 
@@ -295,3 +295,50 @@ def test_literal_value_that_looks_unrelated_is_untouched(dispatcher: ToolDispatc
 
     assert results[0].result.success is True
     assert results[0].arguments["name"] == "step_1.path ile ilgili değil"
+
+
+def _fake_source_step(index: int, path: str) -> StepResult:
+    """Testte `_resolve_step_references`'a doğrudan verilecek sahte bir önceki adım."""
+
+    from models.tool_models import ToolResult
+
+    return StepResult(
+        index=index,
+        tool_name="filesystem.create_folder",
+        arguments={},
+        result=ToolResult(success=True, message="", data={"path": path}),
+    )
+
+
+def test_step_reference_inside_a_list_argument_is_resolved() -> None:
+    """`{"paths": ["{{step_1.path}}"]}` gibi bir liste İÇİNDEKİ referans da
+    çözülmeli — eskiden yalnızca argümanın EN ÜST SEVİYESİ kontrol
+    ediliyordu, liste/dict içindeki referans yer tutucu METNİN KENDİSİ
+    olarak tool'a sızıyordu.
+    """
+
+    step_results = [_fake_source_step(1, "/masaustu/Rapor")]
+    resolved, error = _resolve_step_references({"paths": ["{{step_1.path}}", "sabit.txt"]}, step_results)
+
+    assert error is None
+    assert resolved == {"paths": ["/masaustu/Rapor", "sabit.txt"]}
+
+
+def test_step_reference_inside_a_nested_dict_argument_is_resolved() -> None:
+    """`{"opts": {"dir": "{{step_1.path}}"}}` gibi iç içe bir dict te aynı şekilde çözülmeli."""
+
+    step_results = [_fake_source_step(1, "/masaustu/Rapor")]
+    resolved, error = _resolve_step_references({"opts": {"dir": "{{step_1.path}}"}}, step_results)
+
+    assert error is None
+    assert resolved == {"opts": {"dir": "/masaustu/Rapor"}}
+
+
+def test_step_reference_inside_a_list_to_a_missing_step_fails_without_dispatch() -> None:
+    """İç içe bir referans var olmayan bir adıma işaret ediyorsa, adım
+    hiç dispatch EDİLMEMELİ (üst seviye referanslarla aynı sözleşme)."""
+
+    resolved, error = _resolve_step_references({"paths": ["{{step_9.path}}"]}, [])
+
+    assert error is not None
+    assert "9" in error
