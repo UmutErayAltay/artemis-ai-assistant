@@ -190,6 +190,36 @@ def test_anything_else_is_a_refusal(monkeypatch: pytest.MonkeyPatch, answer: str
     assert _confirm_with_user("filesystem.delete", {"target": "x"}) is False
 
 
+def test_text_confirmation_now_accepts_multi_word_affirmatives_like_the_voice_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regresyon testi: `_confirm_with_user` bir dönem yalnızca TAM DİZE
+    eşleşmesiyle (`answer.lower() in {"e","evet","y","yes"}`) çalışıyordu
+    — "evet, öyle" gibi fazladan sözcük içeren net bir onay bile
+    REDDEDİLİYORDU, oysa `core/voice_loop.py::_is_affirmative` (şimdi
+    `utils.text.is_clear_affirmative_answer`) sözcük seviyesinde çalışıp
+    böyle bir cevabı kabul ediyordu. Artık ikisi de aynı fonksiyonu
+    kullandığı için iki yol da AYNI (ve daha esnek, ama olumsuzluk
+    vetosuyla korunan) sözleşmeyi konuşuyor."""
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": "evet, öyle")
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+
+    assert _confirm_with_user("filesystem.delete", {"target": "x"}) is True
+
+
+def test_text_confirmation_negation_veto_rejects_a_contradictory_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Aynı zamanda olumsuzluk vetosu da devrede: "iptal" geçen bir
+    cevap, içinde "evet" geçse bile RED sayılmalı — güvenli taraf."""
+
+    monkeypatch.setattr("builtins.input", lambda prompt="": "iptal evet")
+    monkeypatch.setattr("builtins.print", lambda *a, **k: None)
+
+    assert _confirm_with_user("filesystem.delete", {"target": "x"}) is False
+
+
 def test_confirmation_shows_what_is_being_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Kullanıcı NEYİ onayladığını görmeli — yalnızca tool adını değil.
 

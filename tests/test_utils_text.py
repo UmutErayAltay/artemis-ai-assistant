@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from utils.text import lower_variants, turkish_lower
+from utils.text import is_clear_affirmative_answer, lower_variants, turkish_lower
 
 
 @pytest.mark.parametrize(
@@ -56,3 +56,33 @@ def test_lower_variants_is_safe_for_words_without_i() -> None:
     """`I`/`İ` içermeyen sözcüklerde iki çeviri aynıdır."""
 
     assert lower_variants("EVET") == {"evet"}
+
+
+# --- is_clear_affirmative_answer ---------------------------------------
+#
+# Ayrıntılı olumsuzluk-eki sezgiseli senaryoları zaten
+# `tests/test_voice_loop.py`'de (`REDDEDILMESI_GEREKEN_CEVAPLAR` /
+# `ONAYLANMASI_GEREKEN_CEVAPLAR`) `_confirm_by_voice` üzerinden uçtan uca
+# sınanıyor. Bu testler yalnızca fonksiyonun DOĞRUDAN çağrıldığında da
+# aynı sözleşmeyi taşıdığını doğrular — artık `core/conversation_loop.py`
+# da aynı fonksiyona bağlı olduğu için bu paylaşılan sözleşmenin garantisi
+# burada.
+
+
+def test_is_clear_affirmative_answer_accepts_a_clear_yes() -> None:
+    assert is_clear_affirmative_answer("evet") is True
+
+
+def test_is_clear_affirmative_answer_rejects_a_clear_no() -> None:
+    assert is_clear_affirmative_answer("hayır") is False
+
+
+def test_is_clear_affirmative_answer_negation_veto_wins_over_an_affirmative_word() -> None:
+    """"İptal, evet" gibi çelişkili bir cevap RED sayılmalı — güvenli taraf."""
+
+    assert is_clear_affirmative_answer("iptal evet") is False
+
+
+def test_is_clear_affirmative_answer_rejects_empty_and_unclear_answers() -> None:
+    assert is_clear_affirmative_answer("") is False
+    assert is_clear_affirmative_answer("belki") is False
