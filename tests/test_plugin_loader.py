@@ -59,6 +59,22 @@ def test_register_tool_raises_on_name_collision() -> None:
         del TOOL_REGISTRY["test.collision.probe"]  # gerçek registry'yi kirletme
 
 
+def test_register_tool_rejects_a_non_basetool_class() -> None:
+    """Regresyon testi: `register_tool`'un imzası `type[BaseTool]` ilan
+    ediyordu ama bu çalışma zamanında hiç KONTROL EDİLMİYORDU. Uymayan bir
+    sınıf sorunsuz kaydolup, ancak `dispatcher._execute`'ta örneklendiğinde
+    ya da `execute()` çağrıldığında anlaşılmaz bir `AttributeError` ile
+    patlıyordu — hatanın gerçek kaynağından çok uzakta."""
+
+    class BaseToolOlmayanSinif:
+        name = "test.not_a_basetool.probe"
+
+    with pytest.raises(ValueError, match="BaseTool"):
+        register_tool(BaseToolOlmayanSinif)  # type: ignore[arg-type]
+
+    assert "test.not_a_basetool.probe" not in TOOL_REGISTRY
+
+
 def test_register_tool_requires_a_name_attribute() -> None:
     class IsimsizTool(BaseTool):
         description = "test"

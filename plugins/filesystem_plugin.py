@@ -332,14 +332,26 @@ class FilesystemCopyTool(BaseTool):
             "properties": {
                 "target": {"type": "string"},
                 "source_location": {"type": "string", "default": "desktop"},
-                "destination_location": {"type": "string", "default": "desktop"},
+                "destination_location": {
+                    "type": "string",
+                    "default": "desktop",
+                    "description": "Kopyanın konacağı konum.",
+                },
                 "overwrite": {
                     "type": "boolean",
                     "description": "Hedefte aynı isim varsa üzerine yazılsın mı.",
                     "default": False,
                 },
             },
-            "required": ["target", "destination_location"],
+            # NOT: `destination_location` `required`e EKLENMEZ — `default`
+            # değeri (`"desktop"`) ile birlikte `required` olması, bir dönem
+            # bu varsayımı hiçbir zaman uygulanamaz kılıyordu: `core/
+            # dispatcher.py::_validate_arguments` `required`ı `default`
+            # UYGULANMADAN ÖNCE kontrol ediyor (şema kendisi default
+            # UYGULAMIYOR, yalnızca modele/dokümana bir ipucu veriyor).
+            # Yani `destination_location` verilmeden yapılan HER çağrı,
+            # dokümante edilen varsayılana rağmen reddediliyordu.
+            "required": ["target"],
         }
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -348,7 +360,7 @@ class FilesystemCopyTool(BaseTool):
         source = _safe_join(_resolve_location(arguments.get("source_location", "desktop"), context), target)
         if source is None:
             return _unsafe_target_result(target)
-        destination_dir = _resolve_location(arguments["destination_location"], context)
+        destination_dir = _resolve_location(arguments.get("destination_location", "desktop"), context)
 
         if not source.exists():
             return ToolResult(success=False, message=f"'{source}' bulunamadı.")
@@ -479,7 +491,10 @@ class FilesystemMoveTool(BaseTool):
                     "default": False,
                 },
             },
-            "required": ["target", "destination_location"],
+            # `destination_location` neden `required` DEĞİL: bkz.
+            # `FilesystemCopyTool.get_arguments_schema` (aynı çakışma,
+            # aynı düzeltme — burada bire bir tekrarlanmasın diye).
+            "required": ["target"],
         }
 
     def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
@@ -488,7 +503,7 @@ class FilesystemMoveTool(BaseTool):
         source = _safe_join(_resolve_location(arguments.get("source_location", "desktop"), context), target)
         if source is None:
             return _unsafe_target_result(target)
-        destination_dir = _resolve_location(arguments["destination_location"], context)
+        destination_dir = _resolve_location(arguments.get("destination_location", "desktop"), context)
 
         if not source.exists():
             return ToolResult(success=False, message=f"'{source}' bulunamadı.")

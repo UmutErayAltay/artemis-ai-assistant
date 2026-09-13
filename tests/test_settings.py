@@ -113,6 +113,22 @@ def test_settings_are_read_only(tmp_path: Path) -> None:
         settings.ollama_model = "baska"
 
 
+def test_dangerous_tools_cannot_be_mutated_in_place() -> None:
+    """`frozen=True` yalnızca ALAN ATAMASINI engeller, bir `list`in
+    İÇERİĞİNİN yerinde değiştirilmesini DEĞİL. `dangerous_tools` bir
+    GÜVENLİK ayarı olduğu için `list[str]` yerine `tuple[str, ...]`
+    olmalı — aksi halde herhangi bir tool `context.settings.
+    dangerous_tools.clear()` ile config katmanı kısıtlamasını hiçbir iz
+    bırakmadan sessizce kapatabilirdi."""
+
+    settings = Settings(dangerous_tools=["windows.shutdown"])
+
+    assert not hasattr(settings.dangerous_tools, "clear")
+    assert not hasattr(settings.dangerous_tools, "append")
+    with pytest.raises(TypeError):
+        settings.dangerous_tools[0] = "baska.tool"  # type: ignore[index]
+
+
 def test_model_copy_is_the_supported_way_to_derive_a_variant(tmp_path: Path) -> None:
     """Dondurulmuş olmak "türetilemez" demek değil — testlerin yolu budur."""
 

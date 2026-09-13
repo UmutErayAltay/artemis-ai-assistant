@@ -219,12 +219,23 @@ class AppResolver:
         return None
 
     def _ensure_shortcut_index(self) -> None:
-        """Başlat Menüsü'ndeki tüm .lnk dosyalarını (ad -> hedef yol) olarak önbelleğe alır."""
+        """Başlat Menüsü'ndeki tüm .lnk dosyalarını (ad -> hedef yol) olarak önbelleğe alır.
+
+        NEDEN BOŞ SÖZLÜK ÖNCE DEĞİL, İTHALAT BAŞARILI OLDUKTAN SONRA
+        ATANIR: eskiden `self._shortcut_index = {}` `win32com` import
+        edilmeden ÖNCE atanıyordu; `ImportError` durumunda erken `return`
+        ile çıkılıyordu ama `_shortcut_index` artık `{}` (None DEĞİL)
+        olduğu için üstteki `if self._shortcut_index is not None: return`
+        kontrolü bunu SÜRECİN GERİ KALANI BOYUNCA kalıcı bir önbelleğe
+        çeviriyordu. `pywin32` GEÇ yüklenirse (ya da COM kısa süreliğine
+        kullanılamazsa), `launch_app` Başlat Menüsü çözümlemesini süreç
+        ömrü boyunca, hiçbir log satırı bile bırakmadan kaybediyordu.
+        Artık başarısızlıkta `None`'a geri dönülür, sonraki çağrı tekrar dener.
+        """
 
         if self._shortcut_index is not None:
             return
 
-        self._shortcut_index = {}
         search_dirs = [
             Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
             Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
@@ -235,8 +246,9 @@ class AppResolver:
 
             shell = win32com.client.Dispatch("WScript.Shell")
         except ImportError:
-            return  # pywin32 yoksa (örn. test ortamı) sessizce boş bırak
+            return  # pywin32 yoksa (örn. test ortamı); _shortcut_index None kalır, sonraki çağrı tekrar dener
 
+        self._shortcut_index = {}
         for base_dir in search_dirs:
             if not base_dir.exists():
                 continue

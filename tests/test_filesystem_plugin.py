@@ -452,6 +452,23 @@ def test_copy_folder_recursively_includes_nested_file(
     assert (downloads / "Proje" / "dosya.txt").exists()
 
 
+def test_copy_without_destination_location_defaults_to_desktop(
+    dispatcher: ToolDispatcher, desktop: Path
+) -> None:
+    """Regresyon testi: `destination_location` şemada `default: "desktop"`
+    ilan ediyor ama eskiden AYNI ZAMANDA `required`di. `_validate_arguments`
+    (`core/dispatcher.py`) `required`ı `default` uygulanmadan ÖNCE
+    kontrol ettiği için, argüman hiç verilmeden yapılan bir çağrı
+    dokümante edilen varsayılana rağmen HER ZAMAN reddediliyordu."""
+
+    (desktop / "kaynak.txt").write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch({"tool": "filesystem.copy", "arguments": {"target": "kaynak.txt"}})
+
+    assert result.success is False
+    assert "aynı" in result.message  # kaynak == hedef (ikisi de masaüstü)
+
+
 def test_copy_missing_source_fails_without_creating_destination(
     dispatcher: ToolDispatcher, downloads: Path
 ) -> None:
@@ -685,6 +702,20 @@ def test_move_folder_recursively(dispatcher: ToolDispatcher, desktop: Path, down
     assert result.success is True
     assert not source_dir.exists()
     assert (downloads / "Proje" / "dosya.txt").exists()
+
+
+def test_move_without_destination_location_defaults_to_desktop(
+    dispatcher: ToolDispatcher, desktop: Path
+) -> None:
+    """`filesystem.copy` ile aynı regresyon, `move` için — bkz.
+    `test_copy_without_destination_location_defaults_to_desktop`."""
+
+    (desktop / "kaynak.txt").write_text("içerik", encoding="utf-8")
+
+    result = dispatcher.dispatch({"tool": "filesystem.move", "arguments": {"target": "kaynak.txt"}})
+
+    assert result.success is True
+    assert "zaten hedef konumda" in result.message
 
 
 def test_move_missing_source_fails(dispatcher: ToolDispatcher, downloads: Path) -> None:
