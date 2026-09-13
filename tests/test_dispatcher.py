@@ -99,13 +99,19 @@ def test_missing_required_argument_fails_before_tool_runs(dispatcher: ToolDispat
 
 
 def test_missing_required_argument_reports_all_missing_fields(dispatcher: ToolDispatcher) -> None:
-    """Birden fazla alan eksikse mesaj TÜMÜNÜ listelemeli, yalnızca ilkini değil."""
+    """Birden fazla alan eksikse mesaj TÜMÜNÜ listelemeli, yalnızca ilkini değil.
 
-    result = dispatcher.dispatch({"tool": "filesystem.copy", "arguments": {}})
+    `filesystem.rename` kullanılır (`filesystem.copy` DEĞİL): `copy`'nin
+    `destination_location`'ı bir dönem hem `required` hem `default`di —
+    bu çakışma düzeltildikten sonra (bkz. `FilesystemCopyTool.get_
+    arguments_schema`) `copy` artık bu senaryo için uygun değil, çünkü
+    yalnızca TEK zorunlu alanı (`target`) kaldı."""
+
+    result = dispatcher.dispatch({"tool": "filesystem.rename", "arguments": {}})
 
     assert result.success is False
     assert "target" in result.message
-    assert "destination_location" in result.message
+    assert "name" in result.message
 
 
 def test_wrong_enum_value_is_rejected(dispatcher: ToolDispatcher) -> None:

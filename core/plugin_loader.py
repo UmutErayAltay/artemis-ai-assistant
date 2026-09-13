@@ -41,9 +41,18 @@ def register_tool(cls: type[BaseTool]) -> type[BaseTool]:
         Değiştirilmeden aynı sınıf (decorator zincirlemeye izin verir).
 
     Raises:
-        ValueError: Sınıfın `name` özniteliği yoksa veya aynı isimle
-            başka bir tool zaten kayıtlıysa.
+        ValueError: Sınıf `BaseTool`'dan türemiyorsa, `name` özniteliği
+            yoksa veya aynı isimle başka bir tool zaten kayıtlıysa.
     """
+
+    # `cls` imzası `type[BaseTool]` ilan ediyor ama bu, çalışma zamanında
+    # KONTROL EDİLMİYORDU — uymayan bir sınıf sorunsuz kaydolup, ancak
+    # `core/dispatcher.py::_execute`'ta `tool_cls()` örneklendiğinde ya da
+    # `get_arguments_schema()`/`execute()` çağrıldığında anlaşılmaz bir
+    # `AttributeError` ile patlıyordu — hatanın gerçek kaynağından (yanlış
+    # sınıfın `@register_tool` ile işaretlenmesi) çok uzakta.
+    if not (isinstance(cls, type) and issubclass(cls, BaseTool)):
+        raise ValueError(f"{cls!r} bir BaseTool alt sınıfı değil; @register_tool yalnızca BaseTool'a uygulanabilir.")
 
     tool_name = getattr(cls, "name", None)
     if not tool_name:

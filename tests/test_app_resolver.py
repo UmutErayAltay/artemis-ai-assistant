@@ -9,7 +9,11 @@ taraması Windows'ta ayrıca doğrulanmalıdır).
 
 from __future__ import annotations
 
+import sys
+import types
 from pathlib import Path
+
+import pytest
 
 from plugins._app_resolver import AppResolver
 
@@ -77,3 +81,45 @@ def test_suggestions_returns_close_matches_for_typo() -> None:
     )
     suggestions = resolver.suggestions("leage of legens")  # kasıtlı yazım hatası
     assert "league of legends" in suggestions
+
+
+
+def test_ensure_shortcut_index_retries_after_a_failed_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regresyon testi: `win32com` ithalatı BAŞARISIZ olduğunda
+    `_shortcut_index` bir dönem `{}` (BOŞ ama None DEĞİL) olarak
+    kalıcı önbelleğe alınıyordu — sonraki HİÇBİR çağrı gerçek taramayı
+    tekrar denemiyordu. `pywin32` geç yüklenirse (ya da COM kısa
+    süreliğine kullanılamazsa), `launch_app` Başlat Menüsü çözümlemesini
+    süreç ömrü boyunca sessizce kaybediyordu."""
+
+    resolver = AppResolver()
+
+    monkeypatch.setitem(sys.modules, "win32com.client", None)  # ImportError'ı taklit eder
+    resolver._ensure_shortcut_index()
+    assert resolver._shortcut_index is None  # {} DEĞİL — sonraki çağrı tekrar denemeli
+
+    fake_shell = types.SimpleNamespace()
+
+    class _FakeShortcut:
+        Targetpath = r"C:\Discord\Discord.exe"
+
+    fake_shell.CreateShortcut = lambda path: _FakeShortcut()
+
+    fake_client_module = types.ModuleType("win32com.client")
+    fake_client_module.Dispatch = lambda name: fake_shell
+    fake_win32com_package = types.ModuleType("win32com")
+    fake_win32com_package.client = fake_client_module  # `import win32com.client` bunu bekler
+    monkeypatch.setitem(sys.modules, "win32com", fake_win32com_package)
+    monkeypatch.setitem(sys.modules, "win32com.client", fake_client_module)
+
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda self: True,
+    )
+    monkeypatch.setattr(Path, "rglob", lambda self, pattern: iter([Path("C:/Start Menu/Discord.lnk")]))
+
+    resolver._ensure_shortcut_index()
+
+    assert resolver._shortcut_index is not None
+    assert "discord" in resolver._shortcut_index

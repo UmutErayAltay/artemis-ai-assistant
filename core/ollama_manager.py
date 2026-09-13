@@ -111,15 +111,33 @@ class OllamaServerManager:
         Kullanıcının kendi başka bir yerde (örn. ayrı bir terminalde)
         başlattığı bir sunucuya asla dokunulmaz — yalnızca `_process`
         doluysa (yani `ensure_running` sunucuyu biz başlattıysa) kapatılır.
+
+        `stop_all_ollama_processes`'in yaptığı gibi ölümü DOĞRULAR ve
+        `_process`'i temizler — eskiden bunların hiçbiri yapılmıyordu:
+        sabit `timeout=5` (`_TERMINATE_GRACE_SECONDS` yerine, ikisi
+        aynı anlama gelse de tekrar), `kill()` sonrası ikinci bir
+        `wait()` yoktu (süreç reap edilmiyordu, zombi kalabiliyordu),
+        `self._process` hiç `None` yapılmıyordu (ikinci bir çağrı bayat
+        bir handle ile yeniden girebiliyordu).
         """
 
-        if self._process is not None and self._process.poll() is None:
-            logger.info("Artemis tarafından başlatılan Ollama sunucusu kapatılıyor.")
-            self._process.terminate()
+        if self._process is None or self._process.poll() is not None:
+            self._process = None
+            return
+
+        logger.info("Artemis tarafından başlatılan Ollama sunucusu kapatılıyor.")
+        process = self._process
+        process.terminate()
+        try:
+            process.wait(timeout=_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
             try:
-                self._process.wait(timeout=5)
+                process.wait(timeout=_TERMINATE_GRACE_SECONDS)
             except subprocess.TimeoutExpired:
-                self._process.kill()
+                logger.warning("Ollama sunucusu (PID %s) kapatılamadı.", process.pid)
+
+        self._process = None
 
     @staticmethod
     def _is_server_responding() -> bool:
@@ -161,7 +179,14 @@ def list_installed_models() -> list[str]:
 
     import ollama
 
-    response = ollama.list()
+    # `ollama.list()` MODÜL SEVİYESİ istemciyi kullanır ve o istemcinin
+    # OKUMA ZAMAN AŞIMI YOKTUR (bkz. `core/llm_client.py::_client`'ın uzun
+    # gerekçesi ve `_is_server_responding`'in burada yaptığı aynı seçim).
+    # Bu fonksiyon `main.py`'de AÇILIŞTA çağrılıyor; kilitlenmiş bir
+    # `ollama serve` eskiden Artemis'i UI hiç açılmadan SÜRESİZ askıda
+    # bırakıyordu — tam olarak zaman aşımlı istemcinin önlemek için var
+    # olduğu arıza.
+    response = ollama.Client(timeout=_PING_TIMEOUT_SECONDS).list()
     raw_models: list[Any] = response.get("models", []) if isinstance(response, dict) else getattr(response, "models", [])
 
     names: list[str] = []
@@ -175,17 +200,26 @@ def list_installed_models() -> list[str]:
     return names
 
 
-def prompt_user_to_select_model(models: list[str]) -> str:
+def prompt_user_to_select_model(models: list[str], fallback_model: str | None = None) -> str:
     """Kurulu modelleri numaralandırıp terminalden kullanıcı seçimi ister.
 
     Args:
         models: `list_installed_models()`'dan gelen model adları.
+        fallback_model: `input()` bir cevap ALAMAZSA (stdin kapalı/boru
+            hattına bağlı — servis/otomasyon/zamanlanmış bir başlatma)
+            kullanılacak model. `config/config.yaml::ollama_model`
+            zaten "interaktif olmayan senaryolar için yedek" diye
+            DOKÜMANTE EDİLMİŞTİ, ama bu yedek hiç UYGULANMAMIŞTI —
+            `input()` böyle bir ortamda `EOFError` fırlatıp `main.py`'yi
+            ham bir traceback ile düşürüyordu.
 
     Returns:
-        Kullanıcının seçtiği model adı.
+        Kullanıcının seçtiği (ya da stdin yoksa `fallback_model`) model adı.
 
     Raises:
-        OllamaUnavailableError: `models` boşsa (hiç model kurulu değilse).
+        OllamaUnavailableError: `models` boşsa (hiç model kurulu değilse)
+            ya da stdin yoksa VE `fallback_model` de kurulu modeller
+            arasında değilse/hiç verilmediyse.
     """
 
     if not models:
@@ -198,7 +232,18 @@ def prompt_user_to_select_model(models: list[str]) -> str:
         print(f"  {i}) {name}")
 
     while True:
-        choice = input(f"Hangi modeli kullanmak istiyorsunuz? (1-{len(models)}): ").strip()
+        try:
+            choice = input(f"Hangi modeli kullanmak istiyorsunuz? (1-{len(models)}): ").strip()
+        except (EOFError, KeyboardInterrupt) as exc:
+            if fallback_model in models:
+                print(f"\nEtkileşimli girdi yok; yedek modele düşülüyor: {fallback_model}\n")
+                return fallback_model
+            raise OllamaUnavailableError(
+                "Etkileşimli model seçimi yapılamadı (stdin yok) ve "
+                f"config.yaml::ollama_model ('{fallback_model}') kurulu modeller arasında değil. "
+                f"Kurulu modeller: {', '.join(models)}"
+            ) from exc
+
         if choice.isdigit() and 1 <= int(choice) <= len(models):
             selected = models[int(choice) - 1]
             print(f"Seçildi: {selected}\n")

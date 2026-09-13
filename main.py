@@ -72,7 +72,7 @@ def _start_llm_session(settings: Settings) -> tuple[OllamaServerManager, OllamaL
     server_manager = OllamaServerManager()
     try:
         server_manager.ensure_running()
-        selected_model = prompt_user_to_select_model(list_installed_models())
+        selected_model = prompt_user_to_select_model(list_installed_models(), fallback_model=settings.ollama_model)
     except OllamaUnavailableError as exc:
         print(f"Artemis başlatılamadı: {exc}")
         return None

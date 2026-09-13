@@ -237,7 +237,14 @@ class Settings(BaseModel):
     use_native_tool_calling: bool = False
     ollama_keep_alive: str = "1m"
     ollama_timeout_seconds: float = 120.0
-    dangerous_tools: list[str] = Field(default_factory=list)
+    # `tuple`, `list` DEĞİL: `frozen=True` yalnızca ALAN ATAMASINI
+    # (`settings.dangerous_tools = [...]`) engeller, listenin İÇERİĞİNİN
+    # yerinde değiştirilmesini (`settings.dangerous_tools.clear()`/
+    # `.append(...)`) DEĞİL — bu GÜVENLİK ayarı `list[str]` olarak
+    # kalsaydı herhangi bir tool, hiçbir iz bırakmadan config katmanı
+    # kısıtlamasını sessizce kapatabilirdi. `tuple` bunu tür seviyesinde
+    # imkansız kılar (bkz. `tests/test_settings.py`'deki karşılık gelen test).
+    dangerous_tools: tuple[str, ...] = Field(default_factory=tuple)
     voice_enabled: bool = True
     wake_word_enabled: bool = True
     wake_words: list[str] = Field(
