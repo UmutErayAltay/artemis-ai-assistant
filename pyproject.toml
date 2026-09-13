@@ -70,7 +70,20 @@ markers = [
 # `voice*` ve `ui*` bir dönem burada YOKTU: kurulan wheel `voice.router`
 # ya da `ui.overlay`'i import EDEMİYORDU, yani `pip install .` çalışmayan
 # bir kurulum üretiyordu.
-include = ["core*", "config*", "models*", "memory*", "plugins*", "utils*", "voice*", "ui*"]
+#
+# `prompts*` de AYNI hatayı taşıyordu ama SESSİZCE: `[tool.setuptools.
+# package-data]` aşağıda `prompts = ["*.md"]` diyordu, ama `prompts*`
+# bu `include` listesinde YOKTU (ve `prompts/` dizininde `__init__.py`
+# da yoktu) — yani `find` bu adı hiç bir PAKET olarak keşfetmiyordu, ve
+# ona bağlı `package-data` girdisi sessizce hiçbir şey yapmıyordu.
+# `pip install .` ile kurulan bir wheel, `core/prompt_builder.py`'nin
+# çalışma zamanında okumaya çalıştığı `system_prompt.md`'yi hiç
+# İÇERMİYORDU — asistan kurulduktan sonra sistem promptunu bulamıyordu.
+# `tests/test_packaging.py::test_runtime_prompt_file_is_shipped_as_
+# package_data` yalnızca TOML anahtarının VARLIĞINA bakıyordu, dosyanın
+# gerçekten paketlendiğine değil; bu yüzden bu drift testte hiç
+# yakalanmamıştı.
+include = ["core*", "config*", "models*", "prompts*", "memory*", "plugins*", "utils*", "voice*", "ui*"]
 
 [tool.setuptools.package-data]
 # `core/prompt_builder.py` bu dosyayı ÇALIŞMA ZAMANINDA okur; paket
