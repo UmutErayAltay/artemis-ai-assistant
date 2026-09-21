@@ -22,3 +22,10 @@ mypy>=1.11
 
 types-PyYAML>=6.0    # config/settings.py yaml.safe_load
 types-requests>=2.31 # voice/stt_cloud.py, voice/stt_azure.py
+
+# scripts/bench_tool_selection.py'nin ölçüm mantığı (Outcome/Scenario/Report,
+# classify, run_benchmark, format_report, load_scenarios) buraya taşındı —
+# HERHANGİ bir tool registry'sine takılabilsin diye. Henüz PyPI'de değil
+# (M1/M2 aşaması, ~/toolbench kardeş proje); bu yüzden path bağımlılığı.
+# PyPI'ye çıkınca (M3) bu satır `toolbench>=x` ile değişecek.
+-e ../toolbench
