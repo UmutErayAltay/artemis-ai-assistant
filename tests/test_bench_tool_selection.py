@@ -1,14 +1,17 @@
 """`scripts/bench_tool_selection.py` adapter testleri.
 
 Asıl ölçüm mantığı (`classify`/`run_benchmark`/`format_report`/
-`load_scenarios`, `Outcome`/`Scenario`/`Report` modelleri) `toolbench`
-paketine taşındı — o mantığın testleri artık orada (`~/toolbench/tests/`)
-ve burada TEKRARLANMIYOR. Bu dosyada yalnızca artemis'e özgü kalan kısım
-sınanıyor: `TOOL_REGISTRY`'den `dangerous_tools` kümesinin doğru üretilmesi
-ve gerçek registry ile toolbench'in `classify()`'ının BİRLİKTE doğru
-çalıştığının kanıtı — `.context` §6.9'daki asıl regresyonun (phi4-mini
-"Evi kapat"ı `windows.shutdown` sanması) hâlâ yakalandığını gösteren tek
-uçtan uca test dahil.
+`load_scenarios`, `Outcome`/`Scenario`/`Report` modelleri) `toolbench` adlı
+bağımsız pakete taşındı; o paketin kendi kapsamlı test suite'i
+`~/toolbench/tests/`'te. Bu repo şu an `scripts/_toolbench_vendor.py`
+üzerinden o paketin elle senkronize edilmiş bir kopyasını kullanıyor
+(bkz. `_toolbench_vendor.py`'nin başındaki not — path bağımlılığı CI'yi
+kırmıştı). Bu dosyada artemis'e özgü kalan kısım sınanıyor:
+`TOOL_REGISTRY`'den `dangerous_tools` kümesinin doğru üretilmesi ve
+gerçek registry ile `classify()`'ın BİRLİKTE doğru çalıştığının kanıtı —
+`.context` §6.9'daki asıl regresyonun (phi4-mini "Evi kapat"ı
+`windows.shutdown` sanması) hâlâ yakalandığını gösteren tek uçtan uca
+test dahil.
 """
 
 from __future__ import annotations

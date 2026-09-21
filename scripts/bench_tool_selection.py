@@ -27,15 +27,25 @@ yanlışlıkla seçildi). Bir modeli 14/20 + 1 tehlikeli, başka birini
 MİMARİ: BU DOSYA ARTIK İNCE BİR ADAPTER
 ----------------------------------------
 Asıl ölçüm mantığı (`Outcome`/`Scenario`/`Report` modelleri, `classify`,
-`run_benchmark`, `format_report`, `load_scenarios`) `toolbench` paketine
-taşındı (bkz. `~/toolbench`, kardeş bir local proje) — HERHANGİ bir tool
-registry'sine ve `get_tool_calls(system_prompt, user_input)` imzalı
-herhangi bir istemciye takılabilsin diye. Burada kalan tek şey artemis'e
-özgü olan: `TOOL_REGISTRY`'den "tehlikeli" tool kümesini üretmek
-(`dangerous_tools_from_registry`) ve gerçek `OllamaLLMClient`'ı bağlamak
-(`main`). Kıyasın mantık testleri artık `~/toolbench/tests/`'te; bu
-projenin `tests/test_bench_tool_selection.py`'si yalnızca adapter'ı ve
-gerçek registry ile birlikte çalıştığını sınar.
+`run_benchmark`, `format_report`, `load_scenarios`) `toolbench` adlı
+bağımsız, registry-agnostik bir pakete taşındı (`~/toolbench`, kardeş
+local proje — başka projelerde yeniden kullanılabilsin diye). Burada
+kalan tek şey artemis'e özgü olan: `TOOL_REGISTRY`'den "tehlikeli" tool
+kümesini üretmek (`dangerous_tools_from_registry`) ve gerçek
+`OllamaLLMClient`'ı bağlamak (`main`).
+
+NEDEN toolbench'TEN DEĞİL `_toolbench_vendor`'DAN IMPORT EDİYORUZ:
+`toolbench` henüz PyPI'de değil; `requirements-dev.txt`'e `-e ../toolbench`
+path bağımlılığı olarak eklenince GitHub Actions CI'yi kırdı (CI bu repoyu
+İZOLE klonluyor, `../toolbench` orada hiç yok — run 35584430941, "../toolbench
+is not a valid editable requirement"). Bu yüzden `scripts/
+_toolbench_vendor.py`, `~/toolbench/src/toolbench/`'in BİREBİR elle
+senkronize edilen bir kopyasıdır — kaynak orada değişirse buraya da
+taşınmalı. `toolbench` PyPI'ye çıkınca (M3) bu vendor dosyası kaldırılıp
+gerçek bir sürüm pin'i eklenecek. Kıyasın mantık testleri hem
+`~/toolbench/tests/`'te (bağımsız paketin kendi suite'i) hem şu an
+transitif olarak burada (`tests/test_bench_tool_selection.py`, vendor
+kopyasına karşı) çalışıyor.
 
 NASIL ÇALIŞIR
 -------------
@@ -55,7 +65,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from toolbench import (  # noqa: E402
+from core.enums import DangerLevel  # noqa: E402
+from core.plugin_loader import TOOL_REGISTRY, load_plugins  # noqa: E402
+from core.prompt_builder import build_system_prompt  # noqa: E402
+from scripts._toolbench_vendor import (  # noqa: E402
     Outcome,
     Report,
     Scenario,
@@ -65,10 +78,6 @@ from toolbench import (  # noqa: E402
     load_scenarios,
     run_benchmark,
 )
-
-from core.enums import DangerLevel  # noqa: E402
-from core.plugin_loader import TOOL_REGISTRY, load_plugins  # noqa: E402
-from core.prompt_builder import build_system_prompt  # noqa: E402
 
 DEFAULT_SCENARIO_PATH = REPO_ROOT / "tests" / "data" / "tool_selection_scenarios.json"
 
