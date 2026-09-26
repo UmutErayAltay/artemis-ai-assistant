@@ -2556,3 +2556,36 @@ Bilinçli olarak bu teslimatın DIŞINDA bırakılanlar (gerekçeli):
   `raw_text` retry'ı**, **`memory/context_memory.py`'nin WAL modu/hata
   yakalaması eksikliği** — bulundu, düzeltilmedi; bir sonraki turda ele
   alınmalı.
+
+## 38) "Artemis" + komut aynı nefeste söylenince komut kayboluyordu — §36d'nin tasarımı uygulandı (v3.19)
+
+§36d'de tasarımı hazır ama "ayrı bir istekte ele alınmalı" diye bırakılan
+hata: kullanıcı uyandırma sözcüğünü komutla duraksamadan söylerse,
+`WakeWordDetector` tüm cümleyi kendi arabelleğinde toplayıp yalnızca
+uyandırma sözcüğü var mı diye bakıyor, geri kalanını (komutun kendisini)
+hiçbir yere aktarmadan atıyordu.
+
+**Düzeltme, tasarımda öngörüldüğü gibi:** `WakeWordDetector.feed()`
+uyandırma sözcüğünü algıladığında, Whisper'a zaten gönderilmiş ham sesi
+`self._leftover_audio`'da tutar (`reset()` bunu TEMİZLEMEZ — `reset()`
+her tanıma denemesi sonunda çağrılır, kalıntı yalnızca yeni
+`take_leftover_audio()` "pull" metoduyla çekilene kadar kalıcıdır).
+`core/voice_loop.py::_record_and_transcribe`, komut kaydı başlamadan
+ÖNCE bu kalıntıyı `recorder.feed()` ile kaydın BAŞINA ekler — böylece
+"Artemis, orbit klasörü oluştur" tek nefeste söylendiğinde "orbit
+klasörü oluştur" kısmı artık kaybolmuyor. `feed()`'in dış imzası/davranışı
+(hâlâ `bool` döner) değişmedi.
+
+5 yeni regresyon testi (`tests/test_voice_wake_word.py`: kalıntının
+Whisper'a gönderilen sesle birebir aynı olması, pull semantiği — ikinci
+çağrı boş, algılanmayan uyanışta kalıntı bırakılmaması, taze bir
+detector'da kalıntı olmaması; `tests/test_voice_loop.py`: kalıntının
+gerçekten kaydın başına eklendiği, sırasıyla mikrofon sesinin ardından
+geldiği) eklendi. Tam suite: **635 passed** (önceki 630 + 5 yeni, 4
+skipped/2 deselected değişmedi, hiçbir mevcut test kırılmadı).
+
+**DOĞRULANMADI** (§36e'deki gibi aynı sınır): bu ortamda gerçek mikrofon
+yok, "aynı nefeste söyleme" senaryosu sentetik ses bloklarıyla test
+edildi ama gerçek bir Türkçe konuşmayla henüz denenmedi — kullanıcı
+`logs/artemis.log`'daki "Duyulan komut: ..." satırına bakarak
+doğrulamalı.

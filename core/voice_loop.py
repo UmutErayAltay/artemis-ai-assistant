@@ -349,6 +349,15 @@ class VoiceAssistant:
         recorder = self._ensure_recorder()
         recorder.reset()
 
+        # "Artemis" ile komut aynı nefeste söylendiyse komut, uyandırma
+        # tanımasına giden ses bloğunun içindedir; mikrofon döngüsü başlamadan
+        # ÖNCE bu ham sesi kaydın başına ekliyoruz (bkz. README §36d,
+        # `voice/wake_word.py::take_leftover_audio`).
+        if self._wake_detector is not None:
+            leftover = self._wake_detector.take_leftover_audio()
+            if leftover:
+                recorder.feed(leftover)
+
         while not self._stop_event.is_set():
             block = mic.read_block()
             self._overlay.set_amplitude(rms_amplitude(block))

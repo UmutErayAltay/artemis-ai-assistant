@@ -234,6 +234,12 @@ class WakeWordDetector:
         self._silence_run = 0
         self._buffered_seconds = 0.0
 
+        # Uyandırma sözcüğünün tanındığı o nefeste söylenmiş olabilecek
+        # komutun ham sesi. `reset()` BUNU TEMİZLEMEZ — `reset()` `feed()`
+        # içinden her tanıma denemesi sonunda çağrılır; değer ancak
+        # `take_leftover_audio()` ile çekilene kadar kalıcıdır.
+        self._leftover_audio: bytes = b""
+
     def _ensure_model(self):
         """Whisper modelini ilk gerçek tanıma denemesinde oluşturur (lazy).
 
@@ -416,7 +422,28 @@ class WakeWordDetector:
 
         audio = b"".join(self._speech_blocks)
         self.reset()
-        return self._recognize(audio)
+        matched = self._recognize(audio)
+        if matched:
+            self._leftover_audio = audio
+        return matched
+
+    def take_leftover_audio(self) -> bytes:
+        """Uyanışın içinde kalan ham sesi bir kez döndürür ve temizler.
+
+        "Artemis" ile komut aynı nefeste, duraksamadan söylendiğinde
+        komutun kendisi de uyandırma tanımasına giden ses bloğunun
+        İÇİNDEdir; Whisper'a zaten gönderilmiş o ham ses burada bir kez
+        geri verilir. `core/voice_loop.py` bunu uyanışın hemen ardından
+        başlayan komut kaydının BAŞINA ekler — aksi hâlde aynı nefeste
+        söylenen komut sessizce kaybolur (README §36d).
+
+        Returns:
+            Ham 16-bit PCM ses ya da kalıntı yoksa boş bayt dizisi.
+        """
+
+        audio = self._leftover_audio
+        self._leftover_audio = b''
+        return audio
 
     def _start_speech(self) -> None:
         """Konuşmanın başladığını işaretler, ön-tamponu birikime aktarır.
