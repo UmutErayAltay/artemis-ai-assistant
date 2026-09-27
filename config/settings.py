@@ -155,6 +155,42 @@ class Settings(BaseModel):
             olduğundan orada `whisper_model_size` (varsayılan "small")
             geçerlidir. Ölçüm: "tiny" 0.81 sn'lik klibi 0.24 sn'de,
             "Artemis"i doğru tanıyarak çözüyor.
+        llm_provider: Asistanın beyninin (LLM'in) nereden besleneceği:
+            "auto" (varsayılan — önce OpenRouter/bulut, hata/internet/
+            anahtar yoksa otomatik yerel Ollama'ya düşer), "cloud"
+            (yalnızca OpenRouter; başarısız olursa dürüstçe hata verir),
+            "local" (yalnızca yerel Ollama — hiçbir metin dışarı
+            çıkmaz). Bkz. `core/llm_router.py`.
+            NEDEN VARSAYILAN "auto": amaç, günlük kullanımda bilgisayarı
+            kastırmadan Artemis'i açabilmek. Yerel model, ilk gerçek
+            istek gelene kadar VRAM/RAM'e YÜKLENMEZ (bkz.
+            `main.py::_start_llm_session`); "auto" modda OpenRouter
+            çalıştığı sürece o yükleme hiç gerçekleşmez, yani çok
+            gigabaytlık bir model indirip çalıştırmaya gerek kalmadan
+            (multi-GB VRAM + yerel disk/RAM maliyeti olmadan) asistan
+            kullanılabilir olur. Anahtar hiçbir yerde tanımlı değilse
+            bulut denemesi karşılaşma yapmadan başarısız olur ve yönlendirici
+            doğrudan yerele düşer — yani "auto" anahtarsız da, hiçbir şey
+            ayarlamadan çalışır.
+        openrouter_model: `llm_provider` cloud/auto iken kullanılacak
+            OpenRouter model slug'ı. TAYMAK ZORUNLU ve BÜYÜK/KÜÇÜK HARF
+            DUYARLIDIR: yanlış yazılmış bir slug'ı OpenRouter "anlaşılır
+            bir model bulunamadı" mesajıyla DEĞİL, yardımcı olmayan bir
+            HTTP 400 gövdesiyle reddeder (bkz. `ollama_model` alanının
+            etiketle ilgili notu — aynı sınıf bir arıza, başka bir yerden).
+            Değer varsayılan olarak BİR ÜCRETSİZ modeldir (":free" son eki):
+            OpenRouter'ın ücretsiz kotalı modeli "bedava" değil, ücretsiz
+            kapsamındadır ve bu katalog ZAMANLA DEĞİŞİR. Bulut modunda
+            HTTP 402 alıyorsanız önce buradaki slug'ın hâlâ ücretsiz
+            olup olmadığını https://openrouter.ai/models?max_price=0
+            adresinden kontrol edin.
+        openrouter_timeout_seconds: Tek bir OpenRouter isteği için
+            tanınan azami süre. Ollama'nın (120 sn) yarısı seçildi: bulut
+            bir uzak sunucudur, takılı kalması beklenmez ve beklenmemeli —
+            kullanıcı 30 saniye boyunca tepkisiz bir asistanla kalmak
+            yerine hızlıca yerel modele düşmeyi tercih eder. Boşta
+            beklemek, soğuma süresi boyunca yanlış sağlayıcıda çalışmaktan
+            daha kötüdür (bkz. `core/llm_router.py`).
         stt_provider: Konuşma tanımanın nereden yapılacağı: "auto"
             (varsayılan — önce bulut, hata/internet yoksa otomatik yerele
             düşer), "cloud" (yalnızca bulut; başarısız olursa dürüstçe
@@ -274,6 +310,13 @@ class Settings(BaseModel):
     voice_hotkey: str = "ctrl+alt+a"
     wake_word_model_size: str = "tiny"
 
+    # --- Hibrit (bulut/yerel) LLM ayarları ---
+    # Sesin (STT/TTS) hibrit olduğu gibi BEYİN de hibrit: OpenRouter
+    # çalışırken yerel model hiç yüklenmez, olmazsa yerele düşülür.
+    llm_provider: Literal["auto", "cloud", "local"] = "auto"
+    openrouter_model: str = "meta-llama/llama-3.1-8b-instruct:free"
+    openrouter_timeout_seconds: float = 30.0
+
     # --- Hibrit (bulut/yerel) ses ayarları ---
     stt_provider: Literal["auto", "cloud", "local"] = "auto"
     tts_provider: Literal["auto", "cloud", "local"] = "auto"
@@ -327,6 +370,41 @@ def get_groq_api_key() -> str | None:
         return from_secrets
 
     return _read_from_windows_environment("GROQ_API_KEY")
+
+
+def get_openrouter_api_key() -> str | None:
+    """OpenRouter API anahtarını, gizli kalacağı garanti edilen kaynaklardan okur.
+
+    Anahtar BİLİNÇLİ olarak `Settings`/`config.yaml` üzerinden gelmez:
+    `config/config.yaml` versiyon kontrolünde izlenen bir dosyadır ve bu
+    depo herkese açıktır — oraya yazılan bir anahtar ilk commit'te
+    yayınlanmış olurdu. Bunun yerine üç kaynak sırayla denenir:
+
+        1. `OPENROUTER_API_KEY` ortam değişkeni (önerilen).
+        2. `config/secrets.yaml` dosyasındaki `openrouter_api_key` alanı.
+           Bu dosya `.gitignore`'dadır; commit edilmez.
+        3. Windows kullanıcı ortam değişkenleri (kayıt defteri).
+           Sebep: `setx OPENROUTER_API_KEY ...` değeri kalıcı olarak
+           kaydeder ama ZATEN AÇIK olan terminalleri etkilemez. Kullanıcı
+           `setx` çalıştırıp aynı pencereden Artemis'i başlattığında anahtar
+           "kayıtlı ama görünmez" olur; bu adım o kafa karıştırıcı
+           durumu ortadan kaldırır.
+
+    Returns:
+        Anahtar, ya da hiçbir kaynakta yoksa None (bu bir hata değildir —
+        `llm_provider: "auto"` modda yönlendirici doğrudan yerel Ollama'ya
+        düşer, bkz. `core/llm_router.py`).
+    """
+
+    from_env = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if from_env:
+        return from_env
+
+    from_secrets = _read_from_secrets_file("openrouter_api_key")
+    if from_secrets:
+        return from_secrets
+
+    return _read_from_windows_environment("OPENROUTER_API_KEY")
 
 
 def get_azure_speech_credentials() -> tuple[str | None, str | None]:

@@ -23,7 +23,8 @@ import logging
 from typing import Any
 
 from core.dispatcher import ToolDispatcher
-from core.llm_client import LLMResponseParseError, OllamaLLMClient
+from core.llm_client import LLMResponseParseError
+from core.llm_types import LLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
 from utils.confirmation import format_confirmation_arguments
@@ -74,12 +75,15 @@ def _confirm_with_user(tool_name: str, arguments: dict[str, Any]) -> bool:
     return is_clear_affirmative_answer(answer)
 
 
-def run(dispatcher: ToolDispatcher, llm_client: OllamaLLMClient) -> None:
+def run(dispatcher: ToolDispatcher, llm_client: LLMClient) -> None:
     """Terminalden komut alıp LLM üzerinden tool'lara dağıtan ana döngü.
 
     Args:
         dispatcher: Kullanıma hazır ToolDispatcher (tool'lar yüklenmiş olmalı).
-        llm_client: Yerel Ollama modeliyle konuşacak istemci.
+        llm_client: Asistanın beyniyle konuşacak istemci — yerel Ollama, bulut
+            OpenRouter ya da ikisini seçen `core/llm_router.py::LLMRouter`
+            olabilir; bu döngü HANGİSİ olduğunu bilmez, yalnızca
+            `core/llm_types.py::LLMClient` sözleşmesini çağırır.
     """
 
     system_prompt = build_system_prompt()

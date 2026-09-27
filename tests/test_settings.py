@@ -22,6 +22,7 @@ from config.settings import (
     Settings,
     get_azure_speech_credentials,
     get_groq_api_key,
+    get_openrouter_api_key,
     get_settings,
 )
 
@@ -217,3 +218,93 @@ def test_azure_credentials_need_both_key_and_region(
 
     assert key == "anahtar"
     assert region is None, "bölge yoksa None dönmeli (ikisinden biri eksikse bulut kullanılamaz)"
+
+
+# --- OpenRouter anahtarı -------------------------------------------------
+#
+# Üç kaynağın sırası ve izolasyon kuralları Groq ile BİREBİR aynıdır; tek
+# fark anahtarın adı/ortam değişkenidir. Testler de bu yüzden Groq
+# testlerinin kopyasıdır: aynı hatayı iki ayrı anahtar için iki ayrı yerden
+# yakalamak, tek bir yardımcıya soyutlamaktan daha güvenli.
+
+
+def test_openrouter_key_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "  gizli-anahtar  ")
+
+    assert get_openrouter_api_key() == "gizli-anahtar"
+
+
+def test_openrouter_key_is_none_when_nowhere_to_be_found(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Anahtarın yokluğu HATA DEĞİLDİR.
+
+    `llm_provider: "auto"` varsayılanı: OpenRouter anahtarı olmayan bir
+    kullanıcı da hiçbir uyarı almadan çalışmaya devam eder, yalnızca
+    yerel modele düşer. Bu, "bulut ekledim" deyip herkesin ilk gün
+    kırmızı ekranla karşılaşmasını önler.
+    """
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr("config.settings.SECRETS_PATH", tmp_path / "yok.yaml")
+    # bkz. test_groq_key_is_none_when_nowhere_to_be_found — gerçek makinede
+    # `setx OPENROUTER_API_KEY ...` çalıştırılmışsa test yanlışlıkla geçerdi.
+    monkeypatch.setattr("config.settings._read_from_windows_environment", lambda variable: None)
+
+    assert get_openrouter_api_key() is None
+
+
+def test_openrouter_key_falls_back_to_the_secrets_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    secrets = _write(tmp_path / "secrets.yaml", 'openrouter_api_key: "dosyadan-gelen"\n')
+    monkeypatch.setattr("config.settings.SECRETS_PATH", secrets)
+
+    assert get_openrouter_api_key() == "dosyadan-gelen"
+
+
+def test_openrouter_environment_wins_over_the_secrets_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ortamdan")
+    monkeypatch.setattr(
+        "config.settings.SECRETS_PATH",
+        _write(tmp_path / "s.yaml", 'openrouter_api_key: "dosyadan"\n'),
+    )
+
+    assert get_openrouter_api_key() == "ortamdan"
+
+
+# --- llm_provider --------------------------------------------------------
+
+
+def test_llm_provider_rejects_invalid_value(tmp_path: Path) -> None:
+    """`llm_provider: "bulut"` açılışta reddedilmeli.
+
+    Alan `Literal["auto", "cloud", "local"]`; kabul edilmeyen bir değer
+    burada sessizce "auto"ya düşseydi, kullanıcı "bulut" yazıp yerel
+    modelin çalıştığını sanardı — hata ayıklaması en pahalı türden bir
+    yanlış inanç. Aynı gerekçe `test_invalid_enum_value_is_rejected_at_startup`.
+    """
+
+    path = _write(tmp_path / "c.yaml", 'llm_provider: "bulut"\n')
+
+    with pytest.raises(ConfigError):
+        get_settings(path)
+
+
+def test_llm_provider_defaults_to_auto(tmp_path: Path) -> None:
+    """Varsayılan "auto" olmalı: yeni kurulumda kullanıcı hiçbir şey
+    ayarlamadan günlük kullanımda yerel model YÜKLENMESİN (bkz.
+    config/config.yaml'daki "NEDEN VARSAYILAN 'auto'" bloğu)."""
+
+    assert get_settings(tmp_path / "yok.yaml").llm_provider == "auto"
+
+
+def test_openrouter_model_default_is_a_free_slug() -> None:
+    """Varsayılan model BİR ÜCRETSİZ slug olmalı — ücretli bir model
+    varsayılan olsaydı, anahtarı olan her kullanıcı farkında olmadan
+    faturalandırılırdı."""
+
+    assert Settings().openrouter_model.endswith(":free")

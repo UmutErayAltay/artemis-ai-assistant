@@ -2589,3 +2589,147 @@ yok, "aynı nefeste söyleme" senaryosu sentetik ses bloklarıyla test
 edildi ama gerçek bir Türkçe konuşmayla henüz denenmedi — kullanıcı
 `logs/artemis.log`'daki "Duyulan komut: ..." satırına bakarak
 doğrulamalı.
+
+## 39) Artemis'e OpenRouter (bulut, ücretsiz model) desteği eklendi (v3.20)
+
+İstek: "OpenRouter API'sı ekleyelim, ücretsiz model kullanalım, bilgisayarı
+kastırmadan yapalım." Sesin (STT/TTS) hibrit olduğu gibi **beyin** de
+artık hibrit: internet varken buluttaki bir model konuşur, yoksa yereldeki
+Ollama. Kararı veren tek yer `core/llm_router.py`, tıpkı `voice/router.py`
+gibi; `core/conversation_loop.py` ve `core/voice_loop.py` hangi
+sağlayıcının konuştuğunu **bilmez**.
+
+Yeni dosyalar: `core/openrouter_client.py` (OpenRouter'ın OpenAI-uyumlu
+API'siyle konuşan istemci), `core/llm_router.py` (bulut/yerel kararı),
+`core/llm_types.py` (üç istemcinin ortak `LLMClient` Protocol'ü — döngüler
+artık `OllamaLLMClient` değil bu sözleşmeyi tiplemesiyle alıyor).
+`config/settings.py`'ye `llm_provider` / `openrouter_model` /
+`openrouter_timeout_seconds` ve üç kaynaklı `get_openrouter_api_key()`
+eklendi; `main.py::_start_llm_session` üç dala ayrıldı.
+
+**"Bilgisayarı kastırmadan" vaadi tam olarak nerede gerçekleşiyor.**
+Vaat modeli indirmek değil, **modeli belleğe yüklememek**: Ollama
+ağırlıklarını ilk gerçek `chat()` çağrısında VRAM/RAM'e alıyor, oysa
+`_start_llm_session` yalnızca `ensure_running()` + model *seçimi* yapıyor.
+`LLMRouter`'ın `local_factory`'si tembeldir; OpenRouter bir kez bile olsa
+yanıt verirse yerel istemci hiç kurulmaz, dolayısıyla yerel model hiç
+yüklenmez. Kullanıcı bu yüzden günlük kullanımda multi-GB bir model
+indirmeden asistanı kullanabilir. Buna karşılık Ollama sunucusu başlatılır
+ve model seçme menüsü sorulur — bu bilinçli bir kabul: menü bir saniyelik
+konsol etkileşimidir (bellek maliyeti taşımaz) ve `--voice` gibi konsolsuz
+bir yolda ilk konuşmada gecikmeli bir `input()` çağrısı işi kilitlerdi.
+
+**İkinci tool-call UYGULAMASI yazılmadı.** Şema, düzeltme mesajı ve
+ayrıştırıcı `core/llm_client`'dan doğrudan import edilir
+(`OllamaLLMClient._response_schema()`, `extract_tool_calls`,
+`_COMMAND_GATE_PROMPT`) — README §16a'nın öğrettiği ders: şema ile sistem
+promptu ayrı ayrı yeniden yazılırsa sessizce ayrışırlar. Doğrulayan test:
+bulutun ilk isteğindeki şema, Ollama'nın şemasıyla **birebir aynıdır**
+(`TOOL_REGISTRY`'nin güncel tool adlarını `enum`'a dayatır).
+
+**Hata sınıflandırması yönlendiricinin doğruluğunu belirliyor.** Anahtar
+yoksa hiç HTTP isteği atılmadan hata; 401/403 (anahtar), 402 (ücretsiz kota
+tükendi / model artık ücretsiz değil), 429 (hız sınırı) ve ağ hataları
+**strateji denemeden** yükselir — sorun format değildir, aynı isteği üç
+kez tekrarlamak yalnızca kullanıcıyı bekletir. Yalnızca 400/422 ve bozuk
+gövde "bu strateji işe yaramadı" sayılır ve sıradakine düşülür
+(`json_schema` → `json_object` → kısıtsız). `OpenRouterUnavailableError`
+tek bir şemsiye istisnadır: `voice/stt_cloud.py::CloudSpeechUnavailableError`
+deseni. Anahtar **constructor'da doğrulanmaz** (yönlendirici anahtarsız
+da kurulabilmeli), hiçbir hata mesajına sızmaz (sızma testi var).
+
+60 yeni test: `tests/test_openrouter_client.py` (30 — başarılı yanıt,
+strateji düşüşü, çalışan stratejinin sonraki çağrıda başa alınması,
+401/402/429/zaman aşımı, anahtar yokken sıfır istek, düzeltme döngüsü,
+kapının "açık başarısız" olması, `requests` kurulu değilken import),
+`tests/test_llm_router.py` (21 — üç mod, üç metodun tamamı, soğuma,
+tembel `local_factory`, değişim logu), `tests/test_settings.py` (+7), 
+`tests/test_config_model.py` (+2). Tam suite: **706 passed** (646 + 60,
+hiçbir mevcut test kırılmadı); `ruff check` ve `mypy` temiz.
+
+Bu sırada bulunan bir GERÇEK hata: "bilinen çalışan strateji başa alınsın"
+satırında liste çiftleri (anahtar, ek parametreler) olduğu için
+`item != known` **her zaman** doğru dönüyor, dolayısıyla liste hiç
+sıralanmıyordu. Satır olmadan da her şey çalışıyor gibi göründüğü için
+(kısıtlı istek, geçerli cevap) yalnızca "çalışan strateji ikinci çağrıda
+da başa alınmalı" testi yakaladı; `item[0] != known` ile düzeltildi.
+
+**DOĞRULANMADI:** bu ortamda gerçek bir OpenRouter API anahtarı ve
+ağ erişimi yok; hiçbir istek gerçekten atılmadı, tüm HTTP davranışı sahte
+`requests.post` ile test edildi. Özellikle **ücretsiz modellerin
+`response_format: json_schema` desteği doğrulanamadı** — hangi ücretsiz
+modelin bu seviyeyi kabul ettiği sağlayıcıya ve modele göre değişiyor ve
+bu ortamda ölçülemiyor. Bu yüzden strateji zinciri bu belirsizliğe göre
+yazıldı (desteklenmezse 400 döner, sıradakine düşülür) ve hiçbir
+README/ayar metni "her ücretsiz modelde çalışır" DEMİYOR. İlk gerçek
+kullanımda `logs/artemis.log`'daki "LLM sağlayıcı: ..." satırına ve 402
+alıyorsanız `https://openrouter.ai/models?max_price=0` adresine bakarak
+kullanıcı doğrulamalı.
+
+## 40) Kalıcı sohbet penceresi, ayarlar penceresi ve ortak tasarım dili (v3.21)
+
+Umut "Artemis için güzel bir arayüz yapalım, AI yapmış gibi olmasın,
+renkleri düzgün seçelim" dedi. Üç ekranın hepsi tek turda geldi:
+
+- **`ui/theme.py` (yeni):** tüm ekranların paylaştığı TEK renk/font
+  kaynağı. Palet İCAT EDİLMEDİ: `ui/overlay.py`'nin zaten kullandığı
+  mavi→mor→pembe degrade Apple'ın Sistem Renkleri'ne (systemBlue/
+  Purple/Pink/Teal/Orange/Red) birebir karşılık geliyordu; bu modül onu
+  genelleştirdi. Üç ayrı ekranın üç ayrı paleti icat etmesi, "AI yapmış
+  gibi" hissin en kısa yoludur — tek kaynak bunu yapısal olarak önlüyor.
+- **`ui/chat_window.py` (yeni):** `--chat-gui` ile açılan, kalıcı,
+  iMessage-tarzı balonlu bir sohbet penceresi — terminaldeki `--chat`
+  KALDIRILMADI, ikisi de kalıcı paralel giriş noktası (aynı gerekçeyle:
+  bazı ortamlarda GUI istenmez/yoktur). Motor `_ChatWorker` adlı ayrı bir
+  `QThread`'de yaşar; onay gerektiren adımlar (`filesystem.delete` gibi)
+  iş parçacığını `threading.Event` ile durdurup GUI'de temalı bir
+  `QMessageBox` açan bir köprüden geçer — GUI iş parçacığı asla bloklanmaz,
+  bloklanan yalnızca işçi iş parçacığıdır (bkz. modülün `_confirm`
+  dokstring'i, üç adımı da açıkça sayıyor).
+  **Gerçek bir yarış koşulu bulunup düzeltildi:** pencere kapatılırken
+  `close()` ile turun bitişi arasındaki birkaç mikrosaniyelik pencerede
+  `QThread` beklemeden yok ediliyor, Qt "Destroyed while thread is still
+  running" diyip süreç `Fatal Python error: Aborted` ile çöküyordu
+  (ölçüldü). Çözüm: kapanış, yalnızca tur SÜRERKEN en fazla 200 ms
+  koşullu bekler (`_CLOSE_GRACE_MS`) — boştayken anında, meşgulken
+  donmadan kapanır.
+- **`ui/settings_window.py` (yeni):** sık kullanılan on ayarı (LLM
+  sağlayıcı, model adları, ses ayarları, kısayol) düz bir formda toplar.
+  **`config.yaml`'a asla tam YAML dump/reparse YAPMAZ** — bu dosya
+  projenin en yoğun belgelenmiş kullanıcı yüzeyi, bir `safe_dump` bütün
+  yorumları silerdi. `apply_config_overrides` yalnızca ilgili `key: ...`
+  satırlarını metin seviyesinde değiştirir/ekler (idempotent, atomik
+  `.tmp`→`replace` yazım, `get_settings.cache_clear()`). "Gelişmiş
+  ayarlar için config.yaml dosyasını aç" düğmesiyle küratörlenmemiş her
+  şeye (yollar, `wake_words`, `mcp_servers`) hâlâ erişilebiliyor.
+  `--settings` ile tek başına ya da `--voice` çalışırken tepsi menüsünden
+  ("Ayarlar") açılabilir.
+- **`ui/overlay.py` restili:** sıfır görsel değişiklik, yalnızca DRY —
+  tüm renkler/font artık `ui/theme.py`'den. Restilleme sırasında paletin
+  bir köşesi (`THINKING` durumunun uç rengi, `QColor(120, 92, 255)`)
+  paylaşılan altı rengin HİÇBİRİYLE eşleşmediği bulundu; paylaşılan
+  paleti zorlamak yerine yerel bir sabit (`_THINKING_EDGE`) olarak
+  bırakıldı, bir yorum bunu açıklıyor.
+- **`ui/tray.py`:** isteğe bağlı `on_settings` parametresi — verilmezse
+  menü bugünküyle birebir aynı kalır.
+
+**Görsel doğrulama gerçekten yapıldı** (bu bir iddia değil): bu ortamda
+`QT_QPA_PLATFORM=offscreen` ile gerçek bir `QApplication` çalıştırılıp
+sohbet penceresi (sahte, hiçbir tool çalıştırmayan bir LLM istemcisiyle,
+`ui/chat_window.py::_DemoLLMClient`), ayarlar penceresi ve overlay'in üç
+durumu ekran görüntüsü olarak yakalandı ve gözle incelendi — mavi/koyu
+balon ayrımı, form okunabilirliği ve overlay'in restilden önceki
+haliyle piksel piksel aynı göründüğü doğrulandı. Tek bilinmeyen: bu
+Linux ofscreen render, gerçek Windows'taki ClearType/DPI ile birebir
+aynı değildir; asıl doğrulama kullanıcının kendi ekranında.
+
+Tam suite: **755 passed** (721 + 34 yeni sohbet penceresi testi, hiçbir
+mevcut test kırılmadı). `tests/test_ui_chat_window.py` (34),
+`tests/test_ui_settings_window.py` (15, tamamı `config.yaml` yaması gibi
+saf/dosya seviyeli testler, canlı `QWidget` gerektirmiyor).
+
+**DOĞRULANMADI:** onay diyaloğuna gerçek bir fare tıklamasıyla
+basılması — bu ortamda hiçbir CI/otomasyon aracı gerçek bir mouse click
+üretemiyor; köprünün `event`/`result` el sıkışması test edildi, tıklamanın
+kendisi edilmedi. Kullanıcı Windows'ta `filesystem.delete` gibi onay
+gerektiren bir komutu sohbet penceresinden gerçekten denemeli.
