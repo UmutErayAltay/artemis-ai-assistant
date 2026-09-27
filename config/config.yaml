@@ -54,17 +54,31 @@ dangerous_tools: []
 # olur, internet/anahtar yoksa da sessizce yerele düşer.
 llm_provider: "auto"
 
-# OpenRouter model slug'ı. TAYMAK ZORUNLU, BÜYÜK/KÜÇÜK HARF DUYARLI.
+# OpenRouter model slug'ı. TAM YAZILMAK ZORUNLU, BÜYÜK/KÜÇÜK HARF DUYARLI.
 # Yanlış yazılmış bir slug'ı OpenRouter anlaşılır bir "model yok" mesajıyla
 # değil, yardımcı olmayan bir HTTP 400 gövdesiyle reddeder — yukarıdaki
 # "ETİKET TAM YAZILMALI" notuyla aynı sınıf bir arıza. Doğru slug'ı
 # https://openrouter.ai/models adresinden birebir kopyalayın.
 #
-# Varsayılan değer ":free" son ekli BİR ÜCRETSİZ modeldir ve ücretsiz
-# katalog ZAMANLA DEĞİŞİR; 402 (kota) hatası alıyorsanız slug'ın hâlâ
-# ücretsiz olduğunu https://openrouter.ai/models?max_price=0 adresinden
-# kontrol edin.
-openrouter_model: "meta-llama/llama-3.1-8b-instruct:free"
+# NEDEN BÜYÜK BİR MODEL SEÇİLDİ (küçük değil): OpenRouter'ın ücretsiz
+# katmanı MODEL BÜYÜKLÜĞÜNE göre değil, HESAP BAŞINA İSTEK SAYISINA göre
+# sınırlıyor (varsayılan günlük 50 istek, hesaba en az 10$ kredi
+# yüklenince 1000'e çıkıyor; dakikada 20 istek tavanı ikisinde de sabit).
+# Yani küçük bir model seçmenin kota tarafında hiçbir kazancı yok —
+# kalite/hız dengesinde en iyi ücretsiz modeli seçmek mantıklı. Aynı
+# sebeple bu modelin cevap kalitesi Artemis'in son sözü olur: sesli
+# asistanda `assistant.reply` argümanını YAZAN model budur, ayrı bir
+# "son cevabı düzenleyen" katman yoktur (bkz. core/voice_loop.py::
+# _speak — konuşulan metin doğrudan bu modelin ürettiği JSON'dan gelir).
+#
+# `nvidia/nemotron-3-ultra-550b-a55b:free`: bu hesapta zaten kullanılan,
+# çalıştığı doğrulanmış büyük bir ücretsiz model (bkz. vault'taki
+# nemotron-* ajan filosu — AYNI hesabın günlük 50 isteklik kotasını
+# PAYLAŞIR; cor'un ajan trafiği yoğunsa Artemis'in payı azalabilir).
+# Ücretsiz katalog ZAMANLA DEĞİŞİR; 402 (kota) hatası alıyorsanız
+# slug'ın hâlâ ücretsiz olduğunu
+# https://openrouter.ai/models?max_price=0 adresinden kontrol edin.
+openrouter_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 # Tek bir OpenRouter isteğinin azami süresi (saniye). Ollama'nın yarısı:
 # bulut bir uzak sunucudur, takılı kalması beklenmez — 30 saniye sonra

@@ -173,17 +173,24 @@ class Settings(BaseModel):
             doğrudan yerele düşer — yani "auto" anahtarsız da, hiçbir şey
             ayarlamadan çalışır.
         openrouter_model: `llm_provider` cloud/auto iken kullanılacak
-            OpenRouter model slug'ı. TAYMAK ZORUNLU ve BÜYÜK/KÜÇÜK HARF
-            DUYARLIDIR: yanlış yazılmış bir slug'ı OpenRouter "anlaşılır
-            bir model bulunamadı" mesajıyla DEĞİL, yardımcı olmayan bir
-            HTTP 400 gövdesiyle reddeder (bkz. `ollama_model` alanının
-            etiketle ilgili notu — aynı sınıf bir arıza, başka bir yerden).
-            Değer varsayılan olarak BİR ÜCRETSİZ modeldir (":free" son eki):
-            OpenRouter'ın ücretsiz kotalı modeli "bedava" değil, ücretsiz
-            kapsamındadır ve bu katalog ZAMANLA DEĞİŞİR. Bulut modunda
-            HTTP 402 alıyorsanız önce buradaki slug'ın hâlâ ücretsiz
-            olup olmadığını https://openrouter.ai/models?max_price=0
-            adresinden kontrol edin.
+            OpenRouter model slug'ı. TAM YAZILMAK ZORUNLU ve BÜYÜK/KÜÇÜK
+            HARF DUYARLIDIR: yanlış yazılmış bir slug'ı OpenRouter
+            "anlaşılır bir model bulunamadı" mesajıyla DEĞİL, yardımcı
+            olmayan bir HTTP 400 gövdesiyle reddeder (bkz. `ollama_model`
+            alanının etiketle ilgili notu — aynı sınıf bir arıza, başka
+            bir yerden). Değer varsayılan olarak BİR ÜCRETSİZ modeldir
+            (":free" son eki). BÜYÜK bir model bilinçli seçildi: OpenRouter'ın
+            ücretsiz katmanı model büyüklüğüne değil HESAP BAŞINA İSTEK
+            SAYISINA (varsayılan günlük 50, dakikada 20 tavan) göre
+            sınırlıyor — küçük bir modele düşmenin kota tarafında hiçbir
+            kazancı yok, o yüzden kalitede ödün vermeye gerek yok. Bu
+            aynı zamanda son sözdür: sesli asistanda `assistant.reply`
+            argümanını YAZAN model budur (bkz. `core/voice_loop.py::
+            VoiceAssistant._speak`), ayrı bir "cevabı düzenleyen" katman
+            yoktur. Ücretsiz katalog ZAMANLA DEĞİŞİR; HTTP 402 alıyorsanız
+            önce buradaki slug'ın hâlâ ücretsiz olup olmadığını
+            https://openrouter.ai/models?max_price=0 adresinden kontrol
+            edin.
         openrouter_timeout_seconds: Tek bir OpenRouter isteği için
             tanınan azami süre. Ollama'nın (120 sn) yarısı seçildi: bulut
             bir uzak sunucudur, takılı kalması beklenmez ve beklenmemeli —
@@ -314,7 +321,7 @@ class Settings(BaseModel):
     # Sesin (STT/TTS) hibrit olduğu gibi BEYİN de hibrit: OpenRouter
     # çalışırken yerel model hiç yüklenmez, olmazsa yerele düşülür.
     llm_provider: Literal["auto", "cloud", "local"] = "auto"
-    openrouter_model: str = "meta-llama/llama-3.1-8b-instruct:free"
+    openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
     openrouter_timeout_seconds: float = 30.0
 
     # --- Hibrit (bulut/yerel) ses ayarları ---

@@ -76,7 +76,7 @@ class OpenRouterLLMClient:
     ikisini şeffafça takas edebilir.
 
     Args:
-        model: OpenRouter model slug'ı (örn. "meta-llama/llama-3.1-8b-instruct:free").
+        model: OpenRouter model slug'ı (örn. "nvidia/nemotron-3-ultra-550b-a55b:free").
             `config/config.yaml::openrouter_model`'den gelir.
         api_key: Verilmezse constructor'da HİÇ doğrulanmaz (bkz. GroqSpeechToText'in
             aynı gerekçesi) — yönlendiricinin bu nesneyi anahtarsız da kurabilmesi için;
