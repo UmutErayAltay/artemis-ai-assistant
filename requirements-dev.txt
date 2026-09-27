@@ -22,3 +22,12 @@ mypy>=1.11
 
 types-PyYAML>=6.0    # config/settings.py yaml.safe_load
 types-requests>=2.31 # voice/stt_cloud.py, voice/stt_azure.py
+
+# NOT: scripts/bench_tool_selection.py'nin ölçüm mantığı `toolbench` adlı
+# bağımsız bir pakete taşındı (~/toolbench, kardeş local proje). Burada bir
+# `-e ../toolbench` path bağımlılığı OLARAK EKLENMİŞTİ ama GitHub Actions
+# CI'yi kırdı (CI bu repoyu izole klonluyor, ../toolbench orada yok — run
+# 35584430941). Şimdilik `scripts/_toolbench_vendor.py` (elle senkronize
+# kopya) kullanılıyor, ekstra bağımlılık gerekmiyor. `toolbench` PyPI'ye
+# çıkınca (M3) burada gerçek bir `toolbench>=x` satırı eklenip vendor
+# dosyası kaldırılacak.

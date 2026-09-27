@@ -114,17 +114,21 @@ class FakeSTT:
 
     `hotwords`'ü de kaydeder: özel isim ipucunun gerçekten modele kadar
     ulaştığı bu sayede doğrulanabilir (yabancı uygulama adlarının doğru
-    tanınmasının tek dayanağı budur).
+    tanınmasının tek dayanağı budur). `audio` da aynı şekilde saklanır:
+    tanımaya giren sesin TAMAMINI görmek, kalıntının kaydın başına eklendiğini
+    doğrulamanın tek yoludur (bkz. README §36d).
     """
 
     def __init__(self, text: str) -> None:
         self._text = text
         self.calls = 0
         self.hotwords: list[str | None] = []
+        self.audio: bytes = b""
 
     def transcribe(self, audio: bytes, hotwords: str | None = None) -> str:
         self.calls += 1
         self.hotwords.append(hotwords)
+        self.audio = audio
         return self._text
 
 
@@ -535,6 +539,24 @@ class _ExplodingDetector:
         raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
 
 
+class _LeftoverDetector:
+    """Kalıntı audio'su ÖNCEDEN dolu sahte uyandırma algılayıcısı.
+
+    Gerçek dünyada bu, "Artemis" ile komutun aynı nefeste söylenmesidir:
+    komutun kendisi uyandırma tanımasına giden ses bloğunun içindedir
+    (bkz. `voice/wake_word.py::take_leftover_audio`).
+    """
+
+    def __init__(self, leftover: bytes) -> None:
+        self._leftover = leftover
+        self.taken = 0
+
+    def take_leftover_audio(self) -> bytes:
+        self.taken += 1
+        audio, self._leftover = self._leftover, b""
+        return audio
+
+
 def test_wake_word_failure_does_not_kill_the_assistant(
     dispatcher: ToolDispatcher, settings: Settings
 ) -> None:
@@ -604,6 +626,42 @@ def test_broken_wake_word_is_not_retried_every_block(
     assistant._sleep_until_woken(mic)
 
     assert detector.calls == 1, "Bozuk algılayıcı yalnızca bir kez denenmeliydi"
+
+
+def test_leftover_wake_word_audio_is_prepended_to_the_command_recording(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """REGRESYON (README §36d): uyanışın içindeki komut kaybolmamalı.
+
+    "Artemis" ile komut aynı nefeste, duraksamadan söylendiğinde komutun
+    kendisi uyandırma tanımasına giden ses bloğunun İÇİNDEDİR. Kayıt
+    yalnızca uyanıştan SONRA başlarsa bu ses hiçbir yere düşmez ve kullanıcı
+    komutunu sessizce kaybetmiş olur. Doğru davranış: kalıntıyı kaydın
+    BAŞINA eklemek.
+    """
+
+    # Tanınmış bir komut cümlesinin ham PCM'i (int16, blok blok).
+    komut = [_speech()] * 3
+    leftover = b"\x11\x22" * BLOCK_FRAMES  # uyanışta yakalanmış "Artemis + komut" sesi
+
+    assistant = VoiceAssistant(dispatcher, FakeLLM(), FakeOverlay(), settings)
+    assistant._tts = FakeTTS()
+    stt = FakeSTT("masaüstünde orbit klasörü oluştur")
+    assistant._stt = stt
+
+    detector = _LeftoverDetector(leftover)
+    assistant._wake_detector = detector  # type: ignore[assignment]
+
+    mic = FakeMicrophone(komut + [_silence()] * 6)
+    assistant._record_and_transcribe(mic)
+
+    assert detector.taken == 1, "Kalıntı tam bir kez çekilmeli (pull semantiği)"
+    assert stt.calls == 1
+    # Sıra önemli: kalıntı BAŞTA, hemen ardından mikrofonun bloğu gelmeli.
+    # (Kaydın sonunda sessizlik bloğu da birikir — `SpeechRecorder` bloğu
+    # önce ekleyip SONRA bitişe karar verir; bu test yalnızca sırayı sabitler.)
+    assert stt.audio.startswith(leftover), "Kalıntı kaydın başında olmalı"
+    assert stt.audio[len(leftover) :].startswith(b"".join(komut)), "Kalıntıdan sonra mikrofon sesi gelmeli"
 
 
 def test_voice_enabled_false_prevents_any_startup(monkeypatch: pytest.MonkeyPatch) -> None:

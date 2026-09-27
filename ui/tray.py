@@ -57,6 +57,11 @@ class ArtemisTray(QSystemTrayIcon):
         on_listen: "Şimdi dinle" seçildiğinde çağrılır (elle uyandırma).
         on_quit: "Çıkış" seçildiğinde çağrılır.
         hotkey_text: Menüde bilgi olarak gösterilecek kısayol metni.
+        on_settings: "Ayarlar" seçildiğinde çağrılır. `None` (varsayılan)
+            ise menü öğesi HİÇ EKLENMEZ — yani bugünkü menü birebir aynı
+            kalır. Bu, ayar penceresinin eklenmesini bir "herkes için
+            zorunlu bağımlılık" olmaktan çıkarır: `main.py`'yi henüz
+            değiştirmemiş bir çağrı yer de durur.
     """
 
     def __init__(
@@ -64,6 +69,7 @@ class ArtemisTray(QSystemTrayIcon):
         on_listen: Callable[[], None],
         on_quit: Callable[[], None],
         hotkey_text: str = "",
+        on_settings: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(build_icon())
 
@@ -75,6 +81,11 @@ class ArtemisTray(QSystemTrayIcon):
         listen_action = QAction(f"Şimdi dinle{f'  ({hotkey_text})' if hotkey_text else ''}", menu)
         listen_action.triggered.connect(lambda: on_listen())
         menu.addAction(listen_action)
+
+        if on_settings is not None:
+            settings_action = QAction("Ayarlar", menu)
+            settings_action.triggered.connect(lambda: on_settings())
+            menu.addAction(settings_action)
 
         menu.addSeparator()
 

@@ -5,9 +5,14 @@
 **Bu dosya** = "şu an neredeyiz" anlık görüntüsü: ne var, ne yok, hangi
 kararlar verildi, sırada ne var. Kod değiştikçe ELLE güncellenmeli.
 
-Son güncelleme: v3.17 (komut tanımada VAD eksikliği düzeltildi — ses
-tanıma doğruluğu şikayeti). Geliştirme planının TAMAMI (Faz 0-8)
-tamamlandı. Sürüm geçmişi için `README.md` bölüm 16-36.
+Son güncelleme: v3.19 (§36d'de tasarımı hazır bırakılan hata uygulandı:
+"Artemis" + komut aynı nefeste söylenince komut artık kaybolmuyor,
+`WakeWordDetector.take_leftover_audio()`). Geliştirme planının TAMAMI
+(Faz 0-8) tamamlandı. Sürüm geçmişi için `README.md` bölüm 16-38.
+
+**v3.19 — DOĞRULANMADI**: gerçek mikrofon/Türkçe konuşma yok (aynı sınır,
+bkz. v3.17 notu altında). Sentetik ses bloklarıyla 5 yeni regresyon
+testiyle doğrulandı (635/635 yeşil), gerçek makinede henüz denenmedi.
 
 **v3.17 — kullanıcı gerçek kullanımdan bildirdi (README §36):** komut
 tanımada (`voice/stt.py`) `vad_filter` hiç kullanılmıyordu; aynı düzeltme

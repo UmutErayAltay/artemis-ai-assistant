@@ -38,7 +38,8 @@ from urllib.parse import urlparse
 
 from config.settings import Settings
 from core.dispatcher import ToolDispatcher
-from core.llm_client import LLMResponseParseError, OllamaLLMClient
+from core.llm_client import LLMResponseParseError
+from core.llm_types import LLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
 from utils.confirmation import format_confirmation_arguments
@@ -131,7 +132,10 @@ class VoiceAssistant:
 
     Args:
         dispatcher: Tool'ları çalıştıracak, hazır ToolDispatcher.
-        llm_client: Yerel Ollama istemcisi.
+        llm_client: Asistanın beyniyle konuşacak istemci — yerel Ollama,
+            bulut OpenRouter ya da ikisini seçen
+            `core/llm_router.py::LLMRouter` olabilir (bkz.
+            `core/llm_types.py::LLMClient`).
         overlay: Görsel geri bildirim penceresi (`ui.overlay.ArtemisOverlay`).
         settings: Uygulama ayarları.
     """
@@ -139,7 +143,7 @@ class VoiceAssistant:
     def __init__(
         self,
         dispatcher: ToolDispatcher,
-        llm_client: OllamaLLMClient,
+        llm_client: LLMClient,
         overlay: Any,
         settings: Settings,
     ) -> None:
@@ -348,6 +352,15 @@ class VoiceAssistant:
 
         recorder = self._ensure_recorder()
         recorder.reset()
+
+        # "Artemis" ile komut aynı nefeste söylendiyse komut, uyandırma
+        # tanımasına giden ses bloğunun içindedir; mikrofon döngüsü başlamadan
+        # ÖNCE bu ham sesi kaydın başına ekliyoruz (bkz. README §36d,
+        # `voice/wake_word.py::take_leftover_audio`).
+        if self._wake_detector is not None:
+            leftover = self._wake_detector.take_leftover_audio()
+            if leftover:
+                recorder.feed(leftover)
 
         while not self._stop_event.is_set():
             block = mic.read_block()

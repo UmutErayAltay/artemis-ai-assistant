@@ -45,6 +45,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from ui import theme
+
 # --- Pencere ölçüleri ---------------------------------------------------
 _WINDOW_WIDTH = 620
 _WINDOW_HEIGHT = 260
@@ -79,12 +81,22 @@ class OverlayState(Enum):
     ERROR = auto()  # bir hata oluştu; kırmızı/turuncu palet
 
 
-# Her durum için (sol, orta, sağ) degrade renkleri.
+# "Düşünme" durumunun iki ucu: mavi ile mor arasında, ikisinden de koyu
+# bir ton. `ui/theme.py`'de karşılığı OLMAYAN tek renk budur (palet oradan
+# çıkarılırken atlanmış — Apple'in Sistem Renkleri'nde de karşılığı yok);
+# bu yüzden paylaşılan palete zorla yakın bir renk sokmak yerine burada,
+# SADECE bu durumda kullanılan yerel bir sabit olarak duruyor.
+_THINKING_EDGE = QColor(120, 92, 255)
+
+# Her durum için (sol, orta, sağ) degrade renkleri. Renkler artık
+# `ui/theme.py`'den gelir: aynı palet sohbet/ayarlar pencerelerinde de
+# kullanıldığı için tek kaynak orasıdır (bkz. `ui/theme.py` modül
+# dokümantasyonu).
 _PALETTES: dict[OverlayState, tuple[QColor, QColor, QColor]] = {
-    OverlayState.LISTENING: (QColor(10, 132, 255), QColor(191, 90, 242), QColor(255, 55, 95)),
-    OverlayState.THINKING: (QColor(120, 92, 255), QColor(191, 90, 242), QColor(120, 92, 255)),
-    OverlayState.SPEAKING: (QColor(100, 210, 255), QColor(10, 132, 255), QColor(100, 210, 255)),
-    OverlayState.ERROR: (QColor(255, 159, 10), QColor(255, 69, 58), QColor(255, 159, 10)),
+    OverlayState.LISTENING: (theme.ACCENT_BLUE, theme.ACCENT_PURPLE, theme.ACCENT_PINK),
+    OverlayState.THINKING: (_THINKING_EDGE, theme.ACCENT_PURPLE, _THINKING_EDGE),
+    OverlayState.SPEAKING: (theme.ACCENT_TEAL, theme.ACCENT_BLUE, theme.ACCENT_TEAL),
+    OverlayState.ERROR: (theme.ACCENT_ORANGE, theme.ACCENT_RED, theme.ACCENT_ORANGE),
 }
 
 
@@ -381,23 +393,37 @@ class ArtemisOverlay(QWidget):
         path.addRoundedRect(float(panel.x()), float(panel.y()), float(panel.width()), float(panel.height()), _CORNER_RADIUS, _CORNER_RADIUS)
 
         background = QLinearGradient(panel.topLeft().toPointF(), panel.bottomRight().toPointF())
-        background.setColorAt(0.0, QColor(30, 30, 38, 238))
-        background.setColorAt(1.0, QColor(18, 18, 24, 238))
+        # Panel 238 alfa ile çizilir: arkasında bazen masaüstü görünür
+        # (pencere yarı saydam) ve tam opak bir zemin kötü görünürdü.
+        # `theme`'deki renkler opak olduğu için KOPYALANIP alfası ayarlanır;
+        # modül sabitinin kendisi ASLA değiştirilmez.
+        panel_top = QColor(theme.BG_PANEL)
+        panel_top.setAlpha(238)
+        panel_bottom = QColor(theme.BG_BASE)
+        panel_bottom.setAlpha(238)
+        background.setColorAt(0.0, panel_top)
+        background.setColorAt(1.0, panel_bottom)
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.fillPath(path, background)
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0))
+        painter.setPen(QPen(theme.BORDER, 1.0))
         painter.drawPath(path)
 
     def _paint_title(self, painter: QPainter, panel) -> None:
         """Üstteki "ARTEMIS" başlığını, harf aralıklı ve soluk çizer."""
 
-        font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+        font = QFont(theme.FONT_FAMILY, 10, QFont.Weight.DemiBold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 4.0)
         painter.setFont(font)
-        painter.setPen(QColor(255, 255, 255, 120))
+        # "ARTEMIS" bilinçli olarak soluk: bir dekoratif başlık, dikkat
+        # çekmemeli. `TEXT_SECONDARY` (150) biraz daha belirgin olduğu için
+        # alfa burada 120'ye çekiliyor — `theme`'ye yalnızca tek bir çağrı
+        # yüzünden yeni bir alfa varyantı eklenmez.
+        title_color = QColor(theme.TEXT_SECONDARY)
+        title_color.setAlpha(120)
+        painter.setPen(title_color)
 
         rect = panel.adjusted(0, 20, 0, 0)
         rect.setHeight(20)
@@ -444,8 +470,8 @@ class ArtemisOverlay(QWidget):
         if not self._heard:
             return
 
-        painter.setFont(QFont("Segoe UI", 11))
-        painter.setPen(QColor(255, 255, 255, 150))
+        painter.setFont(QFont(theme.FONT_FAMILY, 11))
+        painter.setPen(theme.TEXT_SECONDARY)
 
         rect = panel.adjusted(24, 44, -24, 0)
         rect.setHeight(22)
@@ -459,8 +485,12 @@ class ArtemisOverlay(QWidget):
         if not self._text:
             return
 
-        painter.setFont(QFont("Segoe UI", 12))
-        painter.setPen(QColor(235, 235, 245, 205))
+        painter.setFont(QFont(theme.FONT_FAMILY, 12))
+        # Cevap metni panelin en okunması gereken satırı; `TEXT_PRIMARY`
+        # (235) burada fazla sert düşüyordu. 205, arada bir yerde durur.
+        text_color = QColor(theme.TEXT_PRIMARY)
+        text_color.setAlpha(205)
+        painter.setPen(text_color)
 
         rect = panel.adjusted(28, 0, -28, -22)
         metrics = painter.fontMetrics()

@@ -41,6 +41,53 @@ ollama_keep_alive: "1m"
 # kod değiştirmeden burada tool adı belirtmek için vardır.
 dangerous_tools: []
 
+# --- Hibrit (bulut/yerel) LLM ayarları ---
+# Asistanın beyni iki yerden beslenebilir: buluttaki OpenRouter (API
+# anahtarı gerektirir, ücretsiz model seçilebilir) ya da yereldeki
+# Ollama. Sesin (STT/TTS) hibrit olduğu gibi beyin de hibrit; kararı
+# `core/llm_router.py` verir (tıpkı `voice/router.py` gibi).
+#
+# "auto" NEDEN VARSAYILAN: günlük kullanımda bilgisayarı kastırmadan
+# kullanmak. Yerel model ilk gerçek isteğe kadar VRAM/RAM'e YÜKLENMEZ;
+# OpenRouter çalıştığı sürece o yükleme hiç gerçekleşmez. Yani multi-GB
+# bir model indirip çalıştırmaya gerek kalmadan asistan kullanılabilir
+# olur, internet/anahtar yoksa da sessizce yerele düşer.
+llm_provider: "auto"
+
+# OpenRouter model slug'ı. TAM YAZILMAK ZORUNLU, BÜYÜK/KÜÇÜK HARF DUYARLI.
+# Yanlış yazılmış bir slug'ı OpenRouter anlaşılır bir "model yok" mesajıyla
+# değil, yardımcı olmayan bir HTTP 400 gövdesiyle reddeder — yukarıdaki
+# "ETİKET TAM YAZILMALI" notuyla aynı sınıf bir arıza. Doğru slug'ı
+# https://openrouter.ai/models adresinden birebir kopyalayın.
+#
+# NEDEN BÜYÜK BİR MODEL SEÇİLDİ (küçük değil): OpenRouter'ın ücretsiz
+# katmanı MODEL BÜYÜKLÜĞÜNE göre değil, HESAP BAŞINA İSTEK SAYISINA göre
+# sınırlıyor (varsayılan günlük 50 istek, hesaba en az 10$ kredi
+# yüklenince 1000'e çıkıyor; dakikada 20 istek tavanı ikisinde de sabit).
+# Yani küçük bir model seçmenin kota tarafında hiçbir kazancı yok —
+# kalite/hız dengesinde en iyi ücretsiz modeli seçmek mantıklı. Aynı
+# sebeple bu modelin cevap kalitesi Artemis'in son sözü olur: sesli
+# asistanda `assistant.reply` argümanını YAZAN model budur, ayrı bir
+# "son cevabı düzenleyen" katman yoktur (bkz. core/voice_loop.py::
+# _speak — konuşulan metin doğrudan bu modelin ürettiği JSON'dan gelir).
+#
+# `nvidia/nemotron-3-ultra-550b-a55b:free`: bu hesapta zaten kullanılan,
+# çalıştığı doğrulanmış büyük bir ücretsiz model (bkz. vault'taki
+# nemotron-* ajan filosu — AYNI hesabın günlük 50 isteklik kotasını
+# PAYLAŞIR; cor'un ajan trafiği yoğunsa Artemis'in payı azalabilir).
+# Ücretsiz katalog ZAMANLA DEĞİŞİR; 402 (kota) hatası alıyorsanız
+# slug'ın hâlâ ücretsiz olduğunu
+# https://openrouter.ai/models?max_price=0 adresinden kontrol edin.
+openrouter_model: "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+# Tek bir OpenRouter isteğinin azami süresi (saniye). Ollama'nın yarısı:
+# bulut bir uzak sunucudur, takılı kalması beklenmez — 30 saniye sonra
+# yerel modele düşmek, kullanıcıyı daha uzun beklemekten iyidir.
+openrouter_timeout_seconds: 30.0
+
+# API anahtarı BU DOSYADAN GELMEZ; dosyanın EN ALTINDAKİ güvenlik
+# notuna bakın (OPENROUTER_API_KEY / openrouter_api_key).
+
 # --- Sesli asistan ayarları ---
 # `python scripts/setup_voice.py` model dosyalarını indirir; burada
 # tanımlanmayan yollar için config/settings.py'deki repo-köküne-göre
@@ -221,8 +268,11 @@ mcp_servers: []
 #   1. Ortam değişkeni (önerilen):
 #        GROQ_API_KEY
 #        AZURE_SPEECH_KEY + AZURE_SPEECH_REGION
+#        OPENROUTER_API_KEY
 #   2. config/secrets.yaml dosyası (.gitignore'dadır, asla commit edilmez):
 #        groq_api_key / azure_speech_key / azure_speech_region
+#        openrouter_api_key
 #   3. Windows kayıt defteri — `setx` ile kaydedilmiş ama zaten açık olan
 #      terminale yansımamış değerleri de bulabilmek için son çare.
-# Bkz. config/settings.py::get_groq_api_key, get_azure_speech_credentials.
+# Bkz. config/settings.py::get_groq_api_key, get_azure_speech_credentials,
+#      get_openrouter_api_key.

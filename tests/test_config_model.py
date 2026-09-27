@@ -55,3 +55,37 @@ def test_ses_modeli_llm_den_bagimsiz_kalir() -> None:
     assert yapilandirma.get("whisper_model_size"), (
         "whisper_model_size boşaltılmış — sesten metne çevirme faster-whisper'da kalmalı."
     )
+
+
+def test_openrouter_modeli_tam_slug_ve_ucretsiz_etiket_icerir() -> None:
+    """OpenRouter slug'ı YANLIŞ yazılırsa hata yardımcı olmaz: Ollama'daki
+    "etiketsiz ad sessizce `:latest`'e düşer" arızasının bulut karşılığı,
+    ama daha kötüsü — OpenRouter "model yok" demek yerine anlaşılmaz bir
+    HTTP 400 döner. Aynı sınıf bir arıza olduğu için aynı sınıf bir
+    denetim: slug KÜÇÜK HARF `sağlayıcı/model` biçiminde ve ücretsiz
+    katalog için `:free` son ekiyle bitmeli.
+    """
+
+    model = _yapilandirma()["openrouter_model"]
+
+    assert model == model.lower(), f"openrouter_model={model!r} — slug'lar büyük harf duyarlıdır."
+    assert "/" in model, f"openrouter_model={model!r} 'sağlayıcı/model' biçiminde olmalı."
+    assert model.endswith(":free"), (
+        f"openrouter_model={model!r} ücretli — varsayılan model ÜCRETSİZ olmalıdır, "
+        "aksi halde anahtarı olan kullanıcı farkında olmadan faturalandırılır."
+    )
+
+
+def test_llm_provider_degerleri_hybrid_ses_ayarlariyla_ayni() -> None:
+    """`llm_provider` sesin üç değerini (`stt_provider`/`tts_provider`)
+    yeniden keşfetmemeli: aynı üç seçenek, aynı adlandırma, aynı
+    anlamlar. Beyin ile ses arasında "auto/cloud/local" ve
+    "auto/bulut/yerel" gibi iki paralel sözlük kullanmak, kullanıcının
+    "cloud yazdım, neden yerele düştü" diye soru sormasına yol açar.
+    """
+
+    yapilandirma = _yapilandirma()
+
+    assert yapilandirma["llm_provider"] in {"auto", "cloud", "local"}
+    assert yapilandirma["stt_provider"] in {"auto", "cloud", "local"}
+    assert yapilandirma["tts_provider"] in {"auto", "cloud", "local"}

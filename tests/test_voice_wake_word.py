@@ -546,6 +546,105 @@ def test_reset_clears_buffered_state(fake_whisper: _FakeWhisperEnvironment) -> N
 
 
 # --------------------------------------------------------------------------
+# take_leftover_audio() — uyanışın içinde kalan ham ses (README §36d)
+# --------------------------------------------------------------------------
+#
+# "Artemis" ile komut aynı nefeste, duraksamadan söylendiğinde komutun
+# kendisi tanıma denemesine giden ses bloğunun İÇİNDEdir. Kalıntı bu yüzden
+# yalnızca gerçek bir UYANMAta birikir; `core/voice_loop.py` onu bir sonraki
+# kaydın başına ekler (bkz. `tests/test_voice_loop.py`).
+
+
+def test_take_leftover_audio_returns_exactly_what_went_to_whisper(
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """Kalıntı, Whisper'a GÖNDERİLEN sesin aynısı olmalı — kırpılmış ya da bozulmuş değil.
+
+    Ön-tampon burada devrede değil (ilk beslenen blok zaten konuşma), yani
+    gönderilen ses bu dört bloğun birebir birleşimi olmalıdır. Doğrulama
+    iki bağımsız yoldan yapılır: sahte modelin kaydettiği ÖRNEK SAYISI
+    (int16 => 2 bayt/örnek) ve blokların doğrudan `b"".join` karşılaştırması.
+    """
+
+    fake_whisper.next_text = "artemis dosyayı sil"  # uyandırma sözcüğü cümle içinde
+    wake_detector = WakeWordDetector(silence_blocks=2, max_buffer_seconds=5.0)
+
+    blocks = [_speech_block(), _speech_block(), _silence_block(), _silence_block()]
+
+    result = False
+    for block in blocks:
+        result = wake_detector.feed(block)
+        if result:
+            break
+
+    assert result is True
+    assert fake_whisper.call_count == 1
+
+    leftover = wake_detector.take_leftover_audio()
+
+    sent_samples = fake_whisper.transcribe_calls[0]["audio_length"]
+    assert len(leftover) == sent_samples * 2  # int16 => 2 bayt/örnek
+
+    assert leftover == b"".join(blocks)
+
+
+def test_take_leftover_audio_is_pulled_only_once(
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """PULL semantiği: ikinci çağrı boş döner, ses iki kez işlenmez.
+
+    Aynı sesin hem uyanışta hem komut kaydında sayılması, Whisper'a aynı
+    komutu iki kez gönderirdi — bu yüzden metot bir kez verip temizler.
+    """
+
+    fake_whisper.next_text = "artemis dosyayı sil"
+    wake_detector = WakeWordDetector(silence_blocks=2, max_buffer_seconds=5.0)
+
+    for block in (_speech_block(), _speech_block(), _silence_block(), _silence_block()):
+        if wake_detector.feed(block):
+            break
+
+    assert wake_detector.take_leftover_audio() != b""
+    assert wake_detector.take_leftover_audio() == b""
+
+
+def test_take_leftover_audio_stays_empty_when_wake_word_is_not_detected(
+    fake_whisper: _FakeWhisperEnvironment,
+) -> None:
+    """ALGILANMAYAN uyanışta kalıntı BIRAKILMAMALI.
+
+    Konuşma kapısı geçip Whisper çalışsa bile uyandırma sözcüğü çıkmadıysa
+    o ses bir "uyanış" değildir; onu sonraki komut kaydının başına eklemek
+    kullanıcının uyanıştan önce konuştuğu ilgisiz sesi komutun içine
+    yapıştırırdı.
+    """
+
+    fake_whisper.next_text = "bugün hava çok güzel"
+    wake_detector = WakeWordDetector(silence_blocks=2, max_buffer_seconds=5.0)
+
+    result = None
+    for block in (_speech_block(), _speech_block(), _silence_block(), _silence_block()):
+        result = wake_detector.feed(block)
+
+    assert result is False
+    assert fake_whisper.call_count == 1  # tanıma YİNE de denendi
+    assert wake_detector.take_leftover_audio() == b""
+
+
+def test_take_leftover_audio_is_empty_on_a_fresh_detector(
+    detector: WakeWordDetector, fake_whisper: _FakeWhisperEnvironment
+) -> None:
+    """Başlangıç durumu: hiç `feed()` çağrılmamışsa kalıntı da yoktur.
+
+    Metot, kalıntının bir yan etkisi olmadan güvenle çağrılabilir olmalıdır
+    (kısayolla uyandırıldığında `_record_and_transcribe` yine de onu sorar).
+    """
+
+    assert detector.take_leftover_audio() == b""
+    assert fake_whisper.model_load_calls == []  # model bir kez bile yüklenmedi
+
+
+# --------------------------------------------------------------------------
 # feed() — Vosk konuşma kapısı: "konuşma var mı?" kararı artık Vosk'a dayanır
 # --------------------------------------------------------------------------
 #

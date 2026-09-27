@@ -1,10 +1,12 @@
 # Artemis — Local Voice AI Assistant
 
-A desktop assistant that controls your computer by voice, running entirely on a
-**local LLM** (Ollama). The model never touches the OS directly — it can only emit a
-JSON tool-call; a Python dispatcher validates and executes the real action. This
-keeps the assistant auditable and lets dangerous operations (delete, shutdown, ...)
-require explicit confirmation before anything runs.
+A desktop assistant that controls your computer by voice, running on a **hybrid
+LLM** brain: a free OpenRouter cloud model when online, local Ollama when not
+(`core/llm_router.py` decides, transparently to the rest of the app). The model
+never touches the OS directly — it can only emit a JSON tool-call; a Python
+dispatcher validates and executes the real action. This keeps the assistant
+auditable and lets dangerous operations (delete, shutdown, ...) require explicit
+confirmation before anything runs.
 
 ## Highlights
 
@@ -18,8 +20,10 @@ require explicit confirmation before anything runs.
 - **Local speech recognition** via `faster-whisper`, no cloud STT dependency.
 - **Multi-step planning**: `core/planner.py` sequences multi-step commands and
   halts the plan if a step fails, instead of ploughing ahead.
-- **540 automated tests** exercising real behavior (dispatcher, planner, rate
-  limiting, filesystem safety) — not mocks.
+- **Persistent chat & settings GUI** (`ui/chat_window.py`, `ui/settings_window.py`)
+  alongside the terminal `--chat`/`--voice` modes.
+- **755 automated tests** exercising real behavior (dispatcher, planner, rate
+  limiting, filesystem safety, OpenRouter client, UI) — not mocks.
 
 ## Install & run
 
