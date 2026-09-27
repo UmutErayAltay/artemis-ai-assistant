@@ -2,12 +2,16 @@
 yamalayan saf fonksiyonlar.
 
 NEDEN SADECE BU İKİ FONKSİYON: `apply_config_overrides` ve
-`save_overrides` dosya üzerinde çalışan saf yardımcılardır — QWidget
-gerektirmezler, dolayısıyla PyQt6'nın kurulu olmadığı bir CI makinesinde
-de (bu modülü içe aktarmadan) çalışırlar. `SettingsWindow`'ın kendisi
-canlı bir pencere kurar; onu kurmak için gerçek bir `QApplication`
-gerekir, o da burada test edilMEZ (bkz. `tests/test_ui_hotkey.py`'nin
-`importorskip` notu).
+`save_overrides` dosya üzerinde çalışan saf yardımcılardır, `QWidget`
+gerektirmezler. Ama `ui/settings_window.py` MODÜL SEVİYESİNDE PyQt6 import
+ettiği için (`SettingsWindow` sınıfı aynı dosyada yaşıyor), bu iki saf
+fonksiyonu içe aktarmak da PyQt6'yı zorunlu kılar — `SettingsWindow`'ın
+kendisi (canlı bir pencere kurar, gerçek bir `QApplication` gerektirir) bu
+dosyada test edilMEZ, ama import zinciri onu bilmez. PyQt6 kurulu değilse
+(örn. başlıksız bir CI makinesi) bu satır TOPLAMA (collection) hatası
+verip tüm dosyayı düşürürdü; `importorskip` onu dürüst bir "atlandı"ya
+çevirir (bkz. `tests/test_ui_hotkey.py`, `tests/test_ui_chat_window.py`'nin
+aynı deseni).
 
 BU DOSYA `config/config.yaml`'IN KENDİSİNE DOKUNMAZ. Her test `tmp_path`
 altında kendi kopyasını kurar; gerçek kullanıcı ayarlarının bozulması
@@ -19,6 +23,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+pytest.importorskip("PyQt6", reason="ui/ katmanı PyQt6 gerektirir")
 
 from config import settings as config_settings
 from config.settings import get_settings
