@@ -136,6 +136,13 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
   `config.yaml::mcp_servers` altındaki `browser` girdisini yorum
   işaretlerini kaldırarak etkinleştirmek. İkisi de yapılmadan sunucu
   çökmeyi değil `{"success": false, "error": ...}` dönmeyi tercih eder.
+  **`url` doğrulaması kaldırılmamalı**: `_validate_url` `page.goto`'dan ÖNCE
+  yalnızca `http(s)` + genel host'a izin verir (`file://`, `data:`,
+  `javascript:` ve loopback/private/link-local reddedilir — `file://` ile
+  SSH key okumak ölçülmüş bir açıktı). `ARTEMIS_BROWSER_ALLOW_LOCAL=1`
+  YALNIZCA host katmanını açar, şema kısıtını değil. Not: bu tool
+  "çalışma zamanında ağa çıkmaz" DEĞİLDİR — verilen `url` neyse oraya
+  gider; ağ kullanmayan şey TESTLERİDİR, kodu değil.
 - `skills/` klasörü **bilinçli olarak boş** — bu artık açık bir soru
   değil, verilmiş bir karar: `core/planner.py::TaskPlanner` zaten
   tool zincirleme işini yapıyor, ayrı bir skills çerçevesi ikinci ve

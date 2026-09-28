@@ -265,16 +265,15 @@ mcp_servers: []
 # Örnek — Artemis'in KENDİ tarayıcı otomasyonu sunucusu. `plugins/
 # browser_plugin.py` yalnızca klavye kısayolları gönderir ve DOM'u görmez;
 # bu sunucu gerçek DOM seviyesinde çalışır (bkz.
-# mcp_servers/browser_automation_server.py). `trusted: true` BURADA
-# meşrudur: bu bir üçüncü taraf paketi değil, bu deponun kendi kodudur.
+# mcp_servers/browser_automation_server.py).
 #
 #   - name: "browser"
 #     command: "python"
 #     args: ["-m", "mcp_servers.browser_automation_server"]
 #     trusted: true
-#     timeout_seconds: 30.0
+#     timeout_seconds: 60.0
 #
-# İKİ NOT:
+# ÜÇ NOT:
 #   1. `python -m mcp_servers...` REPO KÖKÜNDEN çalıştırılmalıdır; alt süreç
 #      çalışma dizinini miras alır. `command` yerine Python yolunun kendisini
 #      (`sys.executable`) yazmak da çalışır.
@@ -283,6 +282,35 @@ mcp_servers: []
 #          python -m playwright install chromium
 #      Bu adım çalıştırılmamışsa sunucu çökmeyi değil, `{"success": false,
 #      "error": "...playwright install chromium..."}` dönmeyi tercih eder.
+#   3. `timeout_seconds` 30 DEĞİL 60'tır ve bu bilerek: sunucunun kendi
+#      `page.goto` üst sınırı 30 sn'dir (`_NAVIGATION_TIMEOUT_MS`). Eşit
+#      olsalardı üst katman (`asyncio.wait_for`) çoğu zaman SUNUCUNUN
+#      döneceği hatta ÖNCE bitecek ve kullanıcı gerçek hatayı değil
+#      "sunucu 30 sn içinde cevap vermedi" mesajını görürdü. Kural:
+#      `timeout_seconds` > `_NAVIGATION_TIMEOUT_MS`.
+#
+# !!! GÜVENLİK — `trusted: true` BURADA BİR AĞRIN DEĞİL !!! #
+# `trusted: true`, bu tool'un `DangerLevel.SAFE` kaydedilmesi demektir:
+# yani `run_browser_task` KULLANICIDAN ONAY SORMAZ, doğrudan çalışır.
+# Sunucu Artemis'in kendi kodu olduğu için (üçüncü taraf bir süreç
+# değildir) bu makul — ama "onay sormuyor" ile "zararsız" aynı şey
+# DEĞİLDİR. Varsayılan haliyle bu tool bile:
+#   * verilen `url`'ye GERÇEKTEN gider (ağ çıkar); yani keyfî bir genel
+#     siteyi açıp içeriğini okuyabilir,
+#   * sayfadaki forma/öğeye istediği `value`'yu yazıp tıklayabilir.
+# Yani bu satırı açmak, "asistana internete giden ve orada FORM DOLDURAN,
+# TIKLAYAN bir tool'u onaysız eklemek" demektir. Tool'un kendi içindeki
+# kısıtlar (varsayılan: yalnızca http(s) + genel host; `file://` ve
+# loopback/private/link-local reddedilir) bu riski AZALTIR, sıfırlamaz.
+# Gerçek koruma, `dangerous_tools`/onay katmanıdır — yani bu örneği
+# otomatikleştirecek bir asistan kuruyorsanız aşağıdaki `env` ve
+# `trusted` kararını bilinçli verin.
+#
+# Kendi yerel servisini (örn. http://localhost:3000) otomatikleştirmek
+# isteyenler için `env` ile o kısıt açılabilir — şema kısıtı (http/https)
+# yine de korunur:
+#
+#     env: {"ARTEMIS_BROWSER_ALLOW_LOCAL": "1"}
 
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.

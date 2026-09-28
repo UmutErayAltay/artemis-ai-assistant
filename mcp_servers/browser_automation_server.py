@@ -11,9 +11,18 @@ kapsamda bir taşıma katmanından ibaretti. İÇERİK boştu; bu dosya onu dold
 
 NEDEN ÜÇÜNCÜ TARAF BİR NPM SUNUCUSU DEĞİL: `@playwright/mcp` gibi
 resmî paketler ağdan indirilir, sürümleri kayar ve "ne yapıyor"u bu deponun
-kaynak kodunda görünmez. Buradaki sunucu ise (a) çalışma zamanında ağa
-çıkmaz, (b) tamamen bu depoda okunabilir, (c) testte deterministiktir
-(`file://` üzerinden statik bir sayfa).
+kaynak kodunda görünmez. Buradaki sunucu ise (a) tamamen bu depoda
+okunabilir, (b) üçüncü taraf bir süreç/internet bağımlılığı getirmez,
+(c) testte deterministiktir.
+
+DİKKAT — "ÇALIŞMA ZAMANINDA AĞA ÇIKMAZ" YANLIŞ BİR İDİA DIYYDI (v3.7
+güvenlik düzeltmesi): `run_browser_task` bir `url` alır ve `page.goto`
+O ADRESE GİDER. Verilen adres `http(s)://` ise gerçekten internete çıkar.
+Bu sunucunun TESTLERİ ağ kullanmaz (statik sayfa) — ama bu bir kod
+özelliği değil, test seçimidir. Gerçek koruma `_validate_url`'dur:
+varsayılan olarak yalnızca `http`/`https` şemaları ve loopback/private/
+link-local OLMAYAN (yani genel) host'lara izin verilir. `file://` ile
+`~/.ssh/id_rsa` okumak ölçülmüş bir açıktı ve bu sürümde reddedilir.
 
 TEK TOOL, TEK OTURUM — MİMARİ KISIT (asıl nedeni bu):
 `plugins/mcp_plugin.py` modül dokümantasyonunun son paragrafı şunu söyler:
@@ -58,8 +67,12 @@ ilke.
 
 from __future__ import annotations
 
+import ipaddress
+import os
+import socket
 import sys
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
@@ -79,7 +92,37 @@ _DEFAULT_TIMEOUT_MS = 10_000
 _NAVIGATION_TIMEOUT_MS = 30_000
 """`page.goto` için üst sınır (ms). Yavaş/sonsuza kadar yüklenen sayfaların
 MCP çağrısını sonsuza kadar asılı bırakmaması için; `MCPServerConfig.
-timeout_seconds` yine de ikinci bir güvenlik ağıdır."""
+timeout_seconds` yine de ikinci bir güvenlik ağıdır.
+
+ÖNEMLİ: `timeout_seconds` BUNDAN KÜÇÜKse üst katman (`plugins/mcp_plugin.py`:
+`asyncio.wait_for`) önce bitecek ve kullanıcı, gerçek hata yerine "sunucu N
+saniye içinde cevap vermedi" görecek. Yani `timeout_seconds` her zaman
+`_NAVIGATION_TIMEOUT_MS`'ten (30 sn) BÜYÜK olmalıdır; örnek config 60 sn."""
+
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+"""`page.goto`'ya verilebilecek TEK iki şema. `file://` bilerek burada
+DEĞİLDİR: headless chromium'a `file:///home/kullanici/.ssh/id_rsa` gibi bir
+yol vermek, o dosyanın TAMAMINI okuyup `read_text` ile geri döndürmek
+demektir (ölçüldü). `data:` ve `javascript:` da aynı sınıf — tarayıcıyı
+sayfa yüklemeden içerik/zarar üretmeye zorlar."""
+
+_ALLOW_LOCAL_ENV = "ARTEMIS_BROWSER_ALLOW_LOCAL"
+"""Loopback/private/link-local hedeflere izin veren ortam değişkeni.
+
+VARSAYILAN KAPALI. Açıkken `1`/`true`/`yes`/`on` değerleri bu sunucunun
+kendi ağ kısıtlamasını düşürür — KENDİ KENDİ DAHA AZ GÜVENLİ olur, o
+yüzden kullanıcı bilerek açmalıdır. `MCPServerConfig.env` üzerinden verilir
+(`config.yaml::mcp_servers.<ad>.env`), çünkü `mcp` SDK'sı alt sürece yalnızca
+HOME/PATH/... gibi birkaç değişkeni miras aldırır.
+
+KULLANIM SENARYOSU: kullanıcı `http://localhost:3000` üzerindeki kendi
+geliştirme sunucusunu otomatikleştirmek isteyebilir. Bunun için bu
+değişkeni `1` yapmak yeterlidir; geri kalan her şey (şema kısıtı dahil)
+aynen korunur.
+
+YALNIZCA HOST KATMANINI KAPATIR. `file://`/`data:`/`javascript:` şema
+kısıtı bu değişkenle AÇILMAZ — "localhost'u aç" demek, "dosya sistemini
+okumaya da izin ver" demek değildir (bkz. `_validate_url`)."""
 
 
 class Step(BaseModel):
@@ -134,7 +177,11 @@ def run_browser_task(url: str, steps: list[Step]) -> dict[str, Any]:
     `plugins/mcp_plugin.py` modül dokümantasyonu).
 
     Args:
-        url: Açılacak adres (`https://...` ya da `file:///...`).
+        url: Açılacak adres. YALNIZCA `http://` ya da `https://`. `file://`,
+            `data:`, `javascript:` reddedilir; loopback (`127.0.0.1`, `::1`,
+            `localhost`), özel (`10.x`, `172.16-31.x`, `192.168.x`) ve
+            link-local (`169.254.x`, `fe80::`) adresler de varsayılan olarak
+            reddedilir.
         steps: Sırayla uygulanacak adımlar. Her adım `{"action": ...,
             "selector": ..., "value": ..., "timeout_ms": ...}` olabilir;
             `action` şunlardan biridir:
@@ -146,7 +193,10 @@ def run_browser_task(url: str, steps: list[Step]) -> dict[str, Any]:
     Returns:
         Başarıda `{"success": True, "title", "url", "read_texts", "steps_executed"}`.
         Adım hatasında `{"success": False, "failed_step": i, "error": str,
-        "partial_results": {...}}` — istisna fırlatmaz.
+        "partial_results": {...}}` — istisna fırlatmaz. Reddedilen `url`
+        (`file://`, `data:`, loopback, ...) tarayıcı hiç başlatılmadan
+        `{"success": False, "failed_step": None, "error": ...,
+        "partial_results": {}}` döner.
 
         Dönüş imzası BİLEREK `dict[str, Any]` ve çıplak `dict` DEĞİL:
         MCP SDK'sı yapılandırılmış çıktıyı ancak dönüş tipinden bir çıktı
@@ -168,6 +218,10 @@ def _run_browser_task(url: str, steps: list[Step]) -> dict[str, Any]:
     Doğrulama burada YOK: `Step` bir pydantic modeli olduğu için SDK, tool'u
     çağırmadan önce gelen JSON'u sunucu tarafında doğruluyor (bilinmeyen
     `action`, eksik `selector` vb. gövdeye hiç ulaşmıyor).
+
+    TEK İSTİSNA `url`: pydantic şeması `str` dediği için içeriği hiç
+    denetlenmez, ama `url` doğrudan `page.goto`'ya gider. Kısıt bu yüzden
+    burada, `goto`'dan ÖNCE uygulanır.
     """
 
     from playwright.sync_api import Error as PlaywrightError
@@ -175,6 +229,13 @@ def _run_browser_task(url: str, steps: list[Step]) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     read_texts: dict[str, str] = {}
+
+    # Tarayıcı BAŞLATILMADAN önce. `file://` ile bir SSH private key'i okumak
+    # (ya da `http://127.0.0.1:PORT`'taki yerel servise gitmek) tarayıcı
+    # açmadan da engellenebilir; açtıktan sonra engellemek, saldırı yüzeyini
+    # kullanmadan önce kapatmak demek değildir.
+    if (rejection := _validate_url(url)) is not None:
+        return {"success": False, "failed_step": None, "error": rejection, "partial_results": {}}
 
     try:
         _p = sync_playwright().start()
@@ -239,6 +300,135 @@ def _run_browser_task(url: str, steps: list[Step]) -> dict[str, Any]:
         # "başarısız oldu" demek, "iz bırakma" demek değildir.
         browser.close()
         _p.stop()
+
+
+def _validate_url(url: str) -> str | None:
+    """`url`'yi `page.goto`'ya vermeden önce denetler.
+
+    Returns:
+        `None` -> URL güvenli, `page.goto` çağrılabilir.
+        `str`  -> insan-okunur REDDEDME sebebi. Çağıran, bunu
+                  `{"success": False, "error": ...}` olarak döner; istisna
+                  FIRLATILMAZ (bkz. modül dokümantasyonu, "İSTİSNA
+                  FIRLATMA DİYE KURULDU").
+
+    İki katman var ve BİRLİKTE çalışır:
+
+    1. ŞEMA. Yalnızca `http`/`https`. `file://` okutma açığıdır (dosya
+       sistemi), `data:`/`javascript:` ise sayfa yüklemeden içerik
+       üretir. Bu katman HİÇBİR ORTAM DEĞİŞKENİYLE devre dışı
+       bırakılamaz — kullanıcı localhost'u açabilir ama `file://`'yi
+       açmanın bir nedeni yoktur; ihtiyaç duymadığı bir riski
+       açmanın bedeli de yoktur.
+    2. HOST. Loopback/private/link-local adresler. Bunlar genel internetten
+       "ulaşılamayan" ama `page.goto` için TAM ERİŞİLEBİLİR olan adreslerdir:
+       kullanıcının kendi makinelerindeki servisler (SSH agent, Docker
+       portları, geliştirici sunucuları, yönlendirici panelleri). Bir
+       istemci (ya da istemciye sızan bir LLM) `url` alanını kontrol
+       ederek ağın içine SSRF yapabilirdi. YALNIZCA bu katman
+       `_ALLOW_LOCAL_ENV` ile kapatılabilir (bkz. yukarıdaki tanım).
+    """
+
+    if not url or not url.strip():
+        return "url boş olamaz."
+
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+
+    if scheme not in _ALLOWED_SCHEMES:
+        # Kullanıcıya hangi şemaların serbest olduğunu söylüyoruz; bu
+        # sessiz bir "geçersiz" değil, kullanılabilir bir yönlendirme.
+        return (
+            f"'{scheme or url}' şemasına izin verilmiyor. "
+            f"Bu tool yalnızca http:// ve https:// adreslerini açar "
+            f"(file://, data:, javascript: ve diğer şemalar reddedilir) — "
+            f"dosya sistemi okumak ya da sayfa yüklemeden içerik üretmek "
+            f"bu tool'ın işi değildir."
+        )
+
+    # ŞEMA geçti. Bundan SONRA — ve yalnızca bundan sonra — yerel
+    # adreslere izin verilebilir; aksi halde `file://` de yeniden açılır.
+    if _allow_local_targets():
+        return None
+
+    host = parts.hostname
+    if not host:
+        return f"'{url}' içinde bir host yok (örn. 'https://example.com')."
+
+    # `hostname` zaten küçük harfe indirir ve portu/credential'ı ayıklar.
+    # Bir IP literal ise çözüm YAPMADAN doğrudan sınıflandırılır —
+    # "decimal IP" gibi DNS'e girmeyen atlatmalar böylece mümkün olmaz.
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        return _reject_ip(literal, url)
+
+    if host == "localhost" or host.endswith(".localhost"):
+        return (
+            f"'{host}' yerel bir adrese işaret ediyor. Varsayılan olarak "
+            f"loopback'e gidilmez; {host} kullanmak istiyorsanız "
+            f"{_ALLOW_LOCAL_ENV}=1 ayarlayın."
+        )
+
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        # DNS çözülemezse REDDEDİLİR: "çözülemeyen host" ile "loopback'e
+        # giden host" arasında ayrım yapamıyorsak güvenli taraf seçilir.
+        return f"'{host}' çözülemedi ({exc}). Erişilebilir olduğu doğrulanamayan bir adrese gidilmez."
+
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:  # pragma: no cover - getaddrinfo hep geçerli IP döner
+            return f"'{host}' beklenmeyen bir adres çözümü verdi ({addr}); reddedildi."
+        rejection = _reject_ip(ip, url)
+        if rejection is not None:
+            return rejection
+
+    return None
+
+
+def _reject_ip(ip: Any, url: str) -> str | None:
+    """Tek bir IP'nin engellenip engellenmediğini söyler (`None` = geçerli).
+
+    `is_private`/`is_loopback`/`is_link_local` bayrakları ayrı ayrı kontrol
+    edilir çünkü bazı adres sınıfları (örn. `169.254.0.0/16` link-local ya da
+    benzersiz-yerel IPv6) birbirinin alt kümesi değildir. SIRA ÖNEMLİ:
+    Python'un `ipaddress`'ında `is_private`, link-local adresler için de
+    `True` döner; mesajın "link-local" demesi için önce o kontrol edilir.
+    """
+
+    if ip.is_loopback:
+        reason = "loopback"
+    elif ip.is_link_local:
+        reason = "link-local"
+    elif ip.is_private:
+        reason = "özel (private)"
+    elif ip.is_reserved or ip.is_multicast:
+        reason = "ayrılmış/çok noktaya yayın"
+    elif ip.is_unspecified:
+        reason = "belirsiz (0.0.0.0/::)"
+    else:
+        return None
+
+    return (
+        f"'{url}' {reason} bir adrese ({ip}) işaret ediyor; varsayılan olarak "
+        f"reddedildi. Bu, tarayıcıyı kendi makinenizin/iç ağınızın servislerine "
+        f"yönlendirmeyi (SSRF) engeller. Kendi yerel servisinizi "
+        f"otomatikleştirmek istiyorsanız ortam değişkeni "
+        f"{_ALLOW_LOCAL_ENV}=1 yapın."
+    )
+
+
+def _allow_local_targets() -> bool:
+    """`_ALLOW_LOCAL_ENV` etkin mi? (yalnızca http/https kontrolü kapatılır)"""
+
+    return os.environ.get(_ALLOW_LOCAL_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _apply_step(page: Any, step: Step, read_texts: dict[str, str]) -> None:

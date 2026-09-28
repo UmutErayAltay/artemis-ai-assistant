@@ -5,10 +5,19 @@ sunucu `python -m mcp_servers.browser_automation_server` komutuyla AYRI bir
 alt süreç olarak başlatılır, stdio üzerinden gerçek MCP protokolü
 konuşulur, tool'lar `discover_and_register_mcp_tools` ile keşfedilir ve
 `ToolDispatcher` üzerinden çağrılır. Tarayıcı da gerçektir — chromium
-başlatılır, `tests/fixtures/sample_page.html` `file://` üzerinden açılır.
+başlatılır, `tests/fixtures/sample_page.html` bir HTTP sunucusundan
+gerçekten indirilir.
 
-Ağ KULLANILMAZ: hedef `file://` URL'idir, `http://example.com` değil. Test
-deterministiktir; sayfada ne zaman aşımı ne de yarış durumu vardır.
+AĞ KULLANILMAZ: hedef, bu dosyanın kendi `_page_server` fixture'ıdır —
+`http.server` ile 127.0.0.1 üzerinde açılan, TEK dosyayı servis eden yerel
+bir sunucu. İnternet'e çıkılmaz. Determinizm bozulmamıştır: sunucu sabit
+bir porttan değil, port 0 (kernel seçsin) üzerinden açılır.
+
+NEDEN `file://` DEĞİL (v3.7 güvenlik düzeltmesi): `run_browser_task` artık
+`file://`'yi reddediyor — `page.goto("file:///home/kullanici/.ssh/id_rsa")`
+o dosyayı tarayıcıya okutup `read_text` ile geri döndürebiliyordu. Testler
+de bu davranışa göre yazıldı: mutlu yol (uçtan uca akış) artık HTTP
+üzerinden, reddedilen yollar ise ayrı testler.
 
 ÖNEMLİ İZOLASYON KURALI (tests/test_mcp_plugin.py'nin başındaki kural):
 `TOOL_REGISTRY` süreç genelinde paylaşılan bir global'dir. Burada kaydedilen
@@ -31,7 +40,11 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import sys
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -45,8 +58,10 @@ from core.tool_base import ToolContext
 from memory.context_memory import ContextMemory
 from plugins.mcp_plugin import discover_and_register_mcp_tools
 
-_FIXTURE_PAGE = Path(__file__).parent / "fixtures" / "sample_page.html"
+_FIXTURE_DIR = Path(__file__).parent / "fixtures"
+_FIXTURE_PAGE = _FIXTURE_DIR / "sample_page.html"
 _TOOL = "mcp.browser.run_browser_task"
+_ALLOW_LOCAL_ENV = "ARTEMIS_BROWSER_ALLOW_LOCAL"
 
 # Chromium ikilisi kurulu değilse testler "sunucu tarayıcıyı açamadı" mesajıyla
 # düşer. Bu bir KOD arızası değil, bir KURULUM arızasıdır; ama kullanıcıya
@@ -74,6 +89,9 @@ def _make_server(name: str, **overrides) -> MCPServerConfig:
         # `python -m ...` REPO KÖKÜNDEN çalıştırılmalı; alt süreç çalışma
         # dizinini miras alır (pytest repo kökünden çalışır).
         "args": ["-m", "mcp_servers.browser_automation_server"],
+        # `_NAVIGATION_TIMEOUT_MS` 30 sn; bu değer ondan BÜYÜK olmalı, yoksa
+        # üst katman önce döner ve kullanıcı gerçek hatayı göremez
+        # (bkz. `_NAVIGATION_TIMEOUT_MS` dokümantasyonu).
         "timeout_seconds": 120.0,
         # `mcp` SDK'sı yalnızca HOME/PATH/... miras aldırır; bu olmadan test
         # ortamındaki özel Chromium önbelleği alt sürece ulaşmaz.
@@ -109,18 +127,6 @@ def _context(tmp_path: Path) -> ToolContext:
 
 
 @pytest.fixture
-def browser_server() -> MCPServerConfig:
-    """Gerçek tarayıcı sunucusunu keşfeder, kaydeder; test bitince TEMİZLER."""
-
-    server = _make_server("browser", trusted=True)
-    registered = discover_and_register_mcp_tools([server])
-    if registered == 0:
-        pytest.fail(f"{_TOOL} keşfedilemedi — sunucu başlamadı ya da tool listesini döndürmedi.")
-    yield server
-    _deregister(f"mcp.{server.name}.")
-
-
-@pytest.fixture
 def dispatcher(tmp_path: Path) -> ToolDispatcher:
     settings = Settings(
         desktop_path=tmp_path / "Desktop",
@@ -131,10 +137,51 @@ def dispatcher(tmp_path: Path) -> ToolDispatcher:
 
 
 @pytest.fixture
-def page_url() -> str:
-    """Test edilecek statik sayfanın `file://` URL'i (ağ gerektirmez)."""
+def _page_server():
+    """`sample_page.html`'yi 127.0.0.1 üzerinden servis eden gerçek HTTP
+    sunucusu. İnternet'e çıkmaz; `ThreadingHTTPServer` + `daemon_threads`
+    sayesinde test bittikten sonra süreç çıkışını bekletmez.
 
-    return _FIXTURE_PAGE.resolve().as_uri()
+    Port 0 verildiği için sabit port çakışması da yok; kernel boş bir port
+    seçer, `server.server_address` gerçek portu verir.
+    """
+
+    handler = partial(SimpleHTTPRequestHandler, directory=str(_FIXTURE_DIR))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def browser_server(_page_server: str) -> MCPServerConfig:
+    """Gerçek tarayıcı sunucusunu keşfeder, kaydeder; test bitince TEMİZLER.
+
+    `_ALLOW_LOCAL_ENV=1` SADECE bu fixture'ın sunucusuna verilir: yerel HTTP
+    sunucusu loopback'te olduğu için mutlu yol testleri ancak bu şekilde
+    geçebilir. Bu, o değişkenin ne işe yaradığını da kanıtlar; ama reddedilen
+    adresler (aşağıdaki testler) bu değişken OLMADAN, sıfırdan bir sunucuyla
+    denenir — aksi halde "reddediliyor" testi kendi kuralını ihlal eden bir
+    sunucuyu test ediyor olurdu.
+    """
+
+    base = _make_server("browser", trusted=True)
+    server = _make_server(
+        "browser",
+        trusted=True,
+        env={**base.env, _ALLOW_LOCAL_ENV: "1"},
+    )
+    registered = discover_and_register_mcp_tools([server])
+    if registered == 0:
+        pytest.fail(f"{_TOOL} keşfedilemedi — sunucu başlamadı ya da tool listesini döndürmedi.")
+    yield server
+    _deregister(f"mcp.{server.name}.")
 
 
 # --------------------------------------------------------------------------
@@ -195,7 +242,7 @@ def test_server_rejects_an_unknown_action_in_steps(browser_server: MCPServerConf
 
     tool = TOOL_REGISTRY[_TOOL]()
     result = tool.execute(
-        {"url": "file:///tmp/yok.html", "steps": [{"action": "teleport", "selector": "#x"}]},
+        {"url": "http://example.invalid/yok.html", "steps": [{"action": "teleport", "selector": "#x"}]},
         context=_context(tmp_path),
     )
 
@@ -207,7 +254,7 @@ def test_server_rejects_an_unknown_action_in_steps(browser_server: MCPServerConf
 # --------------------------------------------------------------------------
 
 
-def test_multi_step_flow_fills_clicks_and_reads(dispatcher: ToolDispatcher, browser_server, page_url: str) -> None:
+def test_multi_step_flow_fills_clicks_and_reads(dispatcher: ToolDispatcher, browser_server, _page_server: str) -> None:
     """Başarılı çok adımlı akış: git + fill + click + read_text.
 
     `read_text` sonucu, `#greet` düğmesine basıldıktan SONRA okunur; yani
@@ -219,7 +266,7 @@ def test_multi_step_flow_fills_clicks_and_reads(dispatcher: ToolDispatcher, brow
         {
             "tool": _TOOL,
             "arguments": {
-                "url": page_url,
+                "url": f"{_page_server}/sample_page.html",
                 "steps": [
                     {"action": "fill", "selector": "#name", "value": "Artemis"},
                     {"action": "click", "selector": "#greet"},
@@ -237,7 +284,7 @@ def test_multi_step_flow_fills_clicks_and_reads(dispatcher: ToolDispatcher, brow
 
 
 def test_dispatcher_reports_honest_failure_with_partial_results(
-    dispatcher: ToolDispatcher, browser_server, page_url: str
+    dispatcher: ToolDispatcher, browser_server, _page_server: str
 ) -> None:
     """Var olmayan selector'da adım BAŞARISIZ olur — ama istisna değil.
 
@@ -249,7 +296,7 @@ def test_dispatcher_reports_honest_failure_with_partial_results(
         {
             "tool": _TOOL,
             "arguments": {
-                "url": page_url,
+                "url": f"{_page_server}/sample_page.html",
                 "steps": [
                     {"action": "read_text", "selector": "#status"},
                     {"action": "click", "selector": "#boyle-bir-ey-yok", "timeout_ms": 1000},
@@ -266,11 +313,13 @@ def test_dispatcher_reports_honest_failure_with_partial_results(
 
 
 def test_empty_steps_only_navigates_and_returns_title(
-    dispatcher: ToolDispatcher, browser_server, page_url: str
+    dispatcher: ToolDispatcher, browser_server, _page_server: str
 ) -> None:
     """`steps: []` geçerli bir kullanımdır: sadece git + title/url döndür."""
 
-    result = dispatcher.dispatch({"tool": _TOOL, "arguments": {"url": page_url, "steps": []}})
+    result = dispatcher.dispatch(
+        {"tool": _TOOL, "arguments": {"url": f"{_page_server}/sample_page.html", "steps": []}}
+    )
 
     assert result.data["success"] is True
     assert result.data["steps_executed"] == 0
@@ -278,11 +327,25 @@ def test_empty_steps_only_navigates_and_returns_title(
     assert result.data["title"] == "Artemis Test Sayfası"
 
 
-def test_unreachable_url_fails_honestly_without_crashing(dispatcher: ToolDispatcher, browser_server) -> None:
-    """Olmayan bir dosya: sunucu çökmemeli, `success=False` dönmeli."""
+def test_unreachable_url_fails_honestly_without_crashing(
+    dispatcher: ToolDispatcher, browser_server
+) -> None:
+    """Erişilemeyen adres: sunucu çökmemeli, `success=False` dönmeli.
+
+    İKİ NEDENLE bu test `file:///tmp/yok.html` DEĞİL:
+      1. `file://` artık şema kısıtına takılır; "Sayfa açılamadı" yoluna hiç
+         ulaşamaz.
+      2. Bir HTTP 404 de o yola ulaşmaz — `page.goto` 404 gövdesini başarıyla
+         "yükler" (`wait_until="domcontentloaded"` sağlanır), yani 404 bir
+         BAŞARISIZ navigasyon DEĞİLDİR. Gerçekten erişilemeyen adres =
+         hiçbir sürecin dinlemediği bir port."""
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
 
     result = dispatcher.dispatch(
-        {"tool": _TOOL, "arguments": {"url": "file:///tmp/artemis-boyle-bir-dosya-yok.html", "steps": []}}
+        {"tool": _TOOL, "arguments": {"url": f"http://127.0.0.1:{closed_port}/yok.html", "steps": []}}
     )
 
     assert result.data["success"] is False
@@ -303,3 +366,181 @@ def test_plain_python_step_model_validates_and_defaults_timeout() -> None:
         Step(action="teleport", selector="#x")  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
         Step(action="click")  # type: ignore[call-arg]  # selector zorunlu
+
+
+# --------------------------------------------------------------------------
+# GÜVENLİK: url doğrulaması (v3.7)
+#
+# Bu blok iki düzeyde test eder:
+#   1. Saf fonksiyon (`_validate_url`) — hızlı, tüm adres sınıfları.
+#   2. Uçtan uca, GERÇEK alt süreç + gerçek chromium — reddedilen bir
+#      adresin tool çağrısında istisna değil `{"success": false, ...}`
+#      olarak döndüğünü kanıtlar.
+#
+# Uçtan uca testler `_ALLOW_LOCAL_ENV` VERİLMEYEN ayrı bir sunucu
+# kullanır; yoksa "reddediliyor" testi, reddi açık olan bir sunucuyu
+# test ediyor olurdu.
+# --------------------------------------------------------------------------
+
+
+def test_file_url_is_rejected_so_local_files_cannot_be_read() -> None:
+    """ÖLÇÜLMÜŞ AÇIK: `file:///home/kullanici/.ssh/id_rsa` verildiğinde
+    headless chromium o dosyayı okuyup `read_text` ile TAMAMINI döndürüyordu.
+    Şema artık `http`/`https` ile sınırlı."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    rejection = _validate_url("file:///home/user/.ssh/id_rsa")
+
+    assert rejection is not None
+    assert "file" in rejection
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "data:text/html,<h1>Merhaba</h1>",
+        "javascript:alert(1)",
+        "ftp://example.com/x",
+        "",
+    ],
+)
+def test_non_http_schemes_are_all_rejected(url: str) -> None:
+    """`file://` kadar özel durum DEĞİLDİR: `data:` ve `javascript:` de
+    sayfa yüklemeden içerik üretir. `_ALLOWED_SCHEMES` beyaz listesi sayesinde
+    yeni şemalar da otomatik reddedilir (varsayılan-kabul yok)."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    assert _validate_url(url) is not None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # loopback
+        "http://127.0.0.1:8000/",
+        "http://127.5.6.7/",
+        "https://[::1]:8080/",
+        "http://localhost:3000/",
+        # private
+        "http://10.0.0.5/admin",
+        "http://172.16.4.1/",  # 172.16.0.0/12
+        "http://172.31.255.254/",  # 172.16.0.0/12 üst sınırı
+        "http://192.168.1.1/router",
+        # link-local — bulut metadata uç noktası da buraya düşer
+        "http://169.254.169.254/latest/meta-data/",
+        "http://[fe80::1]/",
+    ],
+)
+def test_internal_addresses_are_rejected_by_default(url: str) -> None:
+    """SSRF koruması: tarayıcı kullanıcının kendi servislerine
+    yönlendirilmemeli (Docker portları, geliştirici sunucuları, yönlendirici
+    panelleri, bulut metadata). `169.254.169.254` özellikle önemli: bulut
+    sağlayıcılarının kimlik bilgisi endpoint'i orada."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    assert _validate_url(url) is not None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # DNS'e girmeyen, "decimal IP" ile yazılmış loopback atlatmaları.
+        "http://2130706433/",  # 127.0.0.1
+        "http://0177.0.0.1/",  # oktal
+        "http://[::ffff:127.0.0.1]/",  # IPv4-eşlenmiş IPv6
+    ],
+)
+def test_encoded_loopback_bypasses_are_still_rejected(url: str) -> None:
+    """Atlatma denemeleri: `ipaddress.ip_address` bu metinleri IP literal
+    olarak tanıyıp DOĞRUDAN sınıflandırdığı için, DNS'e hiç uğramadan
+    loopback'e düşerler. Bu yüzden şema kontrolünden SONRA ama host
+    sınıflandırmasından ÖNCE konurlar."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    assert _validate_url(url) is not None
+
+
+def test_allow_local_env_reopens_local_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kullanıcı kendi localhost servisini otomatikleştirmek isteyebilir:
+    `ARTEMIS_BROWSER_ALLOW_LOCAL=1` host kısıtını kaldırır."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    monkeypatch.setenv(_ALLOW_LOCAL_ENV, "1")
+
+    assert _validate_url("http://localhost:3000/") is None
+    assert _validate_url("http://127.0.0.1:8000/") is None
+
+
+def test_allow_local_env_still_refuses_non_http_schemes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ÖNEMLİ: anahtar kelime "local" olsa da bu değişken `file://`'yi
+    AÇMAZ. "localhost'u açmak" ile "dosya sistemini okumayı açmak" farklı
+    risklerdir; ikincisini açmanın bir kullanım senaryosu yoktur."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    monkeypatch.setenv(_ALLOW_LOCAL_ENV, "1")
+
+    assert _validate_url("file:///home/user/.ssh/id_rsa") is not None
+    assert _validate_url("data:text/html,x") is not None
+    assert _validate_url("javascript:alert(1)") is not None
+
+
+def test_normal_public_urls_are_accepted() -> None:
+    """Kısıt çok dar olmamalı: normal genel http(s) adresleri geçmeli.
+    Burada `example.com` kullanılır çünkü `.invalid` gibi alanlar her
+    ortamda çözülmez ve "DNS çözülemedi" meselesi karışır."""
+
+    from mcp_servers.browser_automation_server import _validate_url
+
+    assert _validate_url("https://example.com/") is None
+    assert _validate_url("http://example.com/bir/yol?x=1") is None
+    assert _validate_url("https://kullanici:parola@example.com/") is None
+
+
+def test_rejected_url_fails_the_tool_call_without_raising(tmp_path: Path) -> None:
+    """Uçtan uca: gerçek alt süreç + gerçek chromium, `_ALLOW_LOCAL_ENV`
+    VERİLMEDİN. Reddedilen adres istisna fırlatmaz, diğer hata yollarıyla
+    AYNI şekilde döner (`success: false`, `failed_step: None`) — yani
+    dispatcher/LLM tarafında özel bir durum yoktur.
+
+    `file://` dosyası GERÇEKTEN diskte oluşturulur: reddedilen şey
+    "var olmayan bir yol" değil, dosya sistemini okuma yeteneğidir.
+
+    `ToolResult.success` burada True kalır ve bu doğrudur: `plugins/
+    mcp_plugin.py::_call_tool_result_to_tool_result` alanı MCP'nin
+    `is_error` BAYRAGINDAN türetir, yani "tool çağrısı sonuç üretti mi"
+    demektir — tool'un İÇİNDE ne döndüğü değil. Tool seviyesindeki sonuç
+    `data["success"]` alanındadır; bu ayrım MCP köprüsünün mevcut
+    sözleşmesidir ve TÜM MCP tool'larında böyledir."""
+
+    secret = tmp_path / "id_rsa"
+    secret.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nGIZLI\n", encoding="utf-8")
+
+    server = _make_server("browser-guard", trusted=True)
+    registered = discover_and_register_mcp_tools([server])
+    if registered == 0:
+        pytest.fail("Sunucu başlamadı; reddedim testi çalıştırılamıyor.")
+    try:
+        tool = TOOL_REGISTRY[f"mcp.{server.name}.run_browser_task"]()
+        result = tool.execute(
+            {
+                "url": secret.resolve().as_uri(),
+                "steps": [{"action": "read_text", "selector": "body"}],
+            },
+            context=_context(tmp_path),
+        )
+
+        # Çağrı istisna fırlatmadı; tool seviyesinde dürüst bir hata döndü.
+        assert result.data["success"] is False
+        assert result.data["failed_step"] is None
+        assert "şemasına izin verilmiyor" in result.data["error"]
+        # Dosyanın içeriği NE okundu NE de sızdı:
+        assert "GIZLI" not in str(result.data)
+    finally:
+        _deregister(f"mcp.{server.name}.")

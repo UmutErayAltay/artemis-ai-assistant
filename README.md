@@ -24,7 +24,10 @@ confirmation before anything runs.
   alongside the terminal `--chat`/`--voice` modes.
 - **Real DOM-level browser automation**: an own MCP server
   (`mcp_servers/browser_automation_server.py`) drives headless Chromium through
-  Playwright — no third-party npm package, no network at runtime.
+  Playwright — no third-party npm package, and its *test suite* needs no
+  network. The tool itself navigates to whatever `url` it is given, so it does
+  go out to the internet; by default it is restricted to `http(s)://` URLs on
+  public hosts (see below).
 - **705 automated tests** exercising real behavior (dispatcher, planner, rate
   limiting, filesystem safety, OpenRouter client, UI) — not mocks.
 
@@ -47,6 +50,20 @@ python -m playwright install chromium
 To enable it, uncomment the `browser` entry under `mcp_servers:` in
 `config/config.yaml` (it ships commented out, so the default install performs
 zero I/O).
+
+**Before you enable it — what `run_browser_task` can actually do.** The entry
+sets `trusted: true`, which registers the tool as `DangerLevel.SAFE`: it runs
+**without asking you for confirmation**. Being Artemis' own code rather than a
+third-party package is the right reason for that flag, but "no confirmation"
+is not the same as "harmless" — the tool navigates to the `url` it is given and
+can type into and click things on the page it finds. To keep that bounded, the
+server validates the URL *before* launching a browser and by default allows
+only `http://` and `https://` to **public** hosts: `file://` (which could read
+your SSH keys straight off disk), `data:`, `javascript:`, and loopback /
+private / link-local addresses such as `127.0.0.1`, `192.168.x.x` and
+`169.254.169.254` are rejected. To automate your own local service, set
+`env: {"ARTEMIS_BROWSER_ALLOW_LOCAL": "1"}` in that entry — that reopens only
+the host check, never the `http(s)`-only scheme rule.
 
 Run the test suite with:
 

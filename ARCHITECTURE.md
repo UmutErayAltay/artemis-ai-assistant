@@ -2751,11 +2751,26 @@ senkron API'siyle headless chromium, TEK tool (`run_browser_task`).
 
 `@playwright/mcp` gibi resmî paketler ağdan indirilir, sürümleri kayar ve
 "ne yaptığını" bu depodaki kaynak koddan göremezsiniz. Kendi sunucumuz:
-çalışma zamanında ağa çıkmaz, tamamen bu depoda okunabilir ve `file://`
-üzerinden deterministik test edilir. `mcp_servers/` klasörü `plugins/`'in
-KARDEŞİDİR (bir "tool kategorisi" değil) — `plugin_loader.py` yalnızca
-`plugins/`'i taradığı için buradaki hiçbir modül Artemis'i başlatırken
-import edilmez.
+tamamen bu depoda okunabilir, üçüncü taraf bir süreç/internet bağımlılığı
+getirmez ve deterministik test edilir. `mcp_servers/` klasörü
+`plugins/`'in KARDEŞİDİR (bir "tool kategorisi" değil) — `plugin_loader.py`
+yalnızca `plugins/`'i taradığı için buradaki hiçbir modül Artemis'i
+başlatırken import edilmez.
+
+> **DÜZELTME (v3.7 güvenlik incelemesi):** Bu bölüm önce "çalışma zamanında
+> ağa çıkmaz" diyordu ve bu **yanlıştı**. `run_browser_task` verilen `url`'ye
+> `page.goto` ile gider; `http(s)://` verilirse gerçekten internete çıkar.
+> Doğru ifade: **test harness ağ kullanmaz** (statik `file://` fixture'ı
+> kullanılır) — bu bir kod özelliği değil, test seçimidir.
+>
+> Gerçek koruma `browser_automation_server.py::_validate_url`'dır: varsayılan
+> olarak **yalnızca `http`/`https`** şemaları ve **genel (public) host**'lara
+> izin verilir. `file://` (dosya sistemi okutma açığı — ölçüldü: SSH private
+> key'i `read_text` ile tamamen okunup döndürülebiliyordu), `data:`,
+> `javascript:` ve loopback/private/link-local adresler reddedilir. Kendi
+> localhost servisini otomatikleştirmek isteyen kullanıcı bunu
+> `ARTEMIS_BROWSER_ALLOW_LOCAL=1` ile açabilir — **yalnızca host katmanı**,
+> şema kısıtı her zaman durur.
 
 ### 41b) Zorunlu mimari kısıt: TEK tool, TEK oturum
 
