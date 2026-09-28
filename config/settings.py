@@ -63,6 +63,30 @@ class MCPServerConfig(BaseModel):
     timeout_seconds: float = 5.0
 
 
+class KuleSettings(BaseModel):
+    """kule (kontrol kulesi) sunucusuna bağlanma ayarları.
+
+    Umut'un diğer bir projesi olan kule, onun projelerinin durumunu (git
+    repoları, cor/borsasite/readbunny/vault, bakım bulguları) TEK bir
+    FastAPI uç noktasında toplayan bir paneldir; `kule.status` tool'u
+    buraya bağlanır. Artemise başka hiçbir dosya taşınmaz — kule kendi
+    yerinde çalışmaya devam eder, Artemis yalnızca okur.
+
+    Attributes:
+        base_url: Kule sunucusunun taban adresi. Sondaki `/` opsiyoneldir
+            (tool gövde eklerken `rstrip('/')` uygular).
+        timeout_seconds: Tek bir `/api/summary` isteği için tanınan azami
+            süre. Kule YERELDİR ve altı collector'ı paralel çalıştırır
+            (git taraması + üç HTTP health + iki veritabanı bağlantısı), yani
+            soğuk başlangıçta saniyeler sürebilir. Amaç yavaşlığı kesmek
+            değil, KAPALI/ASILI kule'de kullanıcıyı sonsuza kadar beklemekten
+            kurtarmaktır.
+    """
+
+    base_url: str = "http://127.0.0.1:8790"
+    timeout_seconds: float = 5.0
+
+
 class Settings(BaseModel):
     """Artemis'in çalışması için gereken tüm ayarlar.
 
@@ -241,6 +265,10 @@ class Settings(BaseModel):
             içe aktarılması hiçbir I/O yapmaz). Her girdi keşfedilip
             normal bir Artemis tool'u gibi kaydedilir; bkz.
             `MCPServerConfig` ve `plugins/mcp_plugin.py`.
+        kule: Kule panelinin adresi ve istek zaman aşımı. `kule.status`
+            tool'u bu ayarlarla `GET /api/summary` uç noktasını okur;
+            kule çalışmıyorsa temiz bir `success=False` döner (bkz.
+            `KuleSettings` ve `plugins/kule_plugin.py`).
     """
 
     desktop_path: Path = Field(default_factory=lambda: Path.home() / "Desktop")
@@ -338,6 +366,9 @@ class Settings(BaseModel):
 
     # --- MCP (Model Context Protocol) sunucuları ---
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
+
+    # --- Kule (proje durumu paneli) ---
+    kule: KuleSettings = Field(default_factory=KuleSettings)
 
 
 SECRETS_PATH = Path(__file__).resolve().parent / "secrets.yaml"
