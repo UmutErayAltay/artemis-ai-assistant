@@ -1,89 +1,161 @@
-# Artemis — Local Voice AI Assistant
+# Artemis — Yerel Sesli Yapay Zekâ Asistanı
 
-A desktop assistant that controls your computer by voice, running on a **hybrid
-LLM** brain: a free OpenRouter cloud model when online, local Ollama when not
-(`core/llm_router.py` decides, transparently to the rest of the app). The model
-never touches the OS directly — it can only emit a JSON tool-call; a Python
-dispatcher validates and executes the real action. This keeps the assistant
-auditable and lets dangerous operations (delete, shutdown, ...) require explicit
-confirmation before anything runs.
+<!-- TODO: ekran görüntüsü eklenecek -->
 
-## Highlights
+[🇬🇧 English](./README.en.md)
 
-- **Plugin architecture**: every capability (filesystem, web, Windows control, ...)
-  is a self-contained module registered via `@register_tool` — adding a 101st tool
-  never touches the dispatcher or the core loop.
-- **Safety by construction**: each tool declares a `DangerLevel`; the dispatcher is
-  the single choke point that enforces confirmation for anything destructive (see
-  `plugins/filesystem_plugin.py::_safe_join` for an example of the path-traversal
-  guarding this buys).
-- **Local speech recognition** via `faster-whisper`, no cloud STT dependency.
-- **Multi-step planning**: `core/planner.py` sequences multi-step commands and
-  halts the plan if a step fails, instead of ploughing ahead.
-- **Persistent chat & settings GUI** (`ui/chat_window.py`, `ui/settings_window.py`)
-  alongside the terminal `--chat`/`--voice` modes.
-- **Real DOM-level browser automation**: an own MCP server
-  (`mcp_servers/browser_automation_server.py`) drives headless Chromium through
-  Playwright — no third-party npm package, and its *test suite* needs no
-  network. The tool itself navigates to whatever `url` it is given, so it does
-  go out to the internet; by default it is restricted to `http(s)://` URLs on
-  public hosts (see below).
-- **705 automated tests** exercising real behavior (dispatcher, planner, rate
-  limiting, filesystem safety, OpenRouter client, UI) — not mocks.
+## Açıklama
 
-## Install & run
+Artemis, Windows üzerinde çalışan ve Türkçe konuşan bir masaüstü asistanı:
+söylediğiniz komutları alır ve bilgisayarınızda gerçekten işlem yapar — dosya
+açar, klasör oluşturur, uygulama kapatır, internette arama yapar, ekran görüntüsü
+alır. Model işletim sistemine hiçbir zaman doğrudan dokunmaz; yalnızca bir JSON
+tool çağrısı üretir, `core/dispatcher.py` bunu doğrular ve çalıştırır. Her tool
+bir `DangerLevel` bildirir, bu yüzden yıkıcı işlemler (silme, kapatma, kilitleme,
+...) çalışmadan önce açık onay ister. Ses de hibrit: komut tanıma için
+`faster-whisper`, konuşma cevabı için API anahtarı istemeyen Microsoft Edge TTS ve
+yerel Piper yedeği. Beyin ise `llm_provider: "auto"` ile çalışır: bulut modeli
+(OpenRouter) ile yerel Ollama arasında sessizce seçim yapar. Üç giriş noktası
+aynı beyni paylaşır: `--chat` (terminal), `--chat-gui` (sohbet penceresi) ve
+`--voice` (tepsi + overlay).
+
+## Öne çıkanlar
+
+- **Hibrit beyin**: `core/llm_router.py` her çağrıda OpenRouter ya da Ollama'yı
+  seçer; bulut bir kez başarısız olursa bir bekleme süresi boyunca yerele düşer.
+  Bulut yanıt verdiği sürece yerel model VRAM/RAM'e hiç yüklenmez, yani günlük
+  kullanımda çok büyük bir indirme gerekmez.
+- **Plugin mimarisi**: her yetenek (dosya sistemi, web, Windows kontrolü, ...)
+  `@register_tool` ile kaydedilen kendi kendine yeten bir modüldür — 101'inci
+  tool eklemek dispatcher'a veya ana döngüye dokunmayı gerektirmez. Bugün
+  `filesystem.*`, `windows.*`, `browser.*`, `mouse_keyboard.*`, `memory.*`,
+  `web.*`, `assistant.*` ve `kule.*` altında toplam 39 tool var.
+- **Yapısal güvenlik**: her tool bir `DangerLevel` bildirir; onayı, yıkıcı her şeyi
+  zorunlu kılan tek nokta olan dispatcher uygular (dizin dışına sızmaya karşı
+  korumanın kaynağı için `utils/paths.py::safe_join`'e bakın — her dosya sistemi
+  tool'u hedefini bu fonksiyondan geçirir).
+- **Yerel konuşma tanıma**: `faster-whisper` ile, bulut STT bağımlılığı yok;
+  sürekli dinlenen "Artemis" uyandırma sözcüğü (küçük bir `tiny` Whisper modeli)
+  ve alternatif tetikleyici olarak sistem geneli kısayol (`ctrl+alt+a`) var.
+- **Çok adımlı planlama**: `core/planner.py` çok adımlı komutları sırayla yürütür
+  ve bir adım başarısız olursa ya da kullanıcı onayı reddederse planı durdurur —
+  geri kalanını körlemesine çalıştırmaz.
+- **Kalıcı sohbet ve ayar arayüzü** (`ui/chat_window.py`, `ui/settings_window.py`),
+  terminal `--chat`/`--voice` modlarının yanında. Sohbet penceresi konuşmanın
+  tamamını, pencere kapanana kadar ekranda balonlar hâlinde tutar.
+- **Gerçek DOM seviyesinde tarayıcı otomasyonu**: kendi MCP sunucumuz
+  (`mcp_servers/browser_automation_server.py`) Playwright üzerinden headless
+  Chromium'u sürer — üçüncü taraf bir NPM paketi yok, *testleri* de ağ gerektirmez.
+  Tool verilen `url`'ye gerçekten gider, yani internete çıkar; varsayılan olarak
+  genel hostlarda yalnızca `http(s)://` adreslere sınırlıdır (aşağıya bakın).
+- **812 otomatik test** (2'si `disruptive` işaretli olduğu için varsayılan olarak
+  atlanır): dispatcher, planner, dosya sistemi güvenliği, OpenRouter istemcisi,
+  ses hattı, arayüz — hepsi mock değil, gerçek davranış üzerinde.
+
+## Kurulum ve çalıştırma
+
+Python 3.11+ gerekir.
 
 ```bash
-pip install -r requirements.txt
-ollama pull llama3.1          # or whichever model config.yaml points to
-python main.py --chat         # text mode
-python main.py --voice        # voice mode (faster-whisper)
+pip install -r requirements.txt      # ya da: pip install .
+python scripts/setup_voice.py       # Piper TTS modeli, yalnızca --voice için gerekli
+
+python main.py --chat               # metin modu (terminal)
+python main.py --chat-gui           # metin modu, pencerede
+python main.py --settings           # ayarlar penceresini tek başına açar
+python main.py --voice              # sesli asistan (faster-whisper + tepsi)
 ```
 
-`pip install` only fetches the *Python package*; Chromium itself is a separate
-download and is needed **only** for the browser automation server:
+`--voice` ayrıca bir konuşma modeli ister; `faster-whisper` bunları ilk kullanımda
+Hugging Face'ten indirip yerel önbelleğe alır: `large-v3-turbo` (komut tanıma) ve
+`tiny` (uyandırma sözcüğü).
+
+### Beyin: bulut, yerel, ya da ikisi
+
+`config/config.yaml::llm_provider` bunu belirler; varsayılan `"auto"` için ne
+Ollama ne de büyük bir indirme gerekmez:
+
+- **`auto`** (varsayılan) — `OPENROUTER_API_KEY` tanımlıysa ve erişilebiliyorsa
+  OpenRouter, aksi halde yerel Ollama. Bulut bir kez başarısız olursa yönlendirici
+  onu bir bekleme süresi boyunca devre dışı bırakır, yani ölü bir bağlantı her
+  komutta yeniden denenmez.
+- **`cloud`** — yalnızca OpenRouter; Ollama'ya hiç dokunmaz.
+- **`local`** — yalnızca Ollama. Sunucuyu elle başlatabilir ya da Artemis arka
+  planda başlatabilir: çalışmıyorsa Artemis onu kendisi ayağa kaldırır ve
+  çıkışta **yalnızca kendi başlattığı** süreci kapatır. Kurulu modeller listelenir
+  ve numarayla seçersiniz, yani `config.yaml`'a yazılacak bir şey yoktur
+  (`ollama_model` alanı yalnızca etkileşimsiz senaryolar için yedektir).
+
+```bash
+ollama pull gemma4:e4b        # ya da kullanmak istediğiniz model
+```
+
+API anahtarları `config.yaml`'dan ASLA okunmaz — o dosya git ile izlenir.
+Sırasıyla şu kaynaklardan okunur: ortam değişkenleri (`OPENROUTER_API_KEY`,
+`GROQ_API_KEY`, `AZURE_SPEECH_KEY` + `AZURE_SPEECH_REGION`), sonra
+`config/secrets.yaml` (git'e eklenmez), en son Windows kayıt defteri.
+
+Bir IDE süreci sert kapatırsa (VS Code'un "Stop" düğmesi) arkada yetim bir
+`ollama` süreci kalabilir; elle temizlemek için:
+
+```bash
+python main.py --stop-ollama
+```
+
+### Tarayıcı otomasyonu (opsiyonel, varsayılan kapalı)
+
+`pip install` yalnızca *Python paketini* getirir; Chromium'un kendisi ayrı bir
+indirmedir ve **yalnızca** tarayıcı otomasyon sunucusu için gerekir:
 
 ```bash
 python -m playwright install chromium
 ```
 
-To enable it, uncomment the `browser` entry under `mcp_servers:` in
-`config/config.yaml` (it ships commented out, so the default install performs
-zero I/O).
+Etkinleştirmek için `config/config.yaml` içindeki `mcp_servers:` bölümündeki
+`browser` girdisinin yorumunu kaldırın (varsayılan gelir yorumlu olarak gelir,
+böylece varsayılan kurulum sıfır I/O yapar). `mcp_servers` varsayılan olarak
+boştur — sunucu tanımlanmadığı sürece o bölüm hiçbir I/O yapmaz.
 
-**Before you enable it — what `run_browser_task` can actually do.** The entry
-sets `trusted: true`, which registers the tool as `DangerLevel.SAFE`: it runs
-**without asking you for confirmation**. Being Artemis' own code rather than a
-third-party package is the right reason for that flag, but "no confirmation"
-is not the same as "harmless" — the tool navigates to the `url` it is given and
-can type into and click things on the page it finds. To keep that bounded, the
-server validates the URL *before* launching a browser and by default allows
-only `http://` and `https://` to **public** hosts: `file://` (which could read
-your SSH keys straight off disk), `data:`, `javascript:`, and loopback /
-private / link-local addresses such as `127.0.0.1`, `192.168.x.x` and
-`169.254.169.254` are rejected. To automate your own local service, set
-`env: {"ARTEMIS_BROWSER_ALLOW_LOCAL": "1"}` in that entry — that reopens only
-the host check, never the `http(s)`-only scheme rule.
+**Bunu açmadan önce — `run_browser_task` gerçekte ne yapabilir.** Bu girdi
+`trusted: true` ayarlar, yani tool `DangerLevel.SAFE` olarak kaydedilir ve
+**kullanıcıdan onay sormadan** çalışır. Bunun nedeni üçüncü taraf bir paket
+değil de Artemis'in kendi kodu olması, ama "onay sormuyor" ile "zararsız" aynı
+şey değildir — tool verilen `url`'ye gider ve bulduğu sayfaya yazı yazıp tıklayabilir.
+Bunu sınırlı tutmak için sunucu tarayıcıyı başlatmadan *önce* adresi doğrular ve
+varsayılan olarak yalnızca **genel** hostlarda `http://` ve `https://`'e izin
+verir: `file://` (diskten SSH anahtarlarınızı okuyabilirdi), `data:`,
+`javascript:` ve `127.0.0.1`, `192.168.x.x`, `169.254.169.254` gibi loopback /
+özel / link-local adresler reddedilir. Kendi yerel servisinizi (örn.
+`http://localhost:3000`) otomatikleştirmek için o girdide
+`env: {"ARTEMIS_BROWSER_ALLOW_LOCAL": "1"}` ayarlayın — bu yalnızca host
+kontrolünü açar, `http(s)`-only şema kuralını asla.
 
-Run the test suite with:
+## Testler
 
 ```bash
 pytest
 ```
 
-## Project layout
+`disruptive` işaretli testler çalıştırıldıkları makinenin ekranını kilitler ve
+sesini kapatır, bu yüzden varsayılan olarak atlanır; yalnızca bunu isterseniz
+açıkça çalıştırın.
+
+## Proje yapısı
 
 ```
-core/            dispatcher, planner, LLM client, plugin loader, manifest
-config/          Settings (pydantic) + config.yaml
-plugins/         one file per capability (filesystem, web, windows, ...)
-mcp_servers/     own MCP servers, e.g. Playwright browser automation
-memory/          SQLite-backed conversation memory
-tests/           ~710 tests covering the above
+main.py            giriş noktaları (--chat, --chat-gui, --voice, --settings, --stop-ollama)
+core/              dispatcher, planner, LLM istemcileri + yönlendirici, plugin yükleyici, manifest
+config/            Settings (pydantic) + config.yaml
+plugins/           yetenek başına bir dosya (filesystem, web, windows, ...)
+mcp_servers/       kendi MCP sunucularımız, örn. Playwright tarayıcı otomasyonu
+voice/             ses kaydı, STT, TTS, uyandırma sözcüğü, sağlayıcı yedek yönlendiricisi
+ui/                PyQt6 sohbet penceresi, overlay, tepsi, kısayol, ayarlar, tema
+memory/            SQLite tabanlı anahtar-değer bağlam hafızası
+tests/             yukarıdakileri kapsayan 812 test
 ```
 
-## Architecture deep-dive
+## Mimari derinlemesine
 
-The full design log — every architectural decision from v0.1 through the current
-version, including two real bugs found and fixed during a security hardening pass
-— lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Tüm tasarım günlüğü — v0.1'den bugünkü sürüme kadar her mimari karar, ve bir
+güvenlik sertleştirme turunda bulunup düzeltilen iki gerçek hata dâhil —
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) dosyasındadır.
