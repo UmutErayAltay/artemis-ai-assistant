@@ -1,6 +1,6 @@
 # Artemis — Yerel Sesli Yapay Zekâ Asistanı
 
-<!-- TODO: ekran görüntüsü eklenecek -->
+![Artemis sohbet penceresi](docs/screenshots/chat-gui.png)
 
 [🇬🇧 English](./README.en.md)
 

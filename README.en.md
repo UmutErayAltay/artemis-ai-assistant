@@ -1,6 +1,6 @@
 # Artemis — Local Voice AI Assistant
 
-<!-- TODO: screenshot to be added -->
+![Artemis sohbet penceresi](docs/screenshots/chat-gui.png)
 
 [🇹🇷 Türkçe](./README.md)
 
