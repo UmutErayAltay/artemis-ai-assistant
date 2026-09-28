@@ -53,3 +53,12 @@ vosk>=0.3.45
 # olarak zaten kurulu görünse bile (bazı geliştirme ortamlarında başka
 # araçlar üzerinden gelebilir), fresh bir kurulumda garanti olması için.
 mcp>=1.20
+
+# --- Gerçek tarayıcı otomasyonu (mcp_servers/browser_automation_server.py) ---
+# `plugins/browser_plugin.py` yalnızca klavye kısayolları gönderir, DOM'u
+# GÖRMEZ; sayfa içeriği okumak/öğeye tıklamak gerçek bir tarayıcı sürücüsü
+# ister. Bu paket, o boşluğu üçüncü taraf bir NPM sunucusuna bağımlı olmadan
+# kendi MCP sunucumuzla doldurur (kaynak bu depoda okunabilir, ağ gerektirmez).
+# NOT: pip yalnızca Python paketini kurar; Chromium ikilisi ayrıca indirilir:
+#      python -m playwright install chromium
+playwright>=1.40

@@ -22,7 +22,10 @@ confirmation before anything runs.
   halts the plan if a step fails, instead of ploughing ahead.
 - **Persistent chat & settings GUI** (`ui/chat_window.py`, `ui/settings_window.py`)
   alongside the terminal `--chat`/`--voice` modes.
-- **755 automated tests** exercising real behavior (dispatcher, planner, rate
+- **Real DOM-level browser automation**: an own MCP server
+  (`mcp_servers/browser_automation_server.py`) drives headless Chromium through
+  Playwright — no third-party npm package, no network at runtime.
+- **705 automated tests** exercising real behavior (dispatcher, planner, rate
   limiting, filesystem safety, OpenRouter client, UI) — not mocks.
 
 ## Install & run
@@ -33,6 +36,17 @@ ollama pull llama3.1          # or whichever model config.yaml points to
 python main.py --chat         # text mode
 python main.py --voice        # voice mode (faster-whisper)
 ```
+
+`pip install` only fetches the *Python package*; Chromium itself is a separate
+download and is needed **only** for the browser automation server:
+
+```bash
+python -m playwright install chromium
+```
+
+To enable it, uncomment the `browser` entry under `mcp_servers:` in
+`config/config.yaml` (it ships commented out, so the default install performs
+zero I/O).
 
 Run the test suite with:
 
@@ -46,8 +60,9 @@ pytest
 core/            dispatcher, planner, LLM client, plugin loader, manifest
 config/          Settings (pydantic) + config.yaml
 plugins/         one file per capability (filesystem, web, windows, ...)
+mcp_servers/     own MCP servers, e.g. Playwright browser automation
 memory/          SQLite-backed conversation memory
-tests/           540 tests covering the above
+tests/           ~710 tests covering the above
 ```
 
 ## Architecture deep-dive

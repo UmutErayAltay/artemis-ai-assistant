@@ -261,6 +261,28 @@ mcp_servers: []
 #     args: ["-y", "@modelcontextprotocol/server-everything"]
 #     trusted: false
 #     timeout_seconds: 5.0
+#
+# Örnek — Artemis'in KENDİ tarayıcı otomasyonu sunucusu. `plugins/
+# browser_plugin.py` yalnızca klavye kısayolları gönderir ve DOM'u görmez;
+# bu sunucu gerçek DOM seviyesinde çalışır (bkz.
+# mcp_servers/browser_automation_server.py). `trusted: true` BURADA
+# meşrudur: bu bir üçüncü taraf paketi değil, bu deponun kendi kodudur.
+#
+#   - name: "browser"
+#     command: "python"
+#     args: ["-m", "mcp_servers.browser_automation_server"]
+#     trusted: true
+#     timeout_seconds: 30.0
+#
+# İKİ NOT:
+#   1. `python -m mcp_servers...` REPO KÖKÜNDEN çalıştırılmalıdır; alt süreç
+#      çalışma dizinini miras alır. `command` yerine Python yolunun kendisini
+#      (`sys.executable`) yazmak da çalışır.
+#   2. `pip install -r requirements.txt` yalnızca Python paketini getirir.
+#      Chromium'un kendisi ayrıca indirilmelidir:
+#          python -m playwright install chromium
+#      Bu adım çalıştırılmamışsa sunucu çökmeyi değil, `{"success": false,
+#      "error": "...playwright install chromium..."}` dönmeyi tercih eder.
 
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.

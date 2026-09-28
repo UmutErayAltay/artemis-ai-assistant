@@ -2732,3 +2732,100 @@ basılması — bu ortamda hiçbir CI/otomasyon aracı gerçek bir mouse click
 üretemiyor; köprünün `event`/`result` el sıkışması test edildi, tıklamanın
 kendisi edilmedi. Kullanıcı Windows'ta `filesystem.delete` gibi onay
 gerektiren bir komutu sohbet penceresinden gerçekten denemeli.
+
+---
+
+## 41) MCP'nin boş kalan yarısı: gerçek tarayıcı otomasyonu sunucusu (v3.22)
+
+§27'de MCP köprüsü kuruldu ama **içerik boştu**: `plugins/mcp_plugin.py`
+bir taşıma katmanıydı, hiçbir sunucuyu barındırmıyordu. `plugins/
+browser_plugin.py` ise bu boşluğu kendi dokümanında açıkça bırakmıştı
+("Sayfa içeriğini okumak, DOM'a erişmek ya da belirli bir sayfa öğesine
+tıklamak gibi gerçek bir protokol istemcisi gerektiren ihtiyaçlar
+`plugins/mcp_plugin.py` kapsamındadır"). Kapsamdaydı; içerik yoktu.
+
+`mcp_servers/browser_automation_server.py` bu boşluğu doldurur: Playwright
+senkron API'siyle headless chromium, TEK tool (`run_browser_task`).
+
+### 41a) Neden üçüncü taraf NPM sunucusu değil
+
+`@playwright/mcp` gibi resmî paketler ağdan indirilir, sürümleri kayar ve
+"ne yaptığını" bu depodaki kaynak koddan göremezsiniz. Kendi sunucumuz:
+çalışma zamanında ağa çıkmaz, tamamen bu depoda okunabilir ve `file://`
+üzerinden deterministik test edilir. `mcp_servers/` klasörü `plugins/`'in
+KARDEŞİDİR (bir "tool kategorisi" değil) — `plugin_loader.py` yalnızca
+`plugins/`'i taradığı için buradaki hiçbir modül Artemis'i başlatırken
+import edilmez.
+
+### 41b) Zorunlu mimari kısıt: TEK tool, TEK oturum
+
+§27'nin son kuralı — "HER TOOL ÇAĞRISI TAZE BİR BAĞLANTI AÇAR" — bu
+sunucunun şeklini belirledi. İki ayrı tool ("git" ve "tıkla") yazmak bir
+tuzaktı: ikinci çağrı bambaşka bir tarayıcı süreci başlatır, doldurulmuş
+form/gizli öğeler/çerezler kaybolur ve ikinci adım gerçek sitede hiçbir
+şey bulamaz. Bu yüzden `steps` TEK bir liste argümanıdır ve tüm adımlar
+aynı oturumda sırayla koşar.
+
+Doğrulandı: `fill("#name","Artemis")` → `click("#greet")` →
+`read_text("#greeting")` tek çağrıda `"Merhaba Artemis!"` döndürüyor. Bu,
+`read_text`'in tıklamadan SONRA okunması sayesinde kanıtlanıyor — iki
+ayrı çağrı olsaydı ikinci oturum boş formu görürdü.
+
+### 41c) Senkron Playwright, asenkron MCP sunucusunda nasıl güvenli
+
+`playwright.sync_api`, içinde çalıştığı thread'de event loop OLMAMASINI
+ister; MCP sunucu süreci ise baştan sona asyncio döngüsünde yaşar.
+Cevap ölçülerek bulundu: MCP SDK'sı senkron tool fonksiyonlarını
+`anyio.to_thread.run_sync` ile AYRI bir worker thread'ine taşıyor
+(`mcp/server/mcpserver/resolve.py`). Yani tool gövdesi döngüsüz, tertemiz
+bir thread'de koşuyor ve `sync_playwright()` burada güvenle kullanılabilir.
+Bu, senkron API'yi seçmenin gerekçesidir; async seçilseydi aynı döngüde
+ikinci `asyncio.run()`'a girmek imkânsızdı.
+
+### 41d) İki ölçülmüş sürpriz — ikisi de tahminle değil, deneyle bulundu
+
+**1) MCP alt süreci `PLAYWRIGHT_BROWSERS_PATH`'i MİRAS ALMAZ.**
+`mcp.client.stdio.get_default_environment()` yalnızca `HOME/LOGNAME/
+PATH/SHELL/TERM/USER` değişkenlerini geçiriyor. Bu ortamda Chromium
+`/opt/pw-browsers` altında, standart önbellek (`~/.cache/ms-playwright`)
+ise BOŞ olduğu için, env'i geçirmeyen her çağrı "Executable doesn't
+exist" alıyordu. Doğru cevap `MCPServerConfig.env` alanı — testler bu
+değişkeni açıkça geçiriyor. (Kullanıcının kendi makinesinde varsayılan
+önbellek kullanıldığı için sorun yaşamaması da mümkün; ama bu bir
+tahmin değil, ölçülmüş bir tuzaktır.)
+
+**2) Çıplak `dict` dönüş imzası `structured_content` ÜRETMEZ.** MCP SDK'sı
+yapılandırılmış çıktıyı ancak dönüş tipinden bir çıktı modeli türetebiliyorsa
+yayınlıyor; çıplak `dict` bu türetmeyi atlar. Sonucu: `ToolResult.data`
+boş gelir ve planner bu tool'un çıktısına `{{step_N.alan}}` ile
+ZİNCİRLEYEMEZ — yani §25'in mimarisi MCP'ye hiç sızmıyordu. Dönüş imzası
+`dict[str, Any]` yapıldı, `structured_content` dolmaya başladı.
+
+Aynı sebeple `steps` de çıplak `list[dict]` DEĞİL, bir pydantic modeli
+(`Step`): `list[dict]` şemadan yalnızca `{"type": "array", "items":
+{"type": "object"}}` üretir, yani `action`'ın hangi değerleri alabildiği
+modele HİÇ gösterilmez (ölçüldü: `enum` şemada yok). `Step` olunca SDK
+(a) seçenekleri şemaya yazıyor, (b) `selector`'ı zorunlu işaretliyor,
+(c) gelen JSON'u sunucu tarafında doğruluyor.
+
+### 41e) "Koşulsuz success=True yasak" bu sunucuda ne demek
+
+Bir adım bulunamaz/timeout olursa MCP tool çağrısı istisnayla PATLATILMAZ;
+`{"success": false, "failed_step": i, "error": ..., "partial_results":
+{...}}` döner. Gerekçe ölçüldü: `tests/test_mcp_plugin.py`'deki
+`always_fails` testi, mcp 2.0'ın sunucu tarafı istisna metinlerini bile
+iletmediğini gösteriyor — istisna, kullanıcıya `partial_results`'u olmayan
+jenerik bir hata bırakır. Chromium ikilisi kurulu değilse de aynı ilke:
+ham traceback yerine `playwright install chromium` adımını söyleyen bir
+mesaj. Tarayıcı, hata durumunda da `finally` ile kapatılır (başarısız her
+çağrı RAM'de yetim chromium bırakmasın).
+
+**Kurulum notu (README/config.yaml'a da yazıldı):** `pip install -r
+requirements.txt` yalnızca Python paketini getirir; Chromium'un kendisi
+ayrıca indirilir: `python -m playwright install chromium`.
+
+10 yeni test (`tests/test_browser_automation_server.py`), tamamı GERÇEK:
+sunucu `python -m ...` ile alt süreç olarak başlatılır, `file://` üzerinde
+gerçek chromium koşar, mock yok. `tests/test_mcp_plugin.py`'deki
+`_deregister` izolasyonu burada da uygulandı — bu olmadan
+`test_prompt_builder.py`'nin 14.000 karakter sınırı flaky kırılırdı.
