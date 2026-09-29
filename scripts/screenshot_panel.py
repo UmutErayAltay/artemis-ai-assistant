@@ -30,7 +30,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from PyQt6.QtWidgets import QApplication, QTabWidget  # noqa: E402
 
 from config.settings import Settings  # noqa: E402
-from ui.panel import ArtemisPanel  # noqa: E402
+from ui.panel import ArtemisPanel, _DEFAULT_SOURCE_LABEL  # noqa: E402
+from ui.settings_window import SettingsWindow  # noqa: E402
+
+_SOURCE_LABEL = _DEFAULT_SOURCE_LABEL
+"""Alt satırda görünecek kaynak adı.
+
+Örnek log geçici bir klasörde durduğu için GERÇEK yol
+`C:\\Users\\…\\AppData\\…\\Temp\\…` olurdu; README görüntüsünde o yol
+kötü duruyor. Panelin `source_label` parametresi yalnızca GÖRÜNEN
+addı değiştirir — okunan dosya aynıdır, panel kodu sahte veri tutmaz."""
+
 
 # Bu satırlar `logs/artemis.log`'dan BİREBİR kopyalandı (gösterilecek turlar
 # seçilip kısaltıldı). `parse_history` yalnızca bu üç biçimi tanıdığı için
@@ -59,6 +69,23 @@ def _grab(panel: ArtemisPanel, path: Path) -> None:
     print(f"{path} ({path.stat().st_size} bayt)")
 
 
+def _show_both_checkbox_states(form: SettingsWindow) -> None:
+    """Görüntüde onay kutularının İKİ hâli birden görünsün.
+
+    NEDEN: `config.yaml`'da üç onay kutusu da `true` olduğu için düz bir
+    ekran görüntüsü yalnızca "dolu mavi kare" gösterirdi ve işaretli ile
+    işaretsiz ayrımı GÖRÜLEMEZDI — okuyucu kutuya bakıp "bu açık mı
+    kapalı mı" diye kendi başına karar veremezdi.
+
+    Burada `setChecked()` yalnızca EKRAN GÖRÜNTÜSÜ için değiştirilir;
+    hiçbir şey KAYDEDİLMEZ, `config.yaml`'a dokunulmaz ve pencere
+    kapanırken ayar dosyasına yazılmaz. Rastgele iki kutu seçilmez:
+    işaretli bırakılan bir kutu "şu özellik açık" bilgisini korur.
+    """
+
+    form._command_gate_enabled.setChecked(False)
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     out_dir = Path(__file__).resolve().parent.parent / "docs" / "screenshots"
@@ -67,19 +94,28 @@ def main() -> None:
         log_dir = Path(tmp)
 
         # Boş durum: log dosyasi HIC YOK. Panel uydurma tur basmaz.
-        empty = ArtemisPanel(Settings(log_dir=log_dir, db_path=log_dir / "m.db"))
+        empty = ArtemisPanel(
+            Settings(log_dir=log_dir, db_path=log_dir / "m.db"),
+            source_label=_SOURCE_LABEL,
+        )
         _grab(empty, out_dir / "panel-empty.png")
         empty.close()
 
         # Dolu durum: gecmise sahip bir log.
         (log_dir / "artemis.log").write_text(_SAMPLE_LOG, encoding="utf-8")
-        filled = ArtemisPanel(Settings(log_dir=log_dir, db_path=log_dir / "m.db"))
+        filled = ArtemisPanel(
+            Settings(log_dir=log_dir, db_path=log_dir / "m.db"),
+            source_label=_SOURCE_LABEL,
+        )
         _grab(filled, out_dir / "panel.png")
 
         # Ayarlar sekmesi ayni pencerenin ikinci yuzudur; ayri bir ekran
         # goruntusu olarak kaydedilir, README ikisini de gosterir.
         tabs = filled.findChild(QTabWidget)
         tabs.setCurrentIndex(1)
+        form = tabs.widget(1).findChild(SettingsWindow)
+        if form is not None:
+            _show_both_checkbox_states(form)
         app.processEvents()
         _grab(filled, out_dir / "panel-ayarlar.png")
         filled.close()

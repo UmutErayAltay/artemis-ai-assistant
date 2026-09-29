@@ -32,6 +32,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTabWidget,
     QTextBrowser,
+    QVBoxLayout,
+    QWidget,
 )
 
 from config.settings import Settings
@@ -343,6 +345,11 @@ def test_history_cards_separate_turns_and_keep_the_timestamp_readable(
     Önceden turlar yalnızca 14 px boşlukla ayrılıyor ve damga 11 px
     `TEXT_MUTED` (kart zemini üzerinde 4.09:1) idi — WCAG AA'nın
     (4.5:1) altında.
+
+    KART `<table>` İLE ÇİZİLİR: Qt `<div>`'in `border`/`padding`'ini
+    düşürdüğü için kart çerçevesi kayboluyor ve turlar yapışık okunuyordu.
+    `bgcolor` ise `toHtml()` serileştirmesinde KORUNUR; bu yüzden ayrım
+    artık burada SAYILABİLİR (eskiden yalnızca yorumla inanılıyordu).
     """
 
     (tmp_path / "artemis.log").write_text(_LOG, encoding="utf-8")
@@ -352,22 +359,22 @@ def test_history_cards_separate_turns_and_keep_the_timestamp_readable(
     assert history is not None
     html = history.toHtml()
 
-    # Qt, kart `<div>`'ini `<p>`'ye düzleştirir ve kart zeminini iç
-    # satırlara da yayın; bu yüzden ZAMAN DAMGASI sayımı, kart
-    # sayısından güvenilir bir işarettir (her tur tam olarak bir
-    # damga taşır).
     timestamps = re.findall(r"\d\d\.\d\d\.\d{4} \d\d:\d\d:\d\d", html)
     assert len(timestamps) == 3, f"üç tur, üç zaman damgası: {timestamps}"
     assert "background-color:#1e1e26" in html, "her tur kart zeminli olmalı"
     assert "font-size:12px" in html, "zaman damgası 12 px (11 px değil)"
 
-    # KART KENARI ve kart `margin`'i `toHtml()` serileştirmesinde
-    # KAYBOLUR: Qt `<div>`'i `<p>`'ye düzleştirirken `border`'ı
-    # atıyor (yalnızca dolgu renklerini ve iç satır boşluklarını
-    # koruyor). Bu yüzden ayrım burada sayılmaz; üç ayrı zaman
-    # damgası + üç ayrı kart zemini, turların ayrı blok hâlinde
-    # çizildiğini gösterir. Görsel doğrulama
-    # `scripts/screenshot_panel.py` çıktısıdır.
+    # Kart KENARI artık serileştirilmiş HTML'de korunuyor: Qt `<table>` +
+    # `bgcolor` + hücre `border`'ı düşürmüyor. Üç tur => üç kutu.
+    # (Qt kenarları dört ayrı kola açar: `border-top:1px` vb.)
+    assert html.count("border-top:1px") >= 3, (
+        "her turun kart kenarlığı çizilmeli; kenar kaybolursa turlar "
+        "birbirine yapışır ve tur sınırı okunmaz"
+    )
+    # Ayraç: turlar arasında GERÇEK boşluk olmalı, son kart hariç.
+    assert html.count("margin-bottom:12px") >= 2, (
+        "ardışık turlar arasında dikey boşluk bırakılmalı"
+    )
 
 
 def test_every_body_text_color_clears_wcag_aa(qapp: QApplication) -> None:
@@ -497,6 +504,90 @@ def _status_text(panel: ArtemisPanel) -> str:
     return " ".join(
         label.text() for label in panel.findChildren(QLabel) if label.property("role") == "hint"
     )
+
+
+# --- Onay kutusu görünümü ---------------------------------------------------
+
+
+def test_checked_and_unchecked_checkboxes_are_visibly_different(
+    qapp: QApplication,
+) -> None:
+    """İşaretli kutu TİK, işaretsiz kutu BOŞ çerçeve olmalı.
+
+    GERİ ÇÖZÜLEN KUSUR: `QCheckBox::indicator:checked` yalnızca dolu
+    mavi bir kare veriyordu — ekran görüntüsünde "Sesli asistan" ve
+    "uyandırma sözcüğü" kutuları işaretli mi yoksa kapalı mı
+    ANLAŞILAMIYORDU. İşaretli hâl bir tik gerektirir; QSS
+    `QCheckBox::indicator` için metin basamadığı için tik kodda
+    çizilip `image: url(data:…)` olarak verilir.
+    """
+
+    from PyQt6.QtWidgets import QCheckBox
+
+    assert "QCheckBox::indicator:checked" in theme.stylesheet()
+    assert "image: url(data:image/png;base64," in theme.stylesheet(), (
+        "işaretli durumun görünür bir işareti (tik) olmalı"
+    )
+    # İşaretsiz durum da kendi kuralıyla boş çerçeve çiziyor.
+    sheet = theme.stylesheet()
+    assert "QCheckBox::indicator {" in sheet
+    assert "QCheckBox::indicator:disabled" in sheet, (
+        "devre dışı onay kutusu da tanımlı olmalı (panel koyu temada)"
+    )
+
+    # TİK GERÇEKTEN ÇİZİLİYOR MU: aynı QSS'u alan iki kutunun
+    # işaretli/ işaretsiz hâli farklı piksel veriyor olmalı.
+    host = QWidget()
+    host.setStyleSheet(theme.stylesheet())
+    on = QCheckBox("a")
+    on.setChecked(True)
+    off = QCheckBox("b")
+    off.setChecked(False)
+    lay = QVBoxLayout(host)
+    lay.addWidget(on)
+    lay.addWidget(off)
+    host.show()
+    try:
+        qapp.processEvents()
+        assert on.grab().toImage() != off.grab().toImage(), (
+            "işaretli ve işaretsiz hâl aynı görünüyor; ayrım kaybolmuş"
+        )
+    finally:
+        host.close()
+
+
+def test_source_label_hides_a_temp_path_without_faking_the_data(
+    qapp: QApplication, tmp_path: Path
+) -> None:
+    """`source_label` YALNIZCA görünen adı değiştirir, veriyi değil.
+
+    Ekran görüntüsü üretirken örnek log geçici bir klasörde duruyor;
+    panelin altında `C:\\Users\\…\\Temp\\tmpXXXX\\artemis.log` yazmasın
+    diye `logs/artemis.log` görünür. Panel kodu sahte bir tur TUTMAZ:
+    geçmiş yine gerçek dosyadan okunur.
+    """
+
+    (tmp_path / "artemis.log").write_text(_LOG, encoding="utf-8")
+
+    real = ArtemisPanel(Settings(log_dir=tmp_path, db_path=tmp_path / "m.db"))
+    named = ArtemisPanel(
+        Settings(log_dir=tmp_path, db_path=tmp_path / "m.db"),
+        source_label="logs/artemis.log",
+    )
+    try:
+        assert str(tmp_path) in _status_text(real), "verilmezse gerçek yol yazılmalı"
+        status = _status_text(named)
+        assert "logs/artemis.log" in status
+        assert str(tmp_path) not in status, "geçici klasör yolu sızmamalı"
+
+        # Veri AYNI: etiket değişti, geçmiş değişmedi.
+        real_history = real.findChild(QTextBrowser)
+        named_history = named.findChild(QTextBrowser)
+        assert real_history is not None and named_history is not None
+        assert real_history.toPlainText() == named_history.toPlainText()
+    finally:
+        real.close()
+        named.close()
 
 
 # --- Tepsi menüsündeki karşılık -------------------------------------------

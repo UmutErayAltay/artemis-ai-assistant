@@ -29,9 +29,11 @@ GEÇMİŞ NEREDEN GELİYOR — AÇIKÇA:
     geliyordur — eksik olan kayıt, panelin işi değil kaynağın işidir.
 
 GÖRÜNTÜ DÜZENİ (tasarım kararları ve ÖLÇÜLEN gerekçeler):
-    * Turlar `BG_PANEL` zeminli kartlarla ayrılır; zaman damgası 12 px
-      `TEXT_SECONDARY` (kart zemini üzerinde 8.26:1 — WCAG AA). Daha önce
-      11 px `TEXT_MUTED` idi (4.09:1) ve zemine karışıyordu.
+    * Turlar `BG_PANEL` zeminli, kenarlıklı kartlarla ayrılır; zaman
+      damgası 12 px `TEXT_SECONDARY` (kart zemini üzerinde 8.26:1 — WCAG
+      AA). Daha önce 11 px `TEXT_MUTED` idi (4.09:1) ve zemine karışıyordu.
+      Kart `<table>`+`bgcolor` ile çizilir; Qt `<div>` border/padding'i
+      düşürdüğü için turlar yapışık okunuyordu (bkz. `_render_turn`).
     * Durum şeridi iki satırlı bir ızgaradır: renkli nokta + başlık +
       kısa değer, altında ince ayrıntı satırı. `python main.py --voice`
       yolu EKRANDA değil, tooltip'tedir; ekranda olsaydı panelin minimum
@@ -94,6 +96,15 @@ _HISTORY_LIMIT = 50
 """Kaç tur gösterileceği. Log 1 MB'a kadar büyüyebiliyor; geçmişin
 tamamını basmak yüzlerce satırlık bir liste ve anlamsız bir kaydırma
 demektir. En YENİ `HISTORY_LIMIT` tur gösterilir."""
+
+_DEFAULT_SOURCE_LABEL = "logs/artemis.log"
+"""Ekran görüntüsü üretirken alt satırda GÖRÜNEN kaynak adı.
+
+`ArtemisPanel(source_label=…)` verilmezse gerçek mutlak yol yazılır
+(davranış değişmez). Yalnızca `scripts/screenshot_panel.py`, geçici
+klasördeki örnek log için bunu geçer: README'de `C:\\Users\\…\\Temp\\…`
+gibi bir geçici yol görünmesin diye. Panel kodu sahte veri TUTMAZ —
+yalnızca ETİKET değişir, okunan dosya aynıdır."""
 
 # --- Log satırı biçimleri -------------------------------------------------
 #
@@ -312,20 +323,30 @@ def _render_turn(turn: HistoryTurn, *, last: bool) -> str:
     """Tek bir turu, `QTextBrowser`'ın gösterebileceği HTML'e çevirir.
 
     TURLAR ARASI AYRIM bir KART ile yapılır: her tur `BG_PANEL` zeminli,
-    1 px kenarlıklı bir kutu içinde durur. Önceden turlar yalnızca 14 px
+    kenarlıklı bir kutu içinde durur. Önceden turlar yalnızca 14 px
     boşlukla ayrılıyordu — bu, üç turu okuyan birinin nerede yeni tur
     başladığını görmesini imkânsız kılıyordu.
 
-    NEDEN `div`, NEDEN `table` DEĞİL: kart zemini ve kenar için
-    `<table>` denendi ve doğru çizildi, ancak hücre içindeki iki
-    `inline` parça (araç adı + renkli durum etiketi) FARKLI TABAN
-    ÇİZGİLERİNE oturdu ve etiketin üstünden ince bir çizgi geçti —
-    görsel olarak "üzeri çizilmiş" okunuyordu. Düz `div` yığını aynı
-    taban çizgisini ve düzgün hizayı veriyor.
+    NEDEN `table`, NEDEN `div` DEĞİL: Qt'nin metin motoru `<div>`'in
+    `border` ve `padding`'ini DÜŞÜRÜR (`toHtml()` çıktısında kart çerçevesi
+    kaybolduğu için doğrulanmıştı) — kart zemini yayılıyor, kenar
+    çizilmiyor, turlar birbirine yapışıyordu. `<table>` + `bgcolor` ise
+    QTextBrowser'ın zengin metin alt kümesinde hem zemin hem `cellpadding`
+    olarak GERÇEKTEN çizilir.
 
-    ZAMAN DAMGASI artık `TEXT_SECONDARY` (kart zemini üzerinde 8.26:1).
-    `TEXT_MUTED` burada 4.09:1 idi ve zemine karışıyordu; artık
-    12 px'lik ikincil metinde de kullanılmıyor.
+    NEDEN İKİ PARÇA DEĞİL: aynı satırdaki iki `inline` parça
+    (`Siz:` etiketi ve metin, araç adı ve durum etiketi) taban çizgisini
+    paylaşmadığında üstlerinden ince bir çizgi geçiyordu — "üzeri
+    çizilmiş" görünüyordu. Bu, `QTextBrowser`'ın satır YÜKSELTME
+    HESABI değil, Qt'nin zengin metin alt kümesinin `<table>` hücresi
+    içinde satır taban çizgisini düzeltmemesidir. ÖLÇÜLDÜ: aynı
+    boyuttaki iki span sorunsuz; 11 px + 13 px karışımı çizgi bırakıyor.
+    Bu yüzden her satır TEK bir `<p>` ve içinde TEK bir `<span>`
+    (`Siz:` etiketi kendi satırında) — farklı boyut aynı satırda
+    görünmez.
+
+    ZAMAN DAMGASI `TEXT_SECONDARY` (kart zemini üzerinde 8.26:1);
+    `TEXT_MUTED` 4.09:1 idi ve zemine karışıyordu.
     """
 
     card = theme.BG_PANEL
@@ -334,31 +355,48 @@ def _render_turn(turn: HistoryTurn, *, last: bool) -> str:
     body = _on_background(theme.TEXT_PRIMARY, card)  # 15.28:1
     accent = theme.ACCENT_TEAL.name()  # 12.20:1
 
-    spacing = "" if last else "margin-bottom: 10px;"
+    gap = "" if last else "margin-bottom: 12px;"
     parts = [
-        f'<div style="background-color: {card.name()}; border: 1px solid {hairline};'
-        f' padding: 12px 16px; {spacing}">',
-        f'<div style="color:{stamp}; font-size:12px; margin-bottom:8px;">'
-        f"{html.escape(turn.timestamp)}</div>",
+        f'<table width="100%" cellpadding="0" cellspacing="0" bgcolor="{card.name()}"'
+        f' style="background-color: {card.name()}; {gap}">',
+        f'<tr><td bgcolor="{card.name()}" style="background-color: {card.name()};'
+        f' border: 1px solid {hairline}; border-radius: 8px; padding: 12px 16px;">',
     ]
 
+    # Zaman damgası: turun kimlik etiketi, kartın en üstünde.
+    parts.append(
+        f'<p style="color:{stamp}; font-size:12px; margin:0 0 8px 0;">{html.escape(turn.timestamp)}</p>'
+    )
+
     said = turn.said.strip()
-    spoken = html.escape(said) if said else f'<span style="color:{stamp};">ses anlaşılmadı</span>'
-    parts.append(f'<div style="color:{body};"><span style="color:{accent};">Siz:</span> {spoken}</div>')
+    if said:
+        # Etiket ve metin AYRI satırlar: aynı satırda iki renkli
+        # parça, Qt'de taban çizgisi hizasını bozuyor (yukarıdaki ölçüm).
+        parts.append(
+            f'<p style="color:{accent}; font-size:12px; margin:0 0 2px 0;">Siz:</p>'
+            f'<p style="color:{body}; font-size:13px; margin:0;">{html.escape(said)}</p>'
+        )
+    else:
+        parts.append(
+            f'<p style="color:{stamp}; font-size:12px; margin:0;">ses anlaşılmadı</p>'
+        )
 
     for tool, ok in turn.tools:
         mark = "başarılı" if ok else "başarısız"
-        color = (theme.ACCENT_GREEN if ok else theme.ACCENT_RED).name()
         parts.append(
-            f'<div style="color:{stamp}; font-size:12px; margin-top:4px;">'
+            f'<p style="color:{stamp}; font-size:12px; margin:6px 0 0 0;">'
             f'&nbsp;&nbsp;{html.escape(tool)} '
-            f'<span style="color:{color};">({mark})</span></div>'
+            f'<span style="color:{(theme.ACCENT_GREEN if ok else theme.ACCENT_RED).name()};'
+            f' font-size:12px;">({mark})</span></p>'
         )
 
     if turn.reply:
-        parts.append(f'<div style="color:{body}; margin-top:8px;">{html.escape(turn.reply)}</div>')
+        parts.append(
+            f'<p style="color:{body}; font-size:13px; margin:10px 0 0 0;">'
+            f"{html.escape(turn.reply)}</p>"
+        )
 
-    parts.append("</div>")
+    parts.append("</td></tr></table>")
     return "".join(parts)
 
 
@@ -450,6 +488,9 @@ class ArtemisPanel(QWidget):
             yazar). Yoksa panel yine açılır — yalnızca ayardaki seçim
             yazılır.
         parent: Qt üst widget'ı.
+        source_label: Alt satırda gösterilecek kaynak adı. `None` (varsayılan)
+            ise gerçek mutlak yol yazılır; ekran görüntüsü üretirken
+            geçici klasör yolunu gizlemek için `logs/artemis.log` verilir.
     """
 
     def __init__(
@@ -457,11 +498,13 @@ class ArtemisPanel(QWidget):
         settings: Settings,
         llm_client: Any | None = None,
         parent: QWidget | None = None,
+        source_label: str | None = None,
     ) -> None:
         super().__init__(parent)
 
         self._settings = settings
         self._llm_client = llm_client
+        self._source_label = source_label
         self.setStyleSheet(theme.stylesheet())
         self.setWindowTitle("Artemis")
         self.setMinimumWidth(_MIN_WIDTH)
@@ -637,6 +680,16 @@ class ArtemisPanel(QWidget):
 
         return Path(self._settings.log_dir) / "artemis.log"
 
+    def _source_text(self) -> str:
+        """Alt satırda yazılacak kaynak metni.
+
+        `source_label` verilmişse o AD yazılır (okunan dosya değişmez);
+        verilmemişse gerçek mutlak yol — panel her zaman nerede baktığını
+        söyler.
+        """
+
+        return self._source_label if self._source_label is not None else str(self.log_path)
+
     def reload_history(self) -> None:
         """Geçmiş sekmesini log dosyasından yeniden okur.
 
@@ -657,7 +710,7 @@ class ArtemisPanel(QWidget):
                 "Konuşmalar logs/artemis.log dosyasına yazılır. "
                 "Sesli asistanı python main.py --voice ile başlatıp konuştuğunda burada görünür.",
             )
-            self._source.setText(f"Kaynak: {path}")
+            self._source.setText(f"Kaynak: {self._source_text()}")
             return
 
         try:
@@ -665,7 +718,7 @@ class ArtemisPanel(QWidget):
         except OSError as exc:
             logger.warning("Konuşma geçmişi okunamadı (%s): %s", path, exc)
             self._show_empty("Geçmiş okunamadı.", f"{path} açılamadı: {exc}")
-            self._source.setText(f"Kaynak: {path}")
+            self._source.setText(f"Kaynak: {self._source_text()}")
             return
 
         if not turns:
@@ -680,7 +733,7 @@ class ArtemisPanel(QWidget):
             self._stack.setCurrentIndex(1)
             self._history.verticalScrollBar().setValue(0)
 
-        self._source.setText(f"Kaynak: {path}  ·  {len(turns)} tur")
+        self._source.setText(f"Kaynak: {self._source_text()}  ·  {len(turns)} tur")
 
     def _show_empty(self, headline: str, detail: str) -> None:
         """Boş/hata durumunu ortalanmış sayfada gösterir."""
