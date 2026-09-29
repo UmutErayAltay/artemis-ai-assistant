@@ -1,6 +1,6 @@
 # Artemis — Local Voice AI Assistant
 
-![Artemis sohbet penceresi](docs/screenshots/chat-gui.png)
+![Artemis paneli](docs/screenshots/panel.png)
 
 [🇹🇷 Türkçe](./README.md)
 
@@ -16,7 +16,7 @@ Speech is hybrid too: `faster-whisper` for command recognition, Microsoft Edge T
 (no API key) with a local Piper fallback for the spoken answer. The brain runs on
 `llm_provider: "auto"`, which silently switches between a cloud model (OpenRouter)
 and local Ollama. Three entry points share the same brain: `--chat` (terminal),
-`--chat-gui` (chat window) and `--voice` (tray + overlay).
+`--chat-gui` (panel: history + settings) and `--voice` (tray + overlay).
 
 ## Highlights
 
@@ -39,9 +39,10 @@ and local Ollama. Three entry points share the same brain: `--chat` (terminal),
 - **Multi-step planning**: `core/planner.py` sequences multi-step commands and
   halts the plan if a step fails or the user declines a confirmation, instead of
   ploughing ahead.
-- **Persistent chat & settings GUI** (`ui/chat_window.py`, `ui/settings_window.py`)
-  alongside the terminal `--chat`/`--voice` modes. The chat window keeps the whole
-  conversation on screen as chat bubbles for as long as it is open.
+- **Single-window panel** (`ui/panel.py`, `ui/settings_window.py`) alongside the
+  terminal `--chat`/`--voice` modes. The panel does not accept messages: it shows
+  the conversation history (read from `logs/artemis.log`), the settings and the
+  assistant's status. You talk to Artemis with `--chat` (text) or `--voice`.
 - **Real DOM-level browser automation**: an own MCP server
   (`mcp_servers/browser_automation_server.py`) drives headless Chromium through
   Playwright — no third-party npm package, and its *test suite* needs no
@@ -61,7 +62,7 @@ pip install -r requirements.txt      # or: pip install .
 python scripts/setup_voice.py       # Piper TTS model, only needed for --voice
 
 python main.py --chat               # text mode (terminal)
-python main.py --chat-gui           # text mode, in a window
+python main.py --chat-gui           # panel: conversation history + settings
 python main.py --settings           # settings window on its own
 python main.py --voice              # voice assistant (faster-whisper + tray)
 ```
@@ -146,9 +147,9 @@ config/            Settings (pydantic) + config.yaml
 plugins/           one file per capability (filesystem, web, windows, ...)
 mcp_servers/       own MCP servers, e.g. Playwright browser automation
 voice/             audio capture, STT, TTS, wake word, provider fallback router
-ui/                PyQt6 chat window, overlay, tray, hotkey, settings, theme
+ui/                PyQt6 panel, chat window, overlay, tray, hotkey, settings, theme
 memory/            SQLite-backed key-value context memory
-tests/             812 tests covering the above
+tests/             840 tests covering the above
 ```
 
 ## Architecture deep-dive

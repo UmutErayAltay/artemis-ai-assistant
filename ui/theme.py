@@ -175,6 +175,27 @@ def stylesheet() -> str:
         background: transparent;
         border: none;
     }}
+    QTabWidget::pane {{
+        border: 1px solid {_rgba(BORDER)};
+        border-radius: 8px;
+        top: -1px;
+    }}
+    QTabBar::tab {{
+        background: transparent;
+        color: {_rgba(TEXT_SECONDARY)};
+        border: 1px solid transparent;
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+        padding: 7px 18px;
+    }}
+    QTabBar::tab:selected {{
+        background: {_rgba(BG_PANEL)};
+        color: {_rgba(TEXT_PRIMARY)};
+        border-color: {_rgba(BORDER)};
+    }}
+    QTabBar::tab:hover:!selected {{
+        color: {_rgba(TEXT_PRIMARY)};
+    }}
     QToolTip {{
         background-color: {_rgba(BG_ELEVATED)};
         color: {_rgba(TEXT_PRIMARY)};

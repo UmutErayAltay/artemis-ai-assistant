@@ -62,6 +62,9 @@ class ArtemisTray(QSystemTrayIcon):
             kalır. Bu, ayar penceresinin eklenmesini bir "herkes için
             zorunlu bağımlılık" olmaktan çıkarır: `main.py`'yi henüz
             değiştirmemiş bir çağrı yer de durur.
+        on_panel: "Panel (geçmiş ve ayarlar)" seçildiğinde çağrılır
+            (`ui/panel.py::show_panel`). Aynı seçime bağlı mantık:
+            verilmezse menü öğesi eklenmez.
     """
 
     def __init__(
@@ -70,6 +73,7 @@ class ArtemisTray(QSystemTrayIcon):
         on_quit: Callable[[], None],
         hotkey_text: str = "",
         on_settings: Callable[[], None] | None = None,
+        on_panel: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(build_icon())
 
@@ -81,6 +85,11 @@ class ArtemisTray(QSystemTrayIcon):
         listen_action = QAction(f"Şimdi dinle{f'  ({hotkey_text})' if hotkey_text else ''}", menu)
         listen_action.triggered.connect(lambda: on_listen())
         menu.addAction(listen_action)
+
+        if on_panel is not None:
+            panel_action = QAction("Panel (geçmiş ve ayarlar)", menu)
+            panel_action.triggered.connect(lambda: on_panel())
+            menu.addAction(panel_action)
 
         if on_settings is not None:
             settings_action = QAction("Ayarlar", menu)

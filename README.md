@@ -1,6 +1,6 @@
 # Artemis — Yerel Sesli Yapay Zekâ Asistanı
 
-![Artemis sohbet penceresi](docs/screenshots/chat-gui.png)
+![Artemis paneli](docs/screenshots/panel.png)
 
 [🇬🇧 English](./README.en.md)
 
@@ -16,8 +16,8 @@ bir `DangerLevel` bildirir, bu yüzden yıkıcı işlemler (silme, kapatma, kili
 `faster-whisper`, konuşma cevabı için API anahtarı istemeyen Microsoft Edge TTS ve
 yerel Piper yedeği. Beyin ise `llm_provider: "auto"` ile çalışır: bulut modeli
 (OpenRouter) ile yerel Ollama arasında sessizce seçim yapar. Üç giriş noktası
-aynı beyni paylaşır: `--chat` (terminal), `--chat-gui` (sohbet penceresi) ve
-`--voice` (tepsi + overlay).
+aynı beyni paylaşır: `--chat` (terminal), `--chat-gui` (panel: geçmiş + ayarlar)
+ve `--voice` (tepsi + overlay).
 
 ## Öne çıkanlar
 
@@ -40,15 +40,16 @@ aynı beyni paylaşır: `--chat` (terminal), `--chat-gui` (sohbet penceresi) ve
 - **Çok adımlı planlama**: `core/planner.py` çok adımlı komutları sırayla yürütür
   ve bir adım başarısız olursa ya da kullanıcı onayı reddederse planı durdurur —
   geri kalanını körlemesine çalıştırmaz.
-- **Kalıcı sohbet ve ayar arayüzü** (`ui/chat_window.py`, `ui/settings_window.py`),
-  terminal `--chat`/`--voice` modlarının yanında. Sohbet penceresi konuşmanın
-  tamamını, pencere kapanana kadar ekranda balonlar hâlinde tutar.
+- **Tek pencere panel** (`ui/panel.py`, `ui/settings_window.py`), terminal
+  `--chat`/`--voice` modlarının yanında. Panel mesaj YAZMAZ; sohbet geçmişini
+  (`logs/artemis.log`'dan), ayarları ve asistanın durumunu gösterir. Metinle
+  konuşmak `--chat`'te, sesle `--voice`'da yapılır.
 - **Gerçek DOM seviyesinde tarayıcı otomasyonu**: kendi MCP sunucumuz
   (`mcp_servers/browser_automation_server.py`) Playwright üzerinden headless
   Chromium'u sürer — üçüncü taraf bir NPM paketi yok, *testleri* de ağ gerektirmez.
   Tool verilen `url`'ye gerçekten gider, yani internete çıkar; varsayılan olarak
   genel hostlarda yalnızca `http(s)://` adreslere sınırlıdır (aşağıya bakın).
-- **812 otomatik test** (2'si `disruptive` işaretli olduğu için varsayılan olarak
+- **840 otomatik test** (2'si `disruptive` işaretli olduğu için varsayılan olarak
   atlanır): dispatcher, planner, dosya sistemi güvenliği, OpenRouter istemcisi,
   ses hattı, arayüz — hepsi mock değil, gerçek davranış üzerinde.
 
@@ -61,7 +62,7 @@ pip install -r requirements.txt      # ya da: pip install .
 python scripts/setup_voice.py       # Piper TTS modeli, yalnızca --voice için gerekli
 
 python main.py --chat               # metin modu (terminal)
-python main.py --chat-gui           # metin modu, pencerede
+python main.py --chat-gui           # panel: sohbet geçmişi + ayarlar
 python main.py --settings           # ayarlar penceresini tek başına açar
 python main.py --voice              # sesli asistan (faster-whisper + tepsi)
 ```
@@ -149,9 +150,9 @@ config/            Settings (pydantic) + config.yaml
 plugins/           yetenek başına bir dosya (filesystem, web, windows, ...)
 mcp_servers/       kendi MCP sunucularımız, örn. Playwright tarayıcı otomasyonu
 voice/             ses kaydı, STT, TTS, uyandırma sözcüğü, sağlayıcı yedek yönlendiricisi
-ui/                PyQt6 sohbet penceresi, overlay, tepsi, kısayol, ayarlar, tema
+ui/                PyQt6 panel, sohbet penceresi, overlay, tepsi, kısayol, ayarlar, tema
 memory/            SQLite tabanlı anahtar-değer bağlam hafızası
-tests/             yukarıdakileri kapsayan 812 test
+tests/             yukarıdakileri kapsayan 840 test
 ```
 
 ## Mimari derinlemesine

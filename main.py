@@ -8,7 +8,7 @@ döngüsü (Whisper STT -> ... -> Piper/pyttsx3 TTS) eklenecektir;
 Kullanım:
     python main.py                # tek seferlik demo dispatch (LLM'siz)
     python main.py --chat          # gerçek sohbet döngüsü (terminal)
-    python main.py --chat-gui      # aynı sohbet döngüsü, pencereli (ui/chat_window.py)
+    python main.py --chat-gui      # Artemis paneli: geçmiş + ayarlar (ui/panel.py)
     python main.py --voice         # sesli asistan: "Artemis" deyince ekrana gelir
     python main.py --settings      # ayarlar penceresini tek başına açar
     python main.py --stop-ollama   # RAM temizliği: yetim ollama süreçlerini kapatır
@@ -273,20 +273,25 @@ def main_chat() -> None:
 
 
 def main_chat_gui() -> None:
-    """`python main.py --chat-gui`: aynı sohbet döngüsünü pencereli açar.
+    """`python main.py --chat-gui`: Artemis panelini açar (geçmiş + ayarlar).
 
-    `main_chat()` ile AYNI beyin hazırlığından (`_start_llm_session`)
-    geçer — LLM tarafı, kısayol tuşu, provider seçimi hiçbiri farklı
-    değil; farkı yalnızca terminalin yerine `ui/chat_window.py::
-    ChatWindow`'un geçmesidir. `--chat` KALDIRILMADI, ikisi de kalıcı
-    ve paralel giriş noktalarıdır (bkz. `core/conversation_loop.py`nin
-    kendi "iki yol da kalıcı" notu — buradaki gerekçe birebir aynı:
-    bazı ortamlarda GUI yoktur/istenmez).
+    Artık mesaj YAZMA penceresi değildir: panel sohbet geçmişini okur,
+    ayarları gösterir ve asistanın durumunu bildirir. Konuşmanın aracı
+    `--chat` (terminal) ve `--voice`'dur; panel yalnızca bakmak içindir.
+
+    `ui/chat_window.py::ChatWindow` SİLİNMEDİ — modül, `QThread`'li
+    döngüsü ve onay köprüsüyle birlikte duruyor ve `tests/
+    test_ui_chat_window.py` ona bağlı; yalnızca bu giriş noktası artık
+    onu açmıyor. Geri bağlamak isteyen tek satırlık iştir.
+
+    LLM oturumu (`_start_llm_session`) yine kurulur: durum şeridi
+    çalışan sağlayıcının adını gerçekten yazabilsin diye. Panel bu
+    istemciyi KULLANMAZ; sadece adını okur.
     """
 
     from PyQt6.QtWidgets import QApplication
 
-    from ui.chat_window import ChatWindow
+    from ui.panel import show_panel
 
     dispatcher = bootstrap()
 
@@ -296,8 +301,7 @@ def main_chat_gui() -> None:
     server_manager, llm_client = session
 
     app = QApplication(sys.argv)
-    window = ChatWindow(dispatcher, llm_client)
-    window.show()
+    show_panel(dispatcher.settings, llm_client)
 
     try:
         sys.exit(app.exec())
@@ -365,6 +369,7 @@ def main_voice() -> None:
     from core.voice_loop import VoiceAssistant
     from ui.hotkey import GlobalHotkey, HotkeyParseError
     from ui.overlay import ArtemisOverlay
+    from ui.panel import show_panel
     from ui.settings_window import show_settings
     from ui.tray import ArtemisTray
 
@@ -405,6 +410,11 @@ def main_voice() -> None:
         on_quit=app.quit,
         hotkey_text=hotkey_text if hotkey else "",
         on_settings=show_settings,
+        # Panel, `--chat-gui`'nin açtığı AYNI pencere: sesli modda da
+        # geçmiş + ayarlar tepsi menüsünden bir tıkla erişilir. `functools
+        # .partial` gerekir çünkü `show_panel` ayar + istemci ister, menü
+        # geri çağırması ise ek parametresizdir.
+        on_panel=lambda: show_panel(settings, llm_client),
     )
     tray.show()
 
@@ -459,7 +469,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--chat-gui",
         action="store_true",
         dest="chat_gui",
-        help="Aynı sohbet döngüsü, pencereli (ui/chat_window.py).",
+        help="Artemis paneli: sohbet geçmişi + ayarlar (ui/panel.py).",
     )
     mod.add_argument("--voice", action="store_true", help="Sesli asistan (tepsi + overlay).")
     mod.add_argument(
