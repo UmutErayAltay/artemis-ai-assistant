@@ -21,6 +21,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("QT_SCALE_FACTOR", "2")  # README'de net görünsün
+# offscreen eklentisi Windows fontlarını kendiliğinden bulmaz; yazı yerine kutucuk (□) çıkar.
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_FONTDIR", r"C:\Windows\Fonts")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
