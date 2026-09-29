@@ -94,12 +94,24 @@ def stylesheet() -> str:
         font-weight: 600;
         color: {_rgba(TEXT_PRIMARY)};
     }}
+    QLabel[role="heading"] {{
+        font-size: 17px;
+        font-weight: 600;
+        color: {_rgba(TEXT_PRIMARY)};
+    }}
+    QLabel[role="status"] {{
+        color: {_rgba(TEXT_PRIMARY)};
+        font-weight: 600;
+    }}
     QLabel[role="subtitle"] {{
         color: {_rgba(TEXT_SECONDARY)};
     }}
     QLabel[role="hint"] {{
-        color: {_rgba(TEXT_MUTED)};
-        font-size: 11px;
+        color: {_rgba(TEXT_SECONDARY)};
+        font-size: 12px;
+    }}
+    QLabel[role="dot"] {{
+        border-radius: 4px;
     }}
     QScrollArea, QAbstractScrollArea {{
         background: transparent;
@@ -177,7 +189,7 @@ def stylesheet() -> str:
     }}
     QTabWidget::pane {{
         border: 1px solid {_rgba(BORDER)};
-        border-radius: 8px;
+        border-radius: 10px;
         top: -1px;
     }}
     QTabBar::tab {{
@@ -186,7 +198,7 @@ def stylesheet() -> str:
         border: 1px solid transparent;
         border-top-left-radius: 8px;
         border-top-right-radius: 8px;
-        padding: 7px 18px;
+        padding: 8px 20px;
     }}
     QTabBar::tab:selected {{
         background: {_rgba(BG_PANEL)};
@@ -195,6 +207,10 @@ def stylesheet() -> str:
     }}
     QTabBar::tab:hover:!selected {{
         color: {_rgba(TEXT_PRIMARY)};
+    }}
+    QTabBar::tab:focus {{
+        color: {_rgba(TEXT_PRIMARY)};
+        border-color: {_rgba(ACCENT_BLUE, 180)};
     }}
     QToolTip {{
         background-color: {_rgba(BG_ELEVATED)};

@@ -16,6 +16,7 @@ sonucu verir.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,14 @@ from PyQt6.QtWidgets import (
 
 from config.settings import Settings
 from ui import theme
-from ui.panel import _WINDOW_HEIGHT, ArtemisPanel, describe_llm, describe_voice, parse_history
+from ui.panel import (
+    _WINDOW_HEIGHT,
+    ArtemisPanel,
+    describe_llm,
+    describe_voice,
+    describe_voice_details,
+    parse_history,
+)
 from ui.settings_window import SettingsWindow
 
 _LOG = """\
@@ -158,28 +166,44 @@ def test_lines_that_do_not_match_the_format_are_ignored(tmp_path: Path) -> None:
 
 
 def test_llm_line_names_the_running_client_not_a_guess(tmp_path: Path) -> None:
-    """Çalışan istemci VARKEN o konuşur; yokken ayar yazılır."""
+    """Çalışan istemci VARKEN o konuşur; yokken ayar yazılır.
+
+    Değer metninde "Beyin: " ÖNEKİ YOK: sütun başlığı zaten "Beyin"
+    diyor, önek aynı kelimeyi iki kez yazıyordu.
+    """
 
     settings = Settings(log_dir=tmp_path, llm_provider="local")
 
     class OllamaLLMClient:  # sadece ADI önemli
         pass
 
-    assert "Yerel (Ollama)" in describe_llm(settings, OllamaLLMClient())
+    assert describe_llm(settings, OllamaLLMClient()) == "Yerel (Ollama)"
     assert "istemci başlatılmadı" in describe_llm(settings, None)
     assert "Bulut (OpenRouter)" in describe_llm(
         Settings(log_dir=tmp_path, llm_provider="cloud"), None
     )
+    assert not describe_llm(settings, None).startswith("Beyin"), (
+        "sütun başlığı zaten 'Beyin'; metin öneki tekrar etmemeli"
+    )
 
 
 def test_voice_line_reflects_the_setting_including_the_off_case(tmp_path: Path) -> None:
-    """Sesli mod kapalıyken "açık" yazılmaz — panel modu BAŞLATMAZ."""
+    """Sesli mod kapalıyken "açık" yazılmaz — panel modu BAŞLATMAZ.
+
+    Değer metni KISA tutulur: sütun başlığı zaten "Sesli asistan"
+    diyor, ayrıca uyandırma sözcüğü ve kısayol ikincil satırda,
+    `python main.py --voice` yolu ise tooltip'te.
+    """
 
     off = describe_voice(Settings(log_dir=tmp_path, voice_enabled=False))
     on = describe_voice(Settings(log_dir=tmp_path, voice_enabled=True))
+    details = describe_voice_details(Settings(log_dir=tmp_path, voice_enabled=True))
 
-    assert "kapalı" in off
-    assert "--voice" in on, "sesli modu açma yolu gösterilmeli"
+    assert "kapalı" in off.lower()
+    assert "Açık" in on
+    assert "--voice" not in on, "başlatma yolu değer satırında olmamalı"
+    assert "ctrl+alt+a" in details, "kısayol ikincil satırda görünmeli"
+    assert "Artemis" in details, "uyandırma sözcüğü ikincil satırda görünmeli"
 
 
 # --- Panel görünümü --------------------------------------------------------
@@ -260,17 +284,160 @@ def test_panel_keeps_its_own_size_instead_of_growing_to_the_settings_form(
     assert panel.size().height() == _WINDOW_HEIGHT
 
 
-def test_missing_log_shows_an_empty_state_instead_of_inventing_history(
+def test_the_status_strip_cannot_blow_the_window_past_its_own_floor(
     panel: ArtemisPanel,
 ) -> None:
-    """Log dosyası yokken panel sahte tur BASMAZ, durumu söyler."""
+    """Uzun durum metni pencereyi 823 piksele şişirmemeli.
+
+    GERİ ÇÖZÜLEN KUSUR: durum şeridindeki tek satırlık
+    "Sesli asistan: açık · uyandırma … · başlatmak için: python main.py
+    --voice" cümlesi sarmalı etiketin boyut ipucunu 676'ya, paneli
+    823'e çıkıyordu. Artık hiçbir durum satırı o yolu İÇERMEZ.
+    """
+
+    status = " ".join(
+        label.text()
+        for label in panel.findChildren(QLabel)
+        if label.property("role") in {"status", "subtitle", "hint"}
+    )
+
+    assert "--voice" not in status, (
+        "sesli modu başlatma yolu ekranda olmamalı; tooltip'te durur"
+    )
+    assert panel.minimumSizeHint().width() <= 640, (
+        f"durum şeridi pencereyi {panel.minimumSizeHint().width()} piksele zorluyor"
+    )
+    assert panel.minimumWidth() == 560
+
+
+def test_the_settings_form_no_longer_demands_nine_hundred_pixels(
+    qapp: QApplication,
+) -> None:
+    """`--settings` ve panelin ayarlar sekmesi aynı makul genişliği ister.
+
+    GERİ ÇÖZÜLEN KUSUR: en uzun sarmalı ipucu etiketi (793) tek satır
+    genişliğine göre boyut ipucu veriyor, açılır listeler en uzun
+    seçeneğe (≈250) göre genişliyor ve uzun bir düğme etiketi ("Gelişmiş
+    ayarlar için config.yaml dosyasını aç") satırı 748'e çıkarıyordu;
+    toplamda form 919 piksele zorlanıyordu. Artık: sarmalı etiketler
+    boyut ipucuna katılmıyor, listeler sabit bir karakter tabanına
+    bağlı, düğme etiketi kısa. Kalan genişlik GERÇEK içerikten gelir
+    (en uzun etiket + en uzun alan), bir kusur değil.
+    """
+
+    window = SettingsWindow()
+    try:
+        assert window.minimumSizeHint().width() < 820, (
+            f"ayar formu {window.minimumSizeHint().width()} piksele zorluyor"
+        )
+        assert window.minimumWidth() == 520
+    finally:
+        window.close()
+
+
+def test_history_cards_separate_turns_and_keep_the_timestamp_readable(
+    panel: ArtemisPanel, tmp_path: Path
+) -> None:
+    """Turlar kartla ayrılır, zaman damgası gövde metninden sönük AMA okunur.
+
+    Önceden turlar yalnızca 14 px boşlukla ayrılıyor ve damga 11 px
+    `TEXT_MUTED` (kart zemini üzerinde 4.09:1) idi — WCAG AA'nın
+    (4.5:1) altında.
+    """
+
+    (tmp_path / "artemis.log").write_text(_LOG, encoding="utf-8")
+    panel.reload_history()
 
     history = panel.findChild(QTextBrowser)
     assert history is not None
+    html = history.toHtml()
 
-    text = history.toPlainText()
-    assert "Henüz kayıt yok" in text
-    assert "Siz:" not in text, "uydurulmuş bir konuşma satırı olmamalı"
+    # Qt, kart `<div>`'ini `<p>`'ye düzleştirir ve kart zeminini iç
+    # satırlara da yayın; bu yüzden ZAMAN DAMGASI sayımı, kart
+    # sayısından güvenilir bir işarettir (her tur tam olarak bir
+    # damga taşır).
+    timestamps = re.findall(r"\d\d\.\d\d\.\d{4} \d\d:\d\d:\d\d", html)
+    assert len(timestamps) == 3, f"üç tur, üç zaman damgası: {timestamps}"
+    assert "background-color:#1e1e26" in html, "her tur kart zeminli olmalı"
+    assert "font-size:12px" in html, "zaman damgası 12 px (11 px değil)"
+
+    # KART KENARI ve kart `margin`'i `toHtml()` serileştirmesinde
+    # KAYBOLUR: Qt `<div>`'i `<p>`'ye düzleştirirken `border`'ı
+    # atıyor (yalnızca dolgu renklerini ve iç satır boşluklarını
+    # koruyor). Bu yüzden ayrım burada sayılmaz; üç ayrı zaman
+    # damgası + üç ayrı kart zemini, turların ayrı blok hâlinde
+    # çizildiğini gösterir. Görsel doğrulama
+    # `scripts/screenshot_panel.py` çıktısıdır.
+
+
+def test_every_body_text_color_clears_wcag_aa(qapp: QApplication) -> None:
+    """Gövde metni renkleri WCAG AA (4.5:1) eşiğini geçmeli.
+
+    Renk seçimi gözle değil SAYIYLA yapılır; bu test geriye dönük
+    bir koruma: palette yarı saydam bir renk eklendiğinde (ya da bir
+    metin rengi `TEXT_MUTED`'a döndürüldüğünde) sessizce AA altına
+    düşmesin.
+    """
+
+    from ui.panel import _contrast_ratio
+
+    for backdrop in (theme.BG_BASE, theme.BG_PANEL):
+        for name in ("TEXT_PRIMARY", "TEXT_SECONDARY"):
+            ratio = _contrast_ratio(getattr(theme, name), backdrop)
+            assert ratio >= 4.5, f"{name} {backdrop.name()} üzerinde yalnızca {ratio:.2f}:1"
+
+    # 12 px'lik zaman damgası da gövde sayılır.
+    assert _contrast_ratio(theme.TEXT_SECONDARY, theme.BG_PANEL) >= 4.5
+
+
+def test_the_empty_state_is_centered_and_explains_where_records_come_from(
+    panel: ArtemisPanel,
+) -> None:
+    """Boş durum ortalanır ve kaydın NEREDEN geldiğini söyler.
+
+    Önceden metin `margin-top:24px` ile üste yapışıktı; kullanıcı
+    "burada bir şey mi eksik" diye bakıp geçiyordu.
+    """
+
+    stack = panel._stack
+    assert stack.currentIndex() == 0, "log yokken boş sayfa gösterilmeli"
+
+    label = panel._empty
+    assert label.text() and "logs/artemis.log" in label.text()
+
+    # Dikey ortalama: etiket, sayfanın dikey ortasına yakın durur.
+    page_height = stack.widget(0).height()
+    centre = label.y() + label.height() / 2
+    assert abs(centre - page_height / 2) < page_height * 0.15, (
+        f"boş durum ortalanmamış: merkez {centre:.0f}, sayfa ortası {page_height / 2:.0f}"
+    )
+
+
+def test_a_written_log_switches_the_empty_page_back_to_the_list(
+    panel: ArtemisPanel, tmp_path: Path
+) -> None:
+    """Yenile gerçekten geçiş yapıyor (sabit bir ilk durum değil)."""
+
+    stack = panel._stack
+    assert stack.currentIndex() == 0
+
+    (tmp_path / "artemis.log").write_text(_LOG, encoding="utf-8")
+    panel.reload_history()
+
+    assert stack.currentIndex() == 1, "kayıt varsa liste sayfası gösterilmeli"
+
+
+def test_missing_log_shows_an_empty_state_instead_of_inventing_history(
+    panel: ArtemisPanel,
+) -> None:
+    """Log dosyası yokken panel sahte tur BASMAZ, durumu söyler.
+
+    Boş durum artık `QTextBrowser` DEĞİL, ortalanmış ayrı bir
+    `QLabel` sayfasıdır; metin oradan okunur.
+    """
+
+    assert "Henüz kayıt yok" in panel._empty.text()
+    assert "Siz:" not in panel._empty.text(), "uydurulmuş bir konuşma satırı olmamalı"
 
 
 def test_a_written_log_is_rendered_into_the_history_tab(
@@ -296,25 +463,32 @@ def test_reload_reflects_a_log_that_appeared_after_the_panel_opened(
 ) -> None:
     """"Yenile" düğmesi gerçekten yeniden okur (sabit bir ilk durum değil)."""
 
-    history = panel.findChild(QTextBrowser)
-    assert history is not None
-    assert "Henüz kayıt yok" in history.toPlainText()
+    assert "Henüz kayıt yok" in panel._empty.text()
 
     (tmp_path / "artemis.log").write_text(_LOG, encoding="utf-8")
     panel.reload_history()
 
+    history = panel.findChild(QTextBrowser)
+    assert history is not None
     assert "league of legends, aç" in history.toPlainText()
 
 
 def test_status_strip_reports_real_settings_only(panel: ArtemisPanel) -> None:
-    """Durum şeridi ayarlardan gelir; hiçbir şey uydurmaz."""
+    """Durum şeridi ayarlardan gelir; hiçbir şey uydurmaz.
 
-    labels = [label.text() for label in panel.findChildren(QLabel) if label.property("role") == "subtitle"]
-    joined = "  ".join(labels)
+    Başlıklar (`Beyin`, `Sesli asistan`) "status" rolünde, DEĞERLER
+    "subtitle" rolündedir — iki sütunlu düzen böyle okunur.
+    """
 
-    assert any(text.startswith("Beyin:") for text in labels)
-    assert any(text.startswith("Sesli asistan:") for text in labels)
-    assert "Temel LLM" not in joined
+    captions = [
+        label.text() for label in panel.findChildren(QLabel) if label.property("role") == "status"
+    ]
+    values = [label.text() for label in panel.findChildren(QLabel) if label.property("role") == "subtitle"]
+
+    assert captions == ["Beyin", "Sesli asistan"]
+    # Varsayılan `llm_provider: "auto"` — değer ayardaki seçimi yazar.
+    assert any("Otomatik" in text for text in values), values
+    assert "Temel LLM" not in "  ".join(captions + values)
 
 
 def _status_text(panel: ArtemisPanel) -> str:

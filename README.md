@@ -1,6 +1,7 @@
 # Artemis — Yerel Sesli Yapay Zekâ Asistanı
 
 ![Artemis paneli](docs/screenshots/panel.png)
+![Artemis paneli — ayarlar sekmesi](docs/screenshots/panel-ayarlar.png)
 
 [🇬🇧 English](./README.en.md)
 

@@ -1,6 +1,7 @@
 # Artemis — Local Voice AI Assistant
 
 ![Artemis paneli](docs/screenshots/panel.png)
+![Artemis paneli — settings tab](docs/screenshots/panel-ayarlar.png)
 
 [🇹🇷 Türkçe](./README.md)
 

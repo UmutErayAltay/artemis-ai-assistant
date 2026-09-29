@@ -2,8 +2,9 @@
 
     python scripts/screenshot_panel.py
 
-`QT_QPA_PLATFORM=offscreen` ile iki kare kaydeder:
-`docs/screenshots/panel.png` (geçmişli) ve `panel-empty.png` (boş durum).
+`QT_QPA_PLATFORM=offscreen` ile üç kare kaydeder:
+`docs/screenshots/panel.png` (geçmişli), `panel-empty.png` (boş durum)
+ve `panel-ayarlar.png` (ayarlar sekmesi).
 
 NEDEN AYRI BİR SCRIPT: README'deki görsel elle üretilmiş bir ekran
 görüntüsü olmamalı. Uydurma veri YALNIZCA burada üretilir (gerçek
@@ -23,7 +24,7 @@ os.environ.setdefault("QT_SCALE_FACTOR", "2")  # README'de net görünsün
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QTabWidget  # noqa: E402
 
 from config.settings import Settings  # noqa: E402
 from ui.panel import ArtemisPanel  # noqa: E402
@@ -67,10 +68,17 @@ def main() -> None:
         _grab(empty, out_dir / "panel-empty.png")
         empty.close()
 
-        # Dolu durum: gecmise sahip bir log. Ayarlar sekmesi de gorunur.
+        # Dolu durum: gecmise sahip bir log.
         (log_dir / "artemis.log").write_text(_SAMPLE_LOG, encoding="utf-8")
         filled = ArtemisPanel(Settings(log_dir=log_dir, db_path=log_dir / "m.db"))
         _grab(filled, out_dir / "panel.png")
+
+        # Ayarlar sekmesi ayni pencerenin ikinci yuzudur; ayri bir ekran
+        # goruntusu olarak kaydedilir, README ikisini de gosterir.
+        tabs = filled.findChild(QTabWidget)
+        tabs.setCurrentIndex(1)
+        app.processEvents()
+        _grab(filled, out_dir / "panel-ayarlar.png")
         filled.close()
 
     del app
