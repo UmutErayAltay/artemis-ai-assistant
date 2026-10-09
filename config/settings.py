@@ -129,6 +129,19 @@ class ProjelerSettings(BaseModel):
             `[".bulut/beyin.sh"]` gibi bir betik verilebilir.
         vault_timeout_seconds: Tek bir vault CLI çağrısının azami süresi;
             aşılırsa köprü o çağrıyı sessizce atlar, işi bekletmez.
+        telegram_chat_id: İş bitince/soru sorunca bildirimin gideceği Telegram
+            sohbetinin kimliği. `None` (varsayılan) ise Telegram bildirimi KAPALIDIR.
+        telegram_token_env: Telegram bot token'ının OKUNDUĞU ortam değişkeninin
+            ADI. Token'ın kendisi ASLA `config.yaml`'a yazılmaz: dosya git'e
+            girebilir ya da ekran görüntüsüne düşebilir; config'te yalnızca
+            değişkenin adı durur, değer çalışma zamanında ortamdan okunur.
+        desktop_notify: Windows'ta iş bitince/soru sorunca sistem bildirimi
+            (toast) gösterilsin mi. Diğer platformlarda etkisizdir.
+        speak_notices: `--voice` modunda biten/soru soran işler, kullanıcı
+            Artemis'i uyandırmayı beklemeden kendiliğinden SESLİ söylensin mi.
+            Kapalıyken bildirimler yalnızca bir sonraki cevabın sonuna eklenir.
+        notify_timeout_seconds: Tek bir bildirim gönderiminin (Telegram isteği,
+            toast) azami süresi; aşılırsa o kanal atlanır, işin sonucu bekletilmez.
     """
 
     root: Path = Field(default_factory=lambda: Path.home() / "Desktop" / "Projeler")
@@ -143,6 +156,11 @@ class ProjelerSettings(BaseModel):
     vault_path: Path | None = None  # None: köprü kapalı (M1 davranışı)
     vault_command: list[str] | None = None  # None: [python, <vault>/beyin.py]; bulutta [".bulut/beyin.sh"]
     vault_timeout_seconds: float = Field(default=20.0, gt=0)
+    telegram_chat_id: str | None = None  # None: Telegram bildirimi kapalı
+    telegram_token_env: str = "ARTEMIS_TELEGRAM_BOT_TOKEN"  # token'ın OKUNDUĞU ortam değişkeninin ADI
+    desktop_notify: bool = True  # Windows'ta iş bitince sistem bildirimi
+    speak_notices: bool = True  # --voice: bildirimi uyandırma beklemeden söyle
+    notify_timeout_seconds: float = Field(default=10.0, gt=0)
 
 
 class Settings(BaseModel):

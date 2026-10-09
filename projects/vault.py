@@ -113,7 +113,7 @@ def _shorten_at_line(text: str, limit: int) -> str:
     return _shorten(text, limit)
 
 
-def _display_dir(path: Path) -> str:
+def display_dir(path: Path) -> str:
     """Yolu vault'a yazılacak biçimde verir: ev dizininin altındaysa `~/<göreli>`.
 
     Mutlak yol Windows'ta `C:\\Users\\<kullanıcı adı>\\...` olur; vault bir git deposudur ve
@@ -435,7 +435,7 @@ class VaultBridge:
         summary_line = _first_line(summary)
         summary_body = _normalize_lines(summary)
         status = _one_line(status_label)
-        entry_line = f"- {datetime.now():%Y-%m-%d %H:%M} · {status} · `{_display_dir(project_dir)}`"
+        entry_line = f"- {datetime.now():%Y-%m-%d %H:%M} · {status} · `{display_dir(project_dir)}`"
         if summary_line:
             entry_line += f" — {_shorten(summary_line, _ENTRY_SUMMARY_LIMIT)}"
 

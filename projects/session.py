@@ -17,7 +17,7 @@ from __future__ import annotations
 from config.settings import ProjelerSettings
 from core.llm_types import LLMClient
 from projects.interview import InterviewTurn, ProjectInterview
-from projects.jobs import describe_job, existing_store, reconcile
+from projects.jobs import brief_job, describe_job, existing_store, reconcile
 
 
 def route_to_interview(settings: ProjelerSettings, llm: LLMClient, user_input: str) -> InterviewTurn | None:
@@ -32,11 +32,17 @@ def route_to_interview(settings: ProjelerSettings, llm: LLMClient, user_input: s
     return ProjectInterview(store, llm, settings).handle(interview, user_input)
 
 
-def pending_notices(settings: ProjelerSettings) -> list[str]:
-    """Henüz söylenmemiş iş bitişleri/soruları — her biri bir kez döner."""
+def pending_notices(settings: ProjelerSettings, *, brief: bool = False) -> list[str]:
+    """Henüz söylenmemiş iş bitişleri/soruları — her biri bir kez döner.
+
+    `brief=True` her iş için tek kısa cümle (`brief_job`) verir: kendiliğinden SESLİ söylenen
+    bildirimde tam yol ve özet okunmasın diye. Varsayılan (`describe_job`) bir cevabın sonuna
+    eklenen ayrıntılı metindir. İki kipte de iş "söylendi" diye işaretlenir.
+    """
 
     store = existing_store(settings)
     if store is None:
         return []
     reconcile(store)
-    return [describe_job(job) for job in store.unannounced_jobs()]
+    describe = brief_job if brief else describe_job
+    return [describe(job) for job in store.unannounced_jobs()]

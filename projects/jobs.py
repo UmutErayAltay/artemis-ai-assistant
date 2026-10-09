@@ -21,7 +21,7 @@ from models.tool_models import ToolResult
 from projects import coder as coder_mod
 from projects.interview import CONTEXT_ROLE
 from projects.store import INTERVIEW_STARTED, Interview, Job, ProjectStore
-from projects.vault import VaultBridge
+from projects.vault import VaultBridge, _first_line, _normalize_lines, _shorten, _shorten_at_line, display_dir
 from utils.paths import safe_join, unsafe_target_result
 
 _STARTUP_GRACE_SECONDS = 1.0
@@ -41,6 +41,22 @@ STATUS_LABELS: dict[JobStatus, str] = {
     JobStatus.YARIM_KALDI: "yarım kaldı",
 }
 """Vault proje notuna yazılan, insan okuyacağı durum etiketleri."""
+
+_STATUS_ICONS: dict[JobStatus, str] = {
+    JobStatus.CALISIYOR: "⏳",
+    JobStatus.TAMAMLANDI: "✅",
+    JobStatus.BASARISIZ: "❌",
+    JobStatus.SORU_BEKLIYOR: "❓",
+    JobStatus.DURDURULDU: "⏹",
+    JobStatus.YARIM_KALDI: "⚠️",
+}
+"""Telegram mesajının durum satırındaki simgeler (`STATUS_LABELS` ile aynı anahtarlar)."""
+
+_BRIEF_DETAIL_LIMIT = 200
+"""`brief_job`'da özet/soru/hata satırının azami uzunluğu: konuşulacak ya da toast'a sığacak kadar."""
+
+_TELEGRAM_DETAIL_LIMIT = 1500
+"""`telegram_job_text`'te ayrıntı bölümünün azami uzunluğu (Telegram sınırı 4096; bol pay bırakılır)."""
 
 
 def open_store(settings: ProjelerSettings) -> ProjectStore:
@@ -113,6 +129,21 @@ def describe_job(job: Job) -> str:
     return f"{text} Vault notu: {job.vault_note}" if job.vault_note else text
 
 
+def _evidence(job: Job) -> str:
+    """Tamamlanan işin kanıtı: `" (2 commit, ~0.84 $)"`; kanıt yoksa `""`.
+
+    Tutar yalnızca Claude kodlayıcısı için yazılır (ücretsiz modelde anlamsız). `describe_job` ve
+    `telegram_job_text` AYNI kuralı kullanır; ikisi ayrı yazılırsa zamanla birbirinden kayardı.
+    """
+
+    evidence = []
+    if job.commits is not None:
+        evidence.append(f"{job.commits} commit")
+    if job.cost_usd is not None and job.coder == Coder.CLAUDE.value:
+        evidence.append(f"~{job.cost_usd:.2f} $")
+    return f" ({', '.join(evidence)})" if evidence else ""
+
+
 def _describe_status(job: Job) -> str:
     name = f"'{job.slug}'"
     if job.status is JobStatus.CALISIYOR:
@@ -125,18 +156,86 @@ def _describe_status(job: Job) -> str:
             f"Cevabını '{job.slug} için cevabım: ...' diye söyleyebilirsin."
         )
     if job.status is JobStatus.TAMAMLANDI:
-        evidence = []
-        if job.commits is not None:
-            evidence.append(f"{job.commits} commit")
-        if job.cost_usd is not None and job.coder == Coder.CLAUDE.value:
-            evidence.append(f"~{job.cost_usd:.2f} $")
-        extra = f" ({', '.join(evidence)})" if evidence else ""
-        return f"{name} tamamlandı{extra}. Klasör: {job.project_dir}. Kodlayıcının özeti: {job.summary}"
+        return f"{name} tamamlandı{_evidence(job)}. Klasör: {job.project_dir}. Kodlayıcının özeti: {job.summary}"
     if job.status is JobStatus.DURDURULDU:
         return f"{name} durduruldu. Klasör: {job.project_dir}"
     reason = job.error or "bilinmeyen sebep"
     label = "yarım kaldı" if job.status is JobStatus.YARIM_KALDI else "başarısız oldu"
     return f"{name} {label}: {reason}"
+
+
+def brief_job(job: Job) -> str:
+    """İşin TEK kısa cümlesi: sesli okunur ve sistem bildiriminin gövdesi olur.
+
+    Yol, tutar ve commit sayısı bilerek YOK: dinlerken "C ters bölü Users..." işkencedir, toast
+    kısacık bir alandır. Çok satırlı özetin yalnızca ilk anlamlı satırı alınır; ayrıntı için kullanıcı
+    sorar ya da Telegram mesajına bakar (`telegram_job_text`). Chat modunun kullandığı `describe_job`
+    değişmez.
+    """
+
+    name = f"'{job.slug}'"
+    if job.status is JobStatus.CALISIYOR:
+        return f"{name} kodlanıyor."
+    if job.status is JobStatus.DURDURULDU:
+        return f"{name} durduruldu."
+    if job.status is JobStatus.TAMAMLANDI:
+        line = _brief_line(job.summary)
+        return f"{name} tamamlandı: {line}" if line else f"{name} tamamlandı."
+    if job.status is JobStatus.SORU_BEKLIYOR:
+        line = _brief_line(job.question)
+        asked = f"{name} kodlayıcısı soru soruyor: {line}" if line else f"{name} kodlayıcısı soru soruyor."
+        return f"{asked} Cevap için '{job.slug} için cevabım: ...' de."
+    label = "yarım kaldı" if job.status is JobStatus.YARIM_KALDI else "başarısız oldu"
+    return f"{name} {label}: {_brief_line(job.error) or 'bilinmeyen sebep'}"
+
+
+def _brief_line(text: str | None) -> str:
+    """Metnin ilk boş olmayan satırı, boşlukları tek aralığa inmiş ve kısaltılmış; metin yoksa `""`."""
+
+    return _shorten(_first_line(text or ""), _BRIEF_DETAIL_LIMIT)
+
+
+def telegram_job_text(job: Job) -> str:
+    """Telegram'a gidecek çok satırlı mesaj.
+
+    Mesaj makineden ÇIKAR: klasör `display_dir` ile `~/...` yazılır, ayrıntıdaki ev dizini yolları da
+    `~`e çevrilir (hata metinleri günlük yolu içerebilir); böylece Windows kullanıcı adı sızmaz.
+    Ayrıntı (özet / soru / hata) satır yapısı korunarak satır sınırında kısaltılır; kanıt (commit,
+    tutar) yalnızca TAMAMLANDI'da yazılır, `describe_job` ile aynı kuralla.
+    """
+
+    status = job.status
+    header = f"{_STATUS_ICONS[status]} {STATUS_LABELS[status]}"
+    detail: str | None = None  # çalışıyor / durduruldu için söylenecek ayrıntı yok
+    if status is JobStatus.TAMAMLANDI:
+        header += _evidence(job)
+        detail = job.summary
+    elif status is JobStatus.SORU_BEKLIYOR:
+        detail = job.question
+    elif status in (JobStatus.BASARISIZ, JobStatus.YARIM_KALDI):
+        detail = job.error
+    lines = [f"Artemis · {job.slug}", header]
+    body = _shorten_at_line(_normalize_lines(_hide_home(detail or "")), _TELEGRAM_DETAIL_LIMIT)
+    if body:
+        lines.append(body)
+    lines.append(f"📁 {display_dir(job.project_dir)}")
+    if status is JobStatus.SORU_BEKLIYOR:
+        lines.append(f"Cevap: Artemis'e '{job.slug} için cevabım: ...' de.")
+    return "\n".join(lines)
+
+
+def _hide_home(text: str) -> str:
+    """Metindeki ev dizini yollarını `~` yapar (bkz. `telegram_job_text`)."""
+
+    try:
+        home = Path.home()
+    except RuntimeError:  # ev dizini belirlenemedi
+        return text
+    if home.parent == home:  # kök dizin "ev" sayılıyorsa her `/` bozulurdu
+        return text
+    for form in (str(home), home.as_posix()):
+        text = text.replace(form, "~")
+    return text
 
 
 def _find_spec(store: ProjectStore, name: str) -> tuple[Interview, ProjectSpec] | None:

@@ -14,16 +14,23 @@ bir klasör oluşur, gerçekten bir onay kapısı işler.
 
 from __future__ import annotations
 
+import logging
+import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from config.settings import Settings
+from config.settings import ProjelerSettings, Settings
+from core import voice_loop
 from core.dispatcher import ToolDispatcher
 from core.plugin_loader import load_plugins
 from core.voice_loop import VoiceAssistant, speakable
 from memory.context_memory import ContextMemory
+from models.project_models import JobStatus
+from projects import jobs
+from projects.store import ProjectStore
 from voice.audio import BLOCK_FRAMES
 
 load_plugins()
@@ -909,3 +916,228 @@ def test_refusal_in_capitals_is_still_a_refusal(
     assistant._stt = FakeSTT(answer)
 
     assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is False
+
+
+# --------------------------------------------------------------------------
+# Proaktif proje bildirimleri — uyandırma beklenirken kendiliğinden söyleme
+# --------------------------------------------------------------------------
+
+_SPOKEN_NOTICE = "Proje haberi: x tamamlandı: M1 bitti."
+"""`speakable()` tırnakları sesli okumada anlamsız olduğu için atar: 'x' -> x."""
+
+
+class _FakeClock:
+    """Sahte `time` modülü yerine geçer: saat YALNIZCA mikrofon okumasıyla ilerler.
+
+    Gerçek saniyeler beklenmez ve `_NOTICE_POLL_SECONDS` aralığı kesin hesaplanabilir
+    (her blok = 1 sn). `core.voice_loop.time` ad olarak değiştirilir; genel `time` modülüne
+    dokunulmaz.
+    """
+
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    @staticmethod
+    def sleep(_seconds: float) -> None:
+        return None
+
+
+class _ClockedMicrophone(FakeMicrophone):
+    """Her okumada sahte saati 1 sn ilerletir; `trigger_after` okumadan sonra kısayolu tetikler."""
+
+    def __init__(self, clock: _FakeClock, assistant: VoiceAssistant, trigger_after: int) -> None:
+        super().__init__([_silence()] * (trigger_after + 5))
+        self._clock = clock
+        self._assistant = assistant
+        self._trigger_after = trigger_after
+
+    def read_block(self) -> bytes:
+        block = super().read_block()
+        self._clock.now += 1.0
+        if self.reads >= self._trigger_after:
+            self._assistant.trigger()
+        return block
+
+
+def _notice_settings(tmp_path: Path, **projeler_fields: Any) -> Settings:
+    """Proje deposu `tmp_path/state` altında olan; uyandırma sözcüğü kapalı (yalnızca kısayol) ayarlar."""
+
+    return Settings(
+        desktop_path=tmp_path / "Desktop",
+        downloads_path=tmp_path / "Downloads",
+        db_path=tmp_path / "memory.db",
+        log_dir=tmp_path / "logs",
+        wake_word_enabled=False,
+        projeler=ProjelerSettings(state_dir=tmp_path / "state", root=tmp_path / "Projeler", **projeler_fields),
+    )
+
+
+def _finished_job_store(settings: Settings, *, status: JobStatus = JobStatus.TAMAMLANDI) -> ProjectStore:
+    """Depoya, henüz duyurulmamış, bitmiş tek bir iş koyar."""
+
+    store = jobs.open_store(settings.projeler)
+    job = store.create_job(
+        slug="x", project_dir=settings.projeler.root / "x", coder="claude", command=["a"], prompt="p", session_id="s"
+    )
+    assert store.finish_job(job.id, status, summary="M1 bitti.\nDetay")
+    return store
+
+
+def _announced_flags(store: ProjectStore) -> list[int]:
+    """Depodaki işlerin `announced` sütunu — bildirimi TÜKETMEDEN okumanın tek yolu."""
+
+    with sqlite3.connect(store.db_path) as conn:
+        return [row[0] for row in conn.execute("SELECT announced FROM jobs ORDER BY id")]
+
+
+def _notice_assistant(
+    dispatcher: ToolDispatcher, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> tuple[VoiceAssistant, FakeOverlay, FakeTTS, _FakeClock]:
+    clock = _FakeClock()
+    monkeypatch.setattr(voice_loop, "time", SimpleNamespace(monotonic=clock.monotonic, sleep=clock.sleep))
+    overlay = FakeOverlay()
+    assistant = VoiceAssistant(dispatcher, FakeLLM(), overlay, settings)
+    tts = FakeTTS()
+    assistant._tts = tts
+    return assistant, overlay, tts, clock
+
+
+def test_finished_job_is_spoken_while_waiting_and_the_wait_continues(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Biten iş, kullanıcı çağırmadan BİR kez söylenir; bekleme yalnızca kısayolla biter."""
+
+    settings = _notice_settings(tmp_path)
+    store = _finished_job_store(settings)
+    assistant, overlay, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    mic = _ClockedMicrophone(clock, assistant, trigger_after=4)
+    assistant._sleep_until_woken(mic)
+
+    # (a) kısa metin, tam bir kez; ekranda da aynısı gösterildi
+    assert tts.spoken == [_SPOKEN_NOTICE]
+    assert ("speaking", _SPOKEN_NOTICE) in overlay.states
+    assert _announced_flags(store) == [1]
+    # (b) duyuru uyandırma sayılmadı: döngü duyurudan sonra da 4 blok okudu ve ancak kısayolla çıktı
+    assert mic.reads == 4
+    assert not assistant._manual_trigger.is_set()
+
+    # (c) ikinci bekleyişte aynı iş tekrar söylenmez; sonraki cevaba da eklenmez
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=7))
+    assert tts.spoken == [_SPOKEN_NOTICE]
+    assert assistant._with_notices("Tamam.") == "Tamam."
+
+
+def test_notices_are_polled_every_few_seconds_not_every_audio_block(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Her ses bloğunda diske gitmek saniyede ~30 sorgu demektir; `_NOTICE_POLL_SECONDS` aralığı tutulur."""
+
+    settings = _notice_settings(tmp_path)
+    _finished_job_store(settings)
+    assistant, _, _, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    calls: list[bool] = []
+    real_pending = voice_loop.pending_notices
+
+    def counting(projeler: ProjelerSettings, *, brief: bool = False) -> list[str]:
+        calls.append(brief)
+        return real_pending(projeler, brief=brief)
+
+    monkeypatch.setattr(voice_loop, "pending_notices", counting)
+
+    # 12 blok = 12 sn: ilk bakış hemen (t=0), sonra t=5 ve t=10
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=12))
+
+    assert calls == [True, True, True], "üç kez, hepsi kısa (brief) kipte bakılmalı"
+    assert voice_loop._NOTICE_POLL_SECONDS == 5.0
+
+
+def test_speak_notices_false_keeps_the_job_for_the_next_answer(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _notice_settings(tmp_path, speak_notices=False)
+    store = _finished_job_store(settings)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=12))
+
+    assert tts.spoken == []
+    assert _announced_flags(store) == [0], "söylenmeyen iş 'söylendi' diye işaretlenmemeli"
+    assert "tamamlandı" in assistant._with_notices("Tamam."), "ama bir sonraki cevaba eklenmeli"
+
+
+def test_notices_are_not_spoken_during_the_feedback_cooldown(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Artemis'in kendi cevabı yeni bitmişken (soğuma sürerken) üstüne konuşulmaz."""
+
+    settings = _notice_settings(tmp_path)
+    store = _finished_job_store(settings)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    assistant._muted_until = clock.now + 1000.0
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=12))
+
+    assert tts.spoken == []
+    assert _announced_flags(store) == [0], "soğumada bakılmamalı: iş tüketilmemeli"
+
+
+def test_notice_is_spoken_as_soon_as_the_cooldown_ends(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Soğuma yüzünden atlanan tur son kontrol zamanını güncellemez: soğuma biter bitmez bakılır."""
+
+    settings = _notice_settings(tmp_path)
+    _finished_job_store(settings)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    # Soğuma 3 sn: t=100,101,102 atlanır, t=103'te söylenir. Atlanan tur zamanı güncellemiş olsaydı
+    # bir sonraki bakış t=105'e kalırdı ve 5 blokluk bekleyişte hiç söylenmezdi.
+    assistant._muted_until = clock.now + 3.0
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=5))
+
+    assert tts.spoken == [_SPOKEN_NOTICE]
+
+
+def test_no_project_store_means_nothing_spoken_and_no_file_created(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proje atölyesi hiç kullanılmadıysa bekleme döngüsü diske tek dosya bile yazmaz."""
+
+    settings = _notice_settings(tmp_path)
+    assistant, overlay, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    mic = _ClockedMicrophone(clock, assistant, trigger_after=12)
+    assistant._sleep_until_woken(mic)
+
+    assert tts.spoken == [] and overlay.states == []
+    assert mic.reads == 12
+    assert not settings.projeler.state_dir.exists()
+
+
+def test_database_trouble_is_logged_and_does_not_kill_the_wait(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Kilitli/bozuk SQLite bir bildirimi kaybettirir ama ses döngüsünü öldürmez."""
+
+    settings = _notice_settings(tmp_path)
+    store = _finished_job_store(settings)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    def locked(self: ProjectStore) -> list[Any]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(ProjectStore, "unannounced_jobs", locked)
+
+    mic = _ClockedMicrophone(clock, assistant, trigger_after=6)
+    with caplog.at_level(logging.WARNING, logger="core.voice_loop"):
+        assistant._sleep_until_woken(mic)
+
+    assert mic.reads == 6, "döngü hataya rağmen kısayola kadar sürmeli"
+    assert tts.spoken == []
+    assert any("Proje bildirimleri okunamadı" in record.getMessage() for record in caplog.records)
+    assert _announced_flags(store) == [0], "okunamayan bildirim kaybolmaz; sonra yine denenir"

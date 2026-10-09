@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import threading
 import time
 from pathlib import PureWindowsPath
@@ -53,6 +54,10 @@ _FEEDBACK_COOLDOWN_SECONDS = 0.6
 
 _CONFIRMATION_TIMEOUT_SECONDS = 8.0
 """Sesli onay cevabının en fazla ne kadar dinleneceği (saniye)."""
+
+_NOTICE_POLL_SECONDS = 5.0
+"""Uyandırma beklenirken proje bildirimlerine kaç saniyede bir bakılacağı. SQLite okuması 5 sn'de bir
+ucuzdur; her ses bloğunda (saniyede ~30) bakmak diske boşuna saniyede onlarca kez gitmek olurdu."""
 
 
 _WINDOWS_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+")
@@ -260,10 +265,23 @@ class VoiceAssistant:
             except Exception as exc:  # noqa: BLE001 - model kurulamayabilir
                 self._disable_wake_word(exc)
 
+        last_notice_check = float("-inf")  # ilk turda hemen bakılır
         while not self._stop_event.is_set():
             if self._manual_trigger.is_set():
                 self._manual_trigger.clear()
                 return
+
+            # Bildirim bir komut değildir: söyledikten sonra uyandırma sözcüğü beklenmeye devam edilir.
+            # Soğuma süresinde (Artemis'in kendi cevabı yeni bitmişken) bakılmaz; `last_notice_check`
+            # o turda güncellenmez, böylece soğuma biter bitmez bakılır.
+            now = time.monotonic()
+            if (
+                self._settings.projeler.speak_notices
+                and now - last_notice_check >= _NOTICE_POLL_SECONDS
+                and now >= self._muted_until
+            ):
+                last_notice_check = now
+                self._announce_notices()
 
             block = mic.read_block()
 
@@ -280,6 +298,31 @@ class VoiceAssistant:
             except Exception as exc:  # noqa: BLE001 - tanıma çalışma anında da patlayabilir
                 self._disable_wake_word(exc)
                 detector = None
+
+    def _announce_notices(self) -> None:
+        """Arka planda biten/soru soran proje işlerini, kullanıcı çağırmadan sesli söyler.
+
+        NEDEN KENDİLİĞİNDEN KONUŞUR: iş başka bir süreçte dakikalarca çalıştı; uyandırma sözcüğünü
+        beklersek kullanıcı Artemis'i çağırmadığı sürece sonucu hiç duymayabilir (`_with_notices` yalnızca
+        bir SONRAKİ cevaba ekler). Burada söylenen iş "söylendi" diye işaretlenir; `_with_notices` onu
+        bir daha eklemez, yani her iş bir kez duyurulur.
+
+        NEDEN SOĞUMA KONTROLÜ ÇAĞIRAN YERDE: Artemis'in kendi önceki cevabının hemen ardından
+        (`_muted_until` dolmadan) konuşmak, cevabın üstüne binmek ve kendi sesimizi uyandırma sözcüğü
+        sanma riskini artırmak olurdu (bkz. modül dokümantasyonundaki geri besleme koruması).
+
+        Disk/veritabanı sorunu (kilitli ya da bozuk SQLite, silinmiş klasör) ses döngüsünü ÖLDÜRMEMELİ:
+        bildirim kaybı, kullanıcıyı komutsuz bırakan bir çökmeden hafiftir. Yalnızca `sqlite3.Error` ve
+        `OSError` yakalanır; gerisi gerçek bir hatadır ve görünür kalmalıdır.
+        """
+
+        try:
+            notices = pending_notices(self._settings.projeler, brief=True)
+        except (sqlite3.Error, OSError) as exc:
+            logger.warning("Proje bildirimleri okunamadı; ses döngüsü devam ediyor: %s", exc)
+            return
+        if notices:
+            self._respond("Proje haberi: " + " ".join(notices))
 
     def _disable_wake_word(self, exc: Exception) -> None:
         """Uyandırma sözcüğünü kalıcı olarak kapatır ve kullanıcıyı bilgilendirir."""
@@ -361,8 +404,9 @@ class VoiceAssistant:
     def _with_notices(self, message: str) -> str:
         """Arka planda biten/soru soran proje işlerini cevabın sonuna ekler.
 
-        Ses döngüsü kendiliğinden konuşmaz (uyandırma sözcüğünü bekler); bu
-        yüzden bildirimler bir sonraki cevaba eklenir.
+        Uyandırma beklenirken `_announce_notices` bildirimleri kendiliğinden söyler ve
+        "söylendi" diye işaretler; buraya yalnızca henüz söylenmemiş olanlar kalır
+        (`speak_notices` kapalıysa ya da soğuma süresine denk gelenler) ve bir sonraki cevaba eklenir.
         """
 
         notices = pending_notices(self._settings.projeler)
