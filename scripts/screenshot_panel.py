@@ -27,11 +27,11 @@ if sys.platform == "win32":
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PyQt6.QtWidgets import QApplication, QTabWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QTabWidget
 
-from config.settings import Settings  # noqa: E402
-from ui.panel import ArtemisPanel, _DEFAULT_SOURCE_LABEL  # noqa: E402
-from ui.settings_window import SettingsWindow  # noqa: E402
+from config.settings import Settings
+from ui.panel import _DEFAULT_SOURCE_LABEL, ArtemisPanel
+from ui.settings_window import SettingsWindow
 
 _SOURCE_LABEL = _DEFAULT_SOURCE_LABEL
 """Alt satırda görünecek kaynak adı.

@@ -28,7 +28,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import (
     QApplication,
     QLabel,
-    QLineEdit,
     QPushButton,
     QTabWidget,
     QTextBrowser,

@@ -3012,3 +3012,42 @@ sözleşme, inceleme ve commit yaptı.
   ardından OpenRouter art arda 429 verdi. Sonnet alt-ajanı uyguladı.
 - Ders: tekatis'te `--test` komutu boru içeriyorsa `set -o pipefail` ŞART;
   çok dosyalı bağlama işleri ücretsiz modellerin çıktı bütçesini aşıyor.
+
+### 43e) Gerçek vault'ta uçtan uca deneme: altı düzeltme
+
+Köprü gerçek vault'un bir KOPYASINDA (ayrı `BEYIN_STATE`, gerçek vault'a
+hiçbir şey yazılmadı) çalıştırıldı; mekanik doğruydu ama çıktı kalitesi altı
+yerde kötüydü:
+
+1. `beyin.py context` bütçeyi kayıtlara sırayla harcar: ilk `daily/` kaydı
+   (8-11K karakter, zaten gürültü) 20K bütçeyi yiyor, sonraki notlar ~160
+   karaktere kırpılıp ` [truncated]` ile geliyordu. Bütçe 200K / 40 kayıt
+   yapıldı (JSON süreç içinde ayrıştırılır); işaret alıntıdan atılır.
+   Gürültüyü bütçe değil `_is_noise` süzer.
+2. Tercihler bölümünün üst bilgi cümlesi ("Her madde ... kaynak: ...")
+   tercih gibi modele gidiyordu; artık yalnızca liste maddeleri ve girintili
+   devam satırları alınır.
+3. Görüşme mesajı yalnızca "2 ilgili notu okudum" diyordu; artık notları
+   adıyla sayar — alakasız bir not seçildiyse Umut görebilsin.
+4. Kodlayıcının çok satırlı özeti tek satıra yassılınca not okunmuyordu:
+   not girdisi ilk satırı (300), receipt satır yapısını (1500, satır
+   sınırında kesilerek) taşır.
+5. Yeni notta spec'in kendi uyarı alıntısı notun uyarısının altında ikinci
+   kez görünüyordu; spec başlığının hemen altındaki alıntı atılır.
+6. Proje dizini mutlak yazılıyordu (Windows'ta `C:\Users\<kullanıcı adı>\…`);
+   vault paylaşılabilir bir git deposu olduğu için ev dizini `~` ile yazılır.
+
+Her düzeltmenin testi, düzeltme geri alınınca kırıldığı görülerek kabul edildi.
+
+### 43f) CI neden kırmızıydı (ve neden fark edilmedi)
+
+`requirements-dev.txt` `ruff>=0.6` diyordu: CI her koşuda EN YENİ ruff'ı
+kurdu (0.16.10), geliştirme ortamında 0.15.8 vardı ve ikisi farklı bulgu
+listeleri verdi. 29-30 Eylül'de `main`'e giren panel/ekran görüntüsü
+commit'lerindeki 8 bulgu (kullanılmayan import, gereksiz `noqa`) 2 Ekim'den
+beri `main`'i, birleştirmeyle de bu dalı kırmızı yaptı. Lint adımı düşünce
+mypy adımı HİÇ koşmadı ve M1'in getirdiği 3 tip hatası (`Popen(**kwargs)`,
+aynı adın iki tipte yeniden bağlanması) da görünmez kaldı. Düzeltme:
+ruff ve mypy sürümleri sabitlendi (yükseltme bilinçli ve tek commit'te),
+bulgular giderildi, `projects/` mypy kapsamına açıkça alındı (zaten
+`plugins/proje_plugin.py` importu üzerinden denetleniyordu).

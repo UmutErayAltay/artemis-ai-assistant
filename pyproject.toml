@@ -35,7 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8.0", "ruff==0.16.10", "mypy==1.19.1"]  # sürüm sabitleme gerekçesi: requirements-dev.txt
 
 # pytest>=7'nin yerleşik `pythonpath` seçeneği: bu dosyanın bulunduğu
 # dizini (yani `artemis/` kökünü) otomatik olarak sys.path'e ekler.
@@ -163,7 +163,9 @@ ignore = [
 # sürümünü kullanmasını sağlar; CI matrisi 3.11 ve 3.12'yi ayrı ayrı
 # çalıştırdığı için bu, her kolun kendi numpy sürümüyle doğru eşleşmesini
 # garanti eder (bkz. .github/workflows/tests.yml).
-files = ["core", "config", "models", "memory", "plugins", "utils"]
+# `projects/` kapsamda: tipli yeni kod (daha önce `plugins/proje_plugin.py`
+# importları üzerinden zaten dolaylı olarak denetleniyordu).
+files = ["core", "config", "models", "memory", "plugins", "projects", "utils"]
 ignore_missing_imports = true      # ollama/pywin32/pyautogui'nin tip bilgisi yok
 warn_unused_ignores = true
 warn_redundant_casts = true

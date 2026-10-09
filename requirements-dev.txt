@@ -17,8 +17,12 @@ mcp>=1.20           # plugins/mcp_plugin.py GERÇEK bir alt süreçle test edili
 requests>=2.31      # voice/stt_cloud.py ve stt_azure.py testleri modül seviyesinde import eder
 
 pytest>=8.0
-ruff>=0.6
-mypy>=1.11
+# Denetleyiciler SABİT sürümde: kural kümeleri sürümden sürüme değişiyor. `ruff>=0.6`
+# iken CI her koşuda en yeni ruff'ı (0.16.10) kurdu, yerel 0.15.8 ise BAŞKA bir bulgu
+# listesi verdi; ikisi hiç aynı anda temiz olmadı ve 2 Ekim'den beri her push kırmızı
+# çıktı. Yerel ile CI aynı sürümü kullansın; yükseltme bilinçli ve tek commit'te yapılır.
+ruff==0.16.10
+mypy==1.19.1
 
 types-PyYAML>=6.0    # config/settings.py yaml.safe_load
 types-requests>=2.31 # voice/stt_cloud.py, voice/stt_azure.py

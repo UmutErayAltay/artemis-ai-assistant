@@ -160,12 +160,12 @@ class ProjectInterview:
             return InterviewTurn("Tamam, proje görüşmesini kapattım. Hiçbir şey başlatılmadı.")
 
         if interview.status == INTERVIEW_READY and interview.spec and self._is_start(text, words):
-            spec = ProjectSpec(**interview.spec)
+            ready_spec = ProjectSpec(**interview.spec)
             return InterviewTurn(
-                f"'{spec.slug}' için kodlamayı başlatıyorum.",
+                f"'{ready_spec.slug}' için kodlamayı başlatıyorum.",
                 tool_call={
                     "tool": "proje.islem",
-                    "arguments": {"islem": "baslat", "ad": spec.slug, "kodlayici": spec.kodlayici},
+                    "arguments": {"islem": "baslat", "ad": ready_spec.slug, "kodlayici": ready_spec.kodlayici},
                 },
             )
 

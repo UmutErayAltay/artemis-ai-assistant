@@ -141,13 +141,14 @@ def spawn_runner(settings: ProjelerSettings, job_id: int) -> subprocess.Popen[by
     directory.mkdir(parents=True, exist_ok=True)
     command = runner_command(settings, job_id)
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ARTEMIS_ROOT), os.environ.get("PYTHONPATH")]))}
-    kwargs: dict[str, object] = {}
+    # Runner, Artemis kapansa bile yaşamalı ve bir ağaç olarak durdurulabilmeli;
+    # bu yüzden Windows'ta yeni süreç grubu, POSIX'te yeni oturum açılır.
+    # İki parametre de HER ZAMAN açıkça verilir (`**kwargs` mypy'nin Popen
+    # aşırı yüklemesini çözmesini engelliyordu): POSIX'te `creationflags`
+    # 0 olmak zorundadır (öyle), Windows'ta `start_new_session` göz ardı edilir.
+    creationflags = 0
     if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(
-            subprocess, "CREATE_NO_WINDOW", 0
-        )
-    else:
-        kwargs["start_new_session"] = True
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     with (directory / "runner.log").open("ab") as log:
         return subprocess.Popen(
@@ -157,7 +158,8 @@ def spawn_runner(settings: ProjelerSettings, job_id: int) -> subprocess.Popen[by
             stdout=log,
             stderr=subprocess.STDOUT,
             env=env,
-            **kwargs,  # type: ignore[arg-type]
+            creationflags=creationflags,
+            start_new_session=os.name != "nt",
         )
 
 
