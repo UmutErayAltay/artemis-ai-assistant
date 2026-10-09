@@ -3103,3 +3103,28 @@ bir bot ve gerçek `jobs.start` → ayrık runner → sahte kodlayıcı akışı
 telefona bildirim ulaştığı görüldü ("Bildirim gönderildi: telegram"); işin
 ürettiği hiçbir dosyada token geçmiyordu. Açık: Windows toast'ı ve sesli
 duyuru gerçek donanımda denenmedi; Telegram'dan CEVAP vermek (iki yönlü) yok.
+
+## 45) M4 ölçümü: embedding/hibrit arama gerekli mi? (karar bekliyor)
+
+Vault araması sözcük tabanlı; M2'de genel fikirlerde filtreden sonra not kalmıyordu.
+30 pozitif + 8 negatif (ilgili notu olmayan) proje fikri sorusuyla, doğru notları
+önceden işaretlenmiş bir altın kümeyle ölçüldü (sorular not başlığındaki ayırt edici
+terimleri KULLANMAZ; soruları ve etiketleri bir ajan yazdı, küçük örnek: ±birkaç soru
+fark gürültüdür). Korpus ~163 not / 899 pasaj.
+
+| Yöntem | hit@4 | recall@4 | MRR@10 | negatiflerde dönen not (tavan 32) | gecikme |
+|---|---|---|---|---|---|
+| Bugünkü arama | 0.43 | 0.25 | 0.28 | 32 | 1,7 sn |
+| Strict kip | 0.50 | 0.29 | 0.36 | 0 (31/38 sorguda boş) | 0,14 sn |
+| e5-small | 0.53 | 0.31 | 0.44 | 32 | 53 ms |
+| MiniLM-L12 çok dilli | 0.57 | 0.36 | 0.45 | 32 | 36 ms |
+| Hibrit (RRF) e5-small | 0.60 | 0.38 | 0.45 | 32 | — |
+| Hibrit (RRF) MiniLM | 0.67 | 0.44 | 0.48 | 32 | — |
+| Hibrit MiniLM + eşik | 0.63 | 0.42 | 0.44 | 4 | — |
+
+Bulgular: embedding hit@4'ü 0.43 → 0.67'ye çıkarıyor; ama %33 hâlâ kaçıyor ve
+ilgisiz fikirde de not getiriyor — eşik pozitif/negatifi temiz ayırmıyor (e5'in skorları
+0.84-0.88'e sıkışık, MiniLM'in ayrımı daha iyi). İndeks kurulumu 1-3 dk (CPU).
+Öneri (uygulanmadı): vault dışında, Artemis içinde ayrı bir hibrit katman; MiniLM +
+eşik ile başla. Karar: embedding limiti sıfırlanınca ele alınacak. Ham veri: ölçüm
+scriptleri ve `rapor.md` oturum scratchpad'indeydi (kalıcı değil).
