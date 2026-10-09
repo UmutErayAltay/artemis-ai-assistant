@@ -231,12 +231,12 @@ def test_panel_uses_the_shared_design_language(panel: ArtemisPanel) -> None:
     assert panel.isWindow(), "çerçevesiz bir katman değil, NORMAL bir pencere olmalı"
 
 
-def test_panel_has_no_message_box_and_no_send_button(panel: ArtemisPanel) -> None:
-    """Asıl istek: yazma yüzü KALDIRILDI.
+def test_panel_has_a_command_box_and_send_button_and_a_read_only_history(panel: ArtemisPanel) -> None:
+    """Yazma yüzü YALNIZCA alt kutudur; geçmiş salt okunur kalır.
 
-    Panel bir sohbet arayüzü değil; mesaj kutusu ve "Gönder" düğmesi
-    bulunmamalı. (Ayar formundaki `QLineEdit`'ler bu aramayı bozmaz —
-    onlar ayar DEĞERİ alanlarıdır, mesaj yazmaya yaramaz.)
+    Eski tasarımda panelde mesaj kutusu yoktu. Şimdi panelin altında tek bir
+    komut kutusu ve "Gönder" düğmesi vardır; komutlar sesli komutla aynı hattan
+    geçer (bkz. `tests/test_ui_command_input.py`). Geçmiş yine yazılamaz.
     """
 
     tabs = panel.findChild(QTabWidget)
@@ -246,10 +246,8 @@ def test_panel_has_no_message_box_and_no_send_button(panel: ArtemisPanel) -> Non
     history = panel.findChild(QTextBrowser)
     assert history is not None, "geçmiş sekmesi bir metin görünümü olmalı"
     assert history.isReadOnly(), "geçmiş SALT OKUNUR"
-    assert [button.text() for button in panel.findChildren(QPushButton)].count("Gönder") == 0
-    # Ayar sekmesindeki `QLineEdit`'ler ayar DEĞERİ alanlarıdır (model adı,
-    # kısayol) — mesaj yazmaya yaramaz; yalnızca geçmiş sekmesinde
-    # yazılabilir bir yüz olmadığı önemlidir ve o yüz `QTextBrowser`'dır.
+    assert [button.text() for button in panel.findChildren(QPushButton)].count("Gönder") == 1
+    assert panel._input is not None, "alt yazı kutusu olmalı"
 
 
 def test_settings_tab_reuses_the_existing_window_rather_than_a_copy(
@@ -446,6 +444,22 @@ def test_missing_log_shows_an_empty_state_instead_of_inventing_history(
     assert "Siz:" not in panel._empty.text(), "uydurulmuş bir konuşma satırı olmamalı"
 
 
+def _history_tooltips(browser: QTextBrowser) -> set[str]:
+    """Geçmiş belgesindeki karakter tooltip'leri (ham tool adları burada tutulur)."""
+
+    found: set[str] = set()
+    block = browser.document().begin()
+    while block.isValid():
+        fragments = block.begin()
+        while not fragments.atEnd():
+            fragment = fragments.fragment()
+            if fragment.isValid() and fragment.charFormat().toolTip():
+                found.add(fragment.charFormat().toolTip())
+            fragments += 1
+        block = block.next()
+    return found
+
+
 def test_a_written_log_is_rendered_into_the_history_tab(
     panel: ArtemisPanel, tmp_path: Path
 ) -> None:
@@ -459,7 +473,8 @@ def test_a_written_log_is_rendered_into_the_history_tab(
     text = history.toPlainText()
 
     assert "league of legends, aç" in text
-    assert "windows.launch_app" in text and "başarılı" in text
+    assert "Uygulama başlatma" in text and "başarılı" in text
+    assert "windows.launch_app" in {tip for tip in _history_tooltips(history)}
     assert "başarısız" in text
     assert "3 tur" in _status_text(panel)
 

@@ -55,7 +55,7 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from core.dispatcher import ToolDispatcher
 from models.tool_models import ToolResult
@@ -200,6 +200,27 @@ class StepResult:
     result: ToolResult
 
 
+@dataclass(frozen=True)
+class PlanProgress:
+    """Planın bir adımının o anki durumu; arayüzün adım listesini sürmek için.
+
+    NEDEN TÜM TOOL ADLARI DA TAŞINIR: arayüz adım listesini plan BAŞLARKEN bir kez
+    çizmek ister. Yalnızca adım durumu gelseydi ilk olayda kalan adımların adlarını
+    bilemezdi ve bekleyen satırları gösteremezdi.
+
+    Attributes:
+        index: Adımın plandaki sırası (1'den başlar).
+        tool_names: Planın TÜM adımlarının tool adları, sırayla.
+        state: "running" (çalışıyor), "done" (başarılı) ya da "failed" (başarısız
+            ya da kullanıcı reddetti). Henüz başlamamış adımlar için olay üretilmez;
+            arayüz onları "bekliyor" diye kendisi çizer.
+    """
+
+    index: int
+    tool_names: tuple[str, ...]
+    state: Literal["running", "done", "failed"]
+
+
 class TaskPlanner:
     """LLM'den gelen bir tool-call listesini sırayla, güvenli şekilde yürütür.
 
@@ -216,6 +237,10 @@ class TaskPlanner:
             yapmaz (test edilebilirlik ve arayüzden bağımsızlık için).
         stop_on_failure: True ise (varsayılan) bir adım gerçekten
             başarısız olduğunda kalan adımlar çalıştırılmaz.
+        progress_callback: İsteğe bağlı. Her adım çalışmaya başlarken, sonra
+            bittiğinde (ya da reddedildiğinde) `PlanProgress` ile çağrılır. None ise
+            hiçbir şey bildirilmez; mevcut kullanıcılar (sohbet, metin) bu yüzden
+            değişmeden kalır. Arayüz bunu adım listesini çizmek için kullanır.
     """
 
     def __init__(
@@ -223,10 +248,21 @@ class TaskPlanner:
         dispatcher: ToolDispatcher,
         confirm_callback: Callable[[str, dict[str, Any]], bool],
         stop_on_failure: bool = True,
+        progress_callback: Callable[[PlanProgress], None] | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self.confirm_callback = confirm_callback
         self.stop_on_failure = stop_on_failure
+        self.progress_callback = progress_callback
+
+    def _report(self, index: int, tool_names: tuple[str, ...], state: Literal["running", "done", "failed"]) -> None:
+        """Varsa ilerleme geri çağrısını bir adım durumuyla çağırır.
+
+        Geri çağrı yoksa sessizce döner; planın akışı bildirime bağlı değildir.
+        """
+
+        if self.progress_callback is not None:
+            self.progress_callback(PlanProgress(index=index, tool_names=tool_names, state=state))
 
     def execute_plan(self, tool_calls: list[dict[str, Any]]) -> list[StepResult]:
         """Verilen tool-call listesini sırayla yürütür.
@@ -242,6 +278,7 @@ class TaskPlanner:
         """
 
         step_results: list[StepResult] = []
+        planned_names = tuple(str(raw_call.get("tool", "?")) for raw_call in tool_calls)
 
         for index, raw_call in enumerate(tool_calls, start=1):
             tool_name = raw_call.get("tool", "?")
@@ -251,6 +288,9 @@ class TaskPlanner:
             # diyaloğu hem StepResult raporlaması yer tutucuyu değil
             # ÇÖZÜLMÜŞ gerçek değeri görsün diye (bkz. modül dokümantasyonu
             # GÜVENLİK NOTU).
+            # Her adım önce "çalışıyor" bildirilir (referans hatası dahil): böylece her adımın
+            # olay dizisi hep "running" ile başlar ve arayüz listeyi yalnızca o ilk olayda kurar.
+            self._report(index, planned_names, "running")
             arguments, ref_error = _resolve_step_references(raw_arguments, step_results)
 
             if ref_error is not None:
@@ -265,6 +305,7 @@ class TaskPlanner:
                         )
                     else:
                         step_results.append(StepResult(index, tool_name, arguments, result))
+                        self._report(index, planned_names, "failed")
                         logger.info(
                             "Kullanıcı onayı reddetti (adım %d/%d: '%s'); kalan %d adım iptal edildi.",
                             index,
@@ -275,6 +316,7 @@ class TaskPlanner:
                         break
 
             step_results.append(StepResult(index, tool_name, arguments, result))
+            self._report(index, planned_names, "done" if result.success else "failed")
 
             if not result.success and self.stop_on_failure:
                 logger.warning(

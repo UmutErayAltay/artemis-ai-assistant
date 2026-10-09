@@ -38,14 +38,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 from config.settings import Settings
+from core.command_runner import CommandRunner
 from core.dispatcher import ToolDispatcher
-from core.llm_client import LLMResponseParseError
 from core.llm_types import LLMClient
-from core.planner import TaskPlanner
+from core.planner import PlanProgress
 from core.prompt_builder import build_system_prompt
-from projects.session import pending_notices, route_to_interview
-from utils.confirmation import format_confirmation_arguments
+from projects.session import pending_notices
+from utils.confirmation import ConfirmationLatch, format_confirmation_arguments
 from utils.text import AFFIRMATIVE_WORDS, is_clear_affirmative_answer
+from utils.tool_labels import tool_label
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,9 @@ class VoiceAssistant:
         self._active_mic: Any = None
 
         self._system_prompt = build_system_prompt()
-        self._planner = TaskPlanner(dispatcher, confirm_callback=self._confirm_by_voice)
+        # Komut hattı (proje görüşmesi → kapı → LLM → plan) yazılı panelle
+        # ORTAK kullanılır; onay geri çağrısı her komutta ayrıca verilir.
+        self._runner = CommandRunner(dispatcher, llm_client, settings, self._system_prompt)
 
         # Ağır bileşenler ilk kullanımda kurulur (bkz. _ensure_*).
         self._wake_detector = None
@@ -366,47 +369,18 @@ class VoiceAssistant:
         self._overlay.set_heard(transcript)
         self._overlay.show_thinking("Düşünüyorum…")
 
-        # Açık bir proje görüşmesi varsa cevap ona gider — komut kapısından
-        # ÖNCE: "FastAPI olsun" tek başına bir komut gibi durmaz ve kapı onu
-        # gürültü sayabilirdi (bkz. projects/session.py).
-        turn = route_to_interview(self._settings.projeler, self._llm, transcript)
-        if turn is not None:
-            reply = turn.message
-            if turn.tool_call is not None:
-                step_results = self._planner.execute_plan([turn.tool_call])
-                reply = f"{reply} {self._summarize(step_results, 1)}"
-            self._respond_with_notices(reply)
-            return
-
-        # KOMUT KAPISI: her duyulan şey asistana yönelik değildir. Uyandırma
-        # sözcüğü gürültüyle de tetiklenebiliyor ve sonrasında yakalanan
-        # arka plan konuşması, tool seçiminde rastgele bir eyleme
-        # dönüşüyordu (bkz. `llm_client.should_engage`). Sınır "komut mu"
-        # değil "yönelik mi" olduğu için sorular ve sohbet de buradan
-        # geçer — onları `assistant.reply` karşılar (v3.3, README §20f).
-        if self._settings.command_gate_enabled and not self._llm.should_engage(transcript):
-            self._respond("Bir komut duymadım.")
-            return
-
-        try:
-            tool_calls = self._llm.get_tool_calls(self._system_prompt, transcript)
-        except LLMResponseParseError:
-            self._respond("Bunu anlayamadım, başka türlü söyler misiniz?", error=True)
-            return
-        except ConnectionError as exc:
-            logger.error("Ollama bağlantı hatası: %s", exc)
-            self._respond("Yerel modele ulaşamıyorum.", error=True)
-            return
-
-        # Hangi tool'un neden seçildiğini sonradan anlayabilmek için, LLM'in
-        # döküme karşılık ürettiği planı da logla (bkz. yukarıdaki not).
-        logger.info(
-            "LLM planı: %s",
-            [(call.get("tool"), call.get("arguments")) for call in tool_calls],
+        # Asıl iş ortak hatta: proje görüşmesi, komut kapısı (sesli girdi
+        # için açık), LLM ve tool planı. Yalnızca SUNUM burada: sonucun
+        # türüne göre sesli okuma biçimi seçilir.
+        outcome = self._runner.run(
+            transcript, confirm=self._confirm_by_voice, gate=True, progress=self._on_plan_progress
         )
-
-        step_results = self._planner.execute_plan(tool_calls)
-        self._respond_with_notices(self._summarize(step_results, len(tool_calls)))
+        if outcome.kind == "error":
+            self._respond(outcome.reply, error=True)
+        elif outcome.kind == "ignored":
+            self._respond(outcome.reply)
+        else:
+            self._respond_with_notices(outcome.reply)
 
     def _respond_with_notices(self, message: str) -> None:
         """Cevabı söyler; bildirim eklendiyse kesme sınırını bildirim boyuna çıkarır (bkz. `_NOTICE_SPOKEN_LIMIT`)."""
@@ -478,28 +452,57 @@ class VoiceAssistant:
 
         Kullanıcı neyi onayladığını görebilsin diye işlem ve argümanları
         ekranda gösterilir (bkz. README §16b: kör onay güvenlik açığıdır).
+
+        İKİ KANAL, İLK CEVAP KAZANIR: sesli cevap ya da ekrandaki Evet/Hayır düğmesi
+        (ya da Enter/Esc). Hangisi önce karar verirse o geçerlidir; ikincisi yok sayılır.
+        Hiçbiri gelmezse zaman aşımı RED sayılır — mevcut güvenlik kuralı değişmedi.
         """
 
         argument_text = format_confirmation_arguments(arguments)
-        self._overlay.show_error(f"Onay gerekiyor — {tool_name} ({argument_text}). 'Evet' deyin.")
-        self._speak(f"{tool_name} işlemi onay gerektiriyor. Onaylıyor musunuz?")
+        latch = ConfirmationLatch()
+        self._overlay.show_confirmation(f"Onay: {tool_name} ({argument_text})", lambda ok: latch.decide(ok, "düğme"))
+        try:
+            self._speak(f"{tool_name} işlemi onay gerektiriyor. Onaylıyor musunuz?")
 
-        answer = self._listen_for_confirmation()
-        approved = is_clear_affirmative_answer(answer)
+            answer = self._listen_for_confirmation(latch)
+            # Ses cevabı yalnızca henüz düğmeyle karar verilmemişse geçerli olur
+            # (konuşma çözülürken tıklama gelmiş olabilir).
+            latch.decide(is_clear_affirmative_answer(answer), "ses")
+        finally:
+            self._overlay.hide_confirmation()
 
+        approved = latch.approved
         logger.info(
-            "Sesli onay: tool=%s duyulan=%r sonuç=%s",
+            "Onay: tool=%s kaynak=%s duyulan=%r sonuç=%s",
             tool_name,
+            latch.source,
             answer,
             "ONAYLANDI" if approved else "REDDEDİLDİ",
         )
         return approved
 
-    def _listen_for_confirmation(self) -> str:
+    def _on_plan_progress(self, progress: PlanProgress) -> None:
+        """Planın her adımındaki durumunu ekrandaki adım listesine yansıtır.
+
+        Yalnızca ≥2 adımlı planlar gösterilir: tek adımlı bir komutun listeye ihtiyacı yok,
+        cevabı zaten alt satırda çıkar. Liste, planın İLK adımının "çalışıyor" olayında
+        (`index == 1`, `running`) bir kez kurulur; sonraki olaylar yalnızca o adımın
+        durumunu değiştirir. Çağrı planlayıcının iş parçacığından gelir; overlay'in
+        metotları iş parçacığı güvenlidir.
+        """
+
+        if len(progress.tool_names) < 2:
+            return
+        if progress.index == 1 and progress.state == "running":
+            self._overlay.show_steps([tool_label(name) for name in progress.tool_names])
+        self._overlay.set_step_state(progress.index - 1, progress.state)
+
+    def _listen_for_confirmation(self, latch: ConfirmationLatch | None = None) -> str:
         """Kısa bir süre onay cevabı dinler; duyamazsa boş string döner.
 
         Ses işçisinin hâlihazırda açık olan mikrofon akışını kullanır
-        (bkz. `_active_mic`); yeni bir akış açmaz.
+        (bkz. `_active_mic`); yeni bir akış açmaz. `latch` verilmişse ve düğmeyle
+        karar verilirse, dinleme hemen biter: artık duyulacak bir cevap kalmamıştır.
         """
 
         from voice.audio import rms_amplitude
@@ -515,6 +518,8 @@ class VoiceAssistant:
 
         try:
             while time.monotonic() < deadline and not self._stop_event.is_set():
+                if latch is not None and latch.is_decided():
+                    break
                 block = mic.read_block()
                 self._overlay.set_amplitude(rms_amplitude(block))
                 if recorder.feed(block):
@@ -525,7 +530,7 @@ class VoiceAssistant:
 
         audio = recorder.audio_bytes
         recorder.reset()
-        if not audio:
+        if not audio or (latch is not None and latch.is_decided()):
             return ""
 
         try:
@@ -551,27 +556,6 @@ class VoiceAssistant:
     # ------------------------------------------------------------------
     # Cevap üretme ve konuşma
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _summarize(step_results: list[Any], total: int) -> str:
-        """Plan sonuçlarını sesli okunacak tek bir cümleye indirger.
-
-        Terminalde adımlar tek tek yazdırılabilir ama sesli asistanda uzun
-        listeler dinlemesi yorucudur; bu yüzden tek adımda doğrudan
-        sonucun mesajı, çok adımda kısa bir özet okunur.
-        """
-
-        if not step_results:
-            return "Yapılacak bir işlem bulamadım."
-
-        if total == 1:
-            return step_results[0].result.message
-
-        successful = sum(1 for step in step_results if step.result.success)
-        if successful == total:
-            return f"{total} işlemin hepsini tamamladım."
-
-        return f"{total} işlemden {successful} tanesini tamamladım; kalanında sorun oldu."
 
     def _respond(self, message: str, error: bool = False, limit: int = _MAX_SPOKEN_LENGTH) -> None:
         """Cevabı ekranda gösterir, sesli okur ve pencereyi kapatır.

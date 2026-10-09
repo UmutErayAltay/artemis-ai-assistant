@@ -55,6 +55,9 @@ class ArtemisTray(QSystemTrayIcon):
 
     Args:
         on_listen: "Şimdi dinle" seçildiğinde çağrılır (elle uyandırma).
+            `None` ise sesli asistan kapalıdır (`voice_enabled: false`) ve
+            "Şimdi dinle" öğesi menüye HİÇ eklenmez — dinlemeyi başlatacak
+            bir şey yokken boş bir düğme göstermek yanlış söz olurdu.
         on_quit: "Çıkış" seçildiğinde çağrılır.
         hotkey_text: Menüde bilgi olarak gösterilecek kısayol metni.
         on_settings: "Ayarlar" seçildiğinde çağrılır. `None` (varsayılan)
@@ -62,14 +65,14 @@ class ArtemisTray(QSystemTrayIcon):
             kalır. Bu, ayar penceresinin eklenmesini bir "herkes için
             zorunlu bağımlılık" olmaktan çıkarır: `main.py`'yi henüz
             değiştirmemiş bir çağrı yer de durur.
-        on_panel: "Panel (geçmiş ve ayarlar)" seçildiğinde çağrılır
-            (`ui/panel.py::show_panel`). Aynı seçime bağlı mantık:
-            verilmezse menü öğesi eklenmez.
+        on_panel: "Paneli aç" seçildiğinde ve simgeye tek tıklandığında
+            çağrılır (`ui/panel.py::show_panel`). Verilmezse menü öğesi
+            eklenmez ve tek tıklama bir şey yapmaz.
     """
 
     def __init__(
         self,
-        on_listen: Callable[[], None],
+        on_listen: Callable[[], None] | None,
         on_quit: Callable[[], None],
         hotkey_text: str = "",
         on_settings: Callable[[], None] | None = None,
@@ -78,16 +81,20 @@ class ArtemisTray(QSystemTrayIcon):
         super().__init__(build_icon())
 
         self._on_listen = on_listen
-        self.setToolTip("Artemis — sesli asistan çalışıyor")
+        self._on_panel = on_panel
+        self.setToolTip(
+            "Artemis — sesli asistan çalışıyor" if on_listen is not None else "Artemis — çalışıyor"
+        )
 
         menu = QMenu()
 
-        listen_action = QAction(f"Şimdi dinle{f'  ({hotkey_text})' if hotkey_text else ''}", menu)
-        listen_action.triggered.connect(lambda: on_listen())
-        menu.addAction(listen_action)
+        if on_listen is not None:
+            listen_action = QAction(f"Şimdi dinle{f'  ({hotkey_text})' if hotkey_text else ''}", menu)
+            listen_action.triggered.connect(lambda: on_listen())
+            menu.addAction(listen_action)
 
         if on_panel is not None:
-            panel_action = QAction("Panel (geçmiş ve ayarlar)", menu)
+            panel_action = QAction("Paneli aç (geçmiş ve ayarlar)", menu)
             panel_action.triggered.connect(lambda: on_panel())
             menu.addAction(panel_action)
 
@@ -108,7 +115,13 @@ class ArtemisTray(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        """Simgeye çift tıklanınca dinlemeyi başlatır."""
+        """Tek tık paneli açar; çift tık (sesli asistan varsa) dinlemeyi başlatır.
 
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+        Windows çift tıkta önce tek tık olayını da yayınlar: çift tık, paneli
+        de açar. Bu, geçmişe erişimi tek tıka bağlamanın bedelidir.
+        """
+
+        if reason == QSystemTrayIcon.ActivationReason.Trigger and self._on_panel is not None:
+            self._on_panel()
+        elif reason == QSystemTrayIcon.ActivationReason.DoubleClick and self._on_listen is not None:
             self._on_listen()

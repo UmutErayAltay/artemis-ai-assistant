@@ -49,6 +49,11 @@ class FakeOverlay:
         self.amplitudes: list[float] = []
         self.heard: list[str] = []
         self.dismissed = 0
+        self.confirmations: list[str] = []
+        self.confirmation_hidden = 0
+        self.decision_callback = None
+        self.step_labels: list[list[str]] = []
+        self.step_states: list[tuple[int, str]] = []
 
     def set_heard(self, text: str) -> None:
         self.heard.append(text)
@@ -70,6 +75,21 @@ class FakeOverlay:
 
     def dismiss(self) -> None:
         self.dismissed += 1
+
+    # Onay düğmeleri ve adım listesi (ui/overlay.py ile aynı imza). Bu testlerde
+    # düğmeye tıklama simüle edilmez; yalnızca çağrılar kaydedilir.
+    def show_confirmation(self, summary: str, on_decision) -> None:
+        self.confirmations.append(summary)
+        self.decision_callback = on_decision
+
+    def hide_confirmation(self) -> None:
+        self.confirmation_hidden += 1
+
+    def show_steps(self, labels: list[str]) -> None:
+        self.step_labels.append(list(labels))
+
+    def set_step_state(self, index: int, state: str) -> None:
+        self.step_states.append((index, state))
 
     @property
     def state_names(self) -> list[str]:
@@ -1197,3 +1217,161 @@ def test_notices_appended_to_an_answer_are_brief_and_not_cut(
     [spoken] = tts.spoken
     assert len(spoken) > 120 and spoken.endswith("x tamamlandı: M1 bitti.")
     assert "Klasör:" not in spoken
+
+
+# --------------------------------------------------------------------------
+# Onay düğmesi ve adım listesi — ses döngüsüyle entegrasyon
+# --------------------------------------------------------------------------
+
+
+class _ClickingMicrophone(FakeMicrophone):
+    """Onay sorusu ekrana çıkınca, bir düğme tıklamasını taklit eden sahte mikrofon.
+
+    Gerçek fare yerine overlay'in karar geri çağrısı (`decision_callback`) doğrudan
+    çağrılır; bu, düğmenin sesli döngüye ulaşma yoluyla aynıdır.
+    """
+
+    def __init__(self, blocks: list[bytes], overlay: FakeOverlay, approved: bool | None) -> None:
+        super().__init__(blocks)
+        self._overlay = overlay
+        self._approved = approved
+        self._clicked = False
+
+    def read_block(self) -> bytes:
+        if self._approved is not None and not self._clicked and self._overlay.decision_callback is not None:
+            if self._overlay.confirmations:
+                self._clicked = True
+                self._overlay.decision_callback(self._approved)
+        return super().read_block()
+
+
+def test_button_click_answers_confirmation_before_speech_is_transcribed(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """Tıklama, konuşma çözülmeden onayı verir; STT hiç çağrılmaz, düğmeler kapanır."""
+
+    overlay = FakeOverlay()
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, FakeLLM(), "")
+    stt = FakeSTT("kapıyı kapat")  # çözülseydi RED olurdu; tıklama önce gelmeli
+    assistant._stt = stt
+    assistant._active_mic = _ClickingMicrophone([_speech()] * 4 + [_silence()] * 6, overlay, approved=True)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x", "location": "desktop"}) is True
+
+    assert stt.calls == 0, "tıklama kazandıktan sonra konuşma çözülmemeli"
+    assert overlay.confirmations and "filesystem.delete" in overlay.confirmations[0]
+    assert "target" in overlay.confirmations[0] and "x" in overlay.confirmations[0]
+    assert overlay.confirmation_hidden == 1
+
+
+def test_button_hayir_refuses_even_if_speech_says_yes(dispatcher: ToolDispatcher, settings: Settings) -> None:
+    overlay = FakeOverlay()
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, FakeLLM(), "")
+    stt = FakeSTT("evet")
+    assistant._stt = stt
+    assistant._active_mic = _ClickingMicrophone([_speech()] * 4 + [_silence()] * 6, overlay, approved=False)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is False
+    assert stt.calls == 0
+
+
+def test_click_during_transcription_beats_the_spoken_answer(dispatcher: ToolDispatcher, settings: Settings) -> None:
+    """İlk karar kazanır: düğme, konuşma çözülürken gelirse konuşmanın cevabı yok sayılır."""
+
+    class ClickWhileTranscribing(FakeSTT):
+        def __init__(self, text: str, overlay: FakeOverlay) -> None:
+            super().__init__(text)
+            self._overlay = overlay
+
+        def transcribe(self, audio: bytes, hotwords: str | None = None) -> str:
+            self._overlay.decision_callback(False)  # kullanıcı tam bu sırada "Hayır"a bastı
+            return super().transcribe(audio, hotwords)
+
+    overlay = FakeOverlay()
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, FakeLLM(), "")
+    assistant._stt = ClickWhileTranscribing("evet", overlay)
+    assistant._active_mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is False
+
+
+def test_without_click_the_spoken_answer_decides_and_buttons_are_hidden(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    overlay = FakeOverlay()
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, FakeLLM(), "")
+    assistant._stt = FakeSTT("evet")
+    assistant._active_mic = FakeMicrophone([_speech()] * 4 + [_silence()] * 6)
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is True
+    assert overlay.confirmation_hidden == 1
+
+
+def test_timeout_without_answer_or_click_is_refused_and_hides_buttons(
+    dispatcher: ToolDispatcher, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(voice_loop, "_CONFIRMATION_TIMEOUT_SECONDS", 0.0)
+    overlay = FakeOverlay()
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, FakeLLM(), "")
+    assistant._active_mic = FakeMicrophone([])
+
+    assert assistant._confirm_by_voice("filesystem.delete", {"target": "x"}) is False
+    assert overlay.confirmation_hidden == 1
+
+
+def test_two_step_plan_shows_labelled_steps_and_reports_each_state(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [
+            {"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}},
+            {"tool": "filesystem.create_folder", "arguments": {"name": "Rapor", "location": "desktop"}},
+        ]
+    )
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "iki klasör oluştur")
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert overlay.step_labels == [["Klasör oluşturma", "Klasör oluşturma"]]
+    assert overlay.step_states == [(0, "running"), (0, "done"), (1, "running"), (1, "done")]
+    assert (settings.desktop_path / "Rapor").is_dir()
+
+
+def test_single_step_plan_shows_no_step_list(dispatcher: ToolDispatcher, settings: Settings) -> None:
+    overlay = FakeOverlay()
+    llm = FakeLLM([{"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}}])
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "orbit klasörü oluştur")
+
+    assistant._handle_one_command(FakeMicrophone([_speech()] * 4 + [_silence()] * 6))
+
+    assert overlay.step_labels == []
+    assert overlay.step_states == []
+
+
+def test_button_click_approves_a_dangerous_step_inside_a_plan(
+    dispatcher: ToolDispatcher, settings: Settings
+) -> None:
+    """Planın ORTASINDAKİ onay da düğmeyle verilebilmeli; adım gerçekten çalışır."""
+
+    settings.desktop_path.mkdir(parents=True, exist_ok=True)
+    victim = settings.desktop_path / "gecici.txt"
+    victim.write_text("silinebilir", encoding="utf-8")
+
+    overlay = FakeOverlay()
+    llm = FakeLLM(
+        [
+            {"tool": "filesystem.create_folder", "arguments": {"name": "Orbit", "location": "desktop"}},
+            {"tool": "filesystem.delete", "arguments": {"target": "gecici.txt", "location": "desktop"}},
+        ]
+    )
+    assistant, _ = _build_assistant(dispatcher, settings, overlay, llm, "orbit yap ve geçici dosyayı sil")
+    mic = _ClickingMicrophone([_speech()] * 4 + [_silence()] * 6, overlay, approved=True)
+    assistant._active_mic = mic
+
+    assistant._handle_one_command(mic)
+
+    assert (settings.desktop_path / "Orbit").is_dir()
+    assert not victim.exists()
+    # Adımlar 0-tabanlıdır: planın ikinci adımı (sıra 2) overlay'de indeks 1'dir.
+    assert (1, "running") in overlay.step_states and (1, "done") in overlay.step_states

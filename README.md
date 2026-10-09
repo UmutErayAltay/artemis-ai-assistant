@@ -67,13 +67,22 @@ Python 3.11+ gerekir.
 pip install -r requirements.txt      # ya da: pip install .
 python scripts/setup_voice.py       # Piper TTS modeli, yalnızca --voice için gerekli
 
+python main.py                      # birleşik uygulama: tepsi + sesli asistan + panel
 python main.py --chat               # metin modu (terminal)
-python main.py --chat-gui           # panel: sohbet geçmişi + ayarlar
+python main.py --chat-gui           # birleşik uygulama, panel açık başlar
 python main.py --settings           # ayarlar penceresini tek başına açar
-python main.py --voice              # sesli asistan (faster-whisper + tepsi)
+python main.py --demo               # LLM'siz tek örnek tool çağrısı
 ```
 
-`--voice` ayrıca bir konuşma modeli ister; `faster-whisper` bunları ilk kullanımda
+Seçenek vermeden çalıştırmak tepsi uygulamasını açar: sesli asistan (kısayol,
+uyandırma sözcüğü) ve panel birlikte çalışır. Tepsi simgesine tek tıklamak ya da
+menüden "Paneli aç" demek paneli getirir; panelin altındaki kutuya yazılan komut
+sesli komutla aynı yoldan işlenir (onay gereken işlemde diyalog açılır). `--voice`
+bu uygulamanın aynısıdır; `voice_enabled: false` iken uyarıp çıkar. `--chat-gui`
+paneli açılışta gösterir. Sesli asistan kapalıyken (`voice_enabled: false`) tepsi
+ve panel yine çalışır, mikrofon açılmaz.
+
+Sesli asistan ayrıca bir konuşma modeli ister; `faster-whisper` bunları ilk kullanımda
 Hugging Face'ten indirip yerel önbelleğe alır: `large-v3-turbo` (komut tanıma) ve
 `tiny` (uyandırma sözcüğü).
 
@@ -192,7 +201,7 @@ açıkça çalıştırın.
 ## Proje yapısı
 
 ```
-main.py            giriş noktaları (--chat, --chat-gui, --voice, --settings, --stop-ollama)
+main.py            giriş noktaları (birleşik uygulama, --chat, --chat-gui, --voice, --settings, --demo, --stop-ollama)
 core/              dispatcher, planner, LLM istemcileri + yönlendirici, plugin yükleyici, manifest
 config/            Settings (pydantic) + config.yaml
 plugins/           yetenek başına bir dosya (filesystem, web, windows, ...)

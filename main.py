@@ -6,17 +6,23 @@ döngüsü (Whisper STT -> ... -> Piper/pyttsx3 TTS) eklenecektir;
 `core/conversation_loop.py` o döngünün metin-tabanlı, LLM'e bağlı halidir.
 
 Kullanım:
-    python main.py                # tek seferlik demo dispatch (LLM'siz)
+    python main.py                 # birleşik uygulama: tepsi + sesli asistan + panel
+    python main.py --chat-gui      # birleşik uygulama, panel açık başlar
+    python main.py --voice         # birleşik uygulama (seçenek yokla aynı)
     python main.py --chat          # gerçek sohbet döngüsü (terminal)
-    python main.py --chat-gui      # Artemis paneli: geçmiş + ayarlar (ui/panel.py)
-    python main.py --voice         # sesli asistan: "Artemis" deyince ekrana gelir
     python main.py --settings      # ayarlar penceresini tek başına açar
     python main.py --stop-ollama   # RAM temizliği: yetim ollama süreçlerini kapatır
+    python main.py --demo          # LLM'siz tek seferlik demo dispatch
 
-`--chat`/`--chat-gui`/`--voice` beyni nerden alacağını `config.yaml::
-llm_provider` belirler: "auto" (varsayılan — bulut/OpenRouter, olmazsa
-yerel/Ollama), "cloud" (yalnızca OpenRouter) ya da "local" (yalnızca
-Ollama). `--voice` tepsi menüsünden "Ayarlar" ile de bu pencere açılabilir.
+Birleşik uygulama: sistem tepsisinde Artemis simgesi durur; tek tıkla (ya da
+"Paneli aç") panel gelir. Panelin altındaki kutuya yazılan komut, sesli
+komutla aynı yoldan işlenir. `voice_enabled: false` ise sesli asistan
+(mikrofon, kısayol) hiç başlamaz; tepsi ve panel yine çalışır.
+
+Beyni `config.yaml::llm_provider` belirler: "auto" (varsayılan — bulut/
+OpenRouter, olmazsa yerel/Ollama), "cloud" (yalnızca OpenRouter) ya da
+"local" (yalnızca Ollama). `--voice` tepsi menüsünden "Ayarlar" ile de bu
+pencere açılabilir.
 """
 
 from __future__ import annotations
@@ -190,7 +196,18 @@ def _start_llm_session(settings: Settings) -> tuple[OllamaServerManager | None, 
 
 
 def main() -> None:
-    """LLM olmadan, tek bir örnek tool çağrısını simüle eden demo.
+    """`python main.py` (seçenek yok): birleşik uygulama, panel gizli başlar.
+
+    Eskiden bu komut LLM'siz bir demo çalıştırırdı; o davranış `--demo` olarak
+    korunuyor (bkz. `main_demo`). Artık varsayılan, kullanıcının asıl işi olan
+    tepsi uygulamasıdır.
+    """
+
+    _run_unified(bootstrap(), show_panel_at_start=False)
+
+
+def main_demo() -> None:
+    """`python main.py --demo`: LLM olmadan, tek bir örnek tool çağrısını simüle eden demo.
 
     Gerçek kullanımda `raw_call`, yerel Ollama modelinin ürettiği JSON
     çıktısından `json.loads(...)` ile elde edilir; burada elle simüle
@@ -273,41 +290,14 @@ def main_chat() -> None:
 
 
 def main_chat_gui() -> None:
-    """`python main.py --chat-gui`: Artemis panelini açar (geçmiş + ayarlar).
+    """`python main.py --chat-gui`: birleşik uygulamayı, paneli açık başlatarak çalıştırır.
 
-    Artık mesaj YAZMA penceresi değildir: panel sohbet geçmişini okur,
-    ayarları gösterir ve asistanın durumunu bildirir. Konuşmanın aracı
-    `--chat` (terminal) ve `--voice`'dur; panel yalnızca bakmak içindir.
-
-    `ui/chat_window.py::ChatWindow` SİLİNMEDİ — modül, `QThread`'li
-    döngüsü ve onay köprüsüyle birlikte duruyor ve `tests/
-    test_ui_chat_window.py` ona bağlı; yalnızca bu giriş noktası artık
-    onu açmıyor. Geri bağlamak isteyen tek satırlık iştir.
-
-    LLM oturumu (`_start_llm_session`) yine kurulur: durum şeridi
-    çalışan sağlayıcının adını gerçekten yazabilsin diye. Panel bu
-    istemciyi KULLANMAZ; sadece adını okur.
+    `--voice` ile aynı uygulamadır (bkz. `_run_unified`); tek fark, panelin
+    açılışta hemen görünmesidir. `ui/chat_window.py::ChatWindow` bu yoldan
+    açılmaz; modül ve testleri duruyor.
     """
 
-    from PyQt6.QtWidgets import QApplication
-
-    from ui.panel import show_panel
-
-    dispatcher = bootstrap()
-
-    session = _start_llm_session(dispatcher.settings)
-    if session is None:
-        return
-    server_manager, llm_client = session
-
-    app = QApplication(sys.argv)
-    show_panel(dispatcher.settings, llm_client)
-
-    try:
-        sys.exit(app.exec())
-    finally:
-        if server_manager is not None:
-            server_manager.stop_if_we_started_it()
+    _run_unified(bootstrap(), show_panel_at_start=True)
 
 
 def main_settings() -> None:
@@ -332,16 +322,11 @@ def main_settings() -> None:
 
 
 def main_voice() -> None:
-    """`python main.py --voice`: sesli asistanı arka planda başlatır.
+    """`python main.py --voice`: birleşik uygulamayı çalıştırır (seçenek yokla aynı).
 
-    Artemis penceresiz çalışır; yalnızca adı söylendiğinde (veya kısayol
-    tuşuna basıldığında) ekranın altında Siri benzeri bir pencere belirir.
-    Uygulamayı kapatmak için sistem tepsisindeki simgeyi kullanın.
-
-    Ön koşullar:
-        1) `pip install -r requirements.txt`
-        2) `python scripts/setup_voice.py` (ses modellerini indirir)
-        3) Ollama kurulu ve en az bir model çekilmiş olmalı.
+    Sesli asistan kapalıysa (`voice_enabled: false`) bu seçenek anlamını
+    yitirir: kullanıcı açıkça "sesli mod" istedi ve onu veremiyoruz. Bu yüzden
+    uyarı verip çıkar. Sessiz bir "panel açıldı" ile yer değiştirmez.
     """
 
     dispatcher = bootstrap()
@@ -360,75 +345,111 @@ def main_voice() -> None:
         print(
             "Sesli asistan config.yaml'da kapalı (voice_enabled: false).\n"
             "Açmak için bu ayarı true yapın, ya da metin modunda çalıştırın:\n"
-            "    python main.py --chat"
+            "    python main.py            (tepsi + panel: yazılı komut)\n"
+            "    python main.py --chat     (terminal)"
         )
         return
 
-    from PyQt6.QtWidgets import QApplication
+    _run_unified(dispatcher, show_panel_at_start=False)
 
-    from core.voice_loop import VoiceAssistant
-    from ui.hotkey import GlobalHotkey, HotkeyParseError
-    from ui.overlay import ArtemisOverlay
-    from ui.panel import show_panel
-    from ui.settings_window import show_settings
-    from ui.tray import ArtemisTray
+
+def _run_unified(dispatcher: ToolDispatcher, *, show_panel_at_start: bool) -> None:
+    """Birleşik uygulama: tepsi, (açıksa) sesli asistan ve panel tek süreçte.
+
+    Sesli asistan, kısayol ve overlay YALNIZCA `voice_enabled` açıkken kurulur.
+    Tepsi ve panel her durumda çalışır: sesli asistan kapalı olsa bile yazılı
+    komut verilebilsin diye. Panel bir kez kurulur ve tepsiden gizlenip
+    gösterilir; her açılışta yeniden yaratılmaz.
+
+    Args:
+        dispatcher: Önceden hazırlanmış (bootstrap edilmiş) dağıtıcı. Burada
+            yeniden `bootstrap()` çağrılmaz: eklentiler iki kez yüklenirse
+            tool adları çakışır.
+        show_panel_at_start: True ise panel açılışta hemen görünür
+            (`--chat-gui`); False ise yalnızca tepsiden açılır.
+    """
+
+    settings = dispatcher.settings
 
     session = _start_llm_session(settings)
     if session is None:
         return
     server_manager, llm_client = session
 
+    from PyQt6.QtWidgets import QApplication
+
+    from ui.hotkey import GlobalHotkey, HotkeyParseError
+    from ui.panel import show_panel
+    from ui.settings_window import show_settings
+    from ui.tray import ArtemisTray
+
     app = QApplication(sys.argv)
-    # KRİTİK: overlay gizlendiğinde son pencere kapanmış sayılır. Bu bayrak
-    # olmadan Qt, Artemis ilk kez sustuğu anda tüm uygulamayı kapatır.
+    # KRİTİK: overlay gizlendiğinde (ve panel kapatıldığında) son pencere
+    # kapanmış sayılır. Bu bayrak olmadan Qt, Artemis ilk kez sustuğu anda
+    # tüm uygulamayı kapatır.
     app.setQuitOnLastWindowClosed(False)
 
-    overlay = ArtemisOverlay()
-    assistant = VoiceAssistant(dispatcher, llm_client, overlay, settings)
-
+    assistant = None
+    overlay = None
     hotkey_text = settings.voice_hotkey
     hotkey: GlobalHotkey | None = None
-    try:
-        candidate = GlobalHotkey(hotkey_text, assistant.trigger)
-        # ÖNCE kaydet, SONRA filtreyi kur. `app.installNativeEventFilter`
-        # Qt tarafında C++ seviyesinde bir referans tutar; eskiden filtre
-        # `register()`'dan ÖNCE kuruluyordu ve kayıt başarısız olduğunda
-        # Python tarafı `hotkey = None` ile son referansını düşürüyordu —
-        # Qt ise `removeNativeEventFilter` hiç çağrılmadığı için ham
-        # işaretçiyi tutmaya devam ediyordu (bellek sızıntısı / potansiyel
-        # kullanım-sonrası-serbest bırakma riski). Şimdi filtre yalnızca
-        # kayıt GERÇEKTEN başarılıysa kurulur.
-        if candidate.register():
-            app.installNativeEventFilter(candidate)
-            hotkey = candidate
-    except HotkeyParseError as exc:
-        logger.warning("Kısayol ayarı geçersiz (%s); kısayol olmadan devam ediliyor.", exc)
-        hotkey = None
+
+    if settings.voice_enabled:
+        from core.voice_loop import VoiceAssistant
+        from ui.overlay import ArtemisOverlay
+
+        overlay = ArtemisOverlay()
+        assistant = VoiceAssistant(dispatcher, llm_client, overlay, settings)
+
+        try:
+            candidate = GlobalHotkey(hotkey_text, assistant.trigger)
+            # ÖNCE kaydet, SONRA filtreyi kur. `app.installNativeEventFilter`
+            # Qt tarafında C++ seviyesinde bir referans tutar; eskiden filtre
+            # `register()`'dan ÖNCE kuruluyordu ve kayıt başarısız olduğunda
+            # Python tarafı `hotkey = None` ile son referansını düşürüyordu —
+            # Qt ise `removeNativeEventFilter` hiç çağrılmadığı için ham
+            # işaretçiyi tutmaya devam ediyordu (bellek sızıntısı / potansiyel
+            # kullanım-sonrası-serbest bırakma riski). Şimdi filtre yalnızca
+            # kayıt GERÇEKTEN başarılıysa kurulur.
+            if candidate.register():
+                app.installNativeEventFilter(candidate)
+                hotkey = candidate
+        except HotkeyParseError as exc:
+            logger.warning("Kısayol ayarı geçersiz (%s); kısayol olmadan devam ediliyor.", exc)
+            hotkey = None
+
+    def _open_panel() -> None:
+        """Panel tek örnektir; tepsi ve açılış aynı yolu kullanır."""
+
+        show_panel(settings, llm_client, dispatcher)
 
     tray = ArtemisTray(
-        on_listen=assistant.trigger,
+        on_listen=assistant.trigger if assistant is not None else None,
         on_quit=app.quit,
         hotkey_text=hotkey_text if hotkey else "",
         on_settings=show_settings,
-        # Panel, `--chat-gui`'nin açtığı AYNI pencere: sesli modda da
-        # geçmiş + ayarlar tepsi menüsünden bir tıkla erişilir. `functools
-        # .partial` gerekir çünkü `show_panel` ayar + istemci ister, menü
-        # geri çağırması ise ek parametresizdir.
-        on_panel=lambda: show_panel(settings, llm_client),
+        on_panel=_open_panel,
     )
     tray.show()
 
-    assistant.start()
+    if assistant is not None:
+        assistant.start()
+    if show_panel_at_start:
+        _open_panel()
 
-    print("Artemis dinlemede. Adını söyleyin veya tepsi simgesinden 'Şimdi dinle' deyin.")
-    if hotkey:
-        print(f"Kısayol: {hotkey_text}")
-    print("Çıkmak için tepsi simgesine sağ tıklayıp 'Çıkış' deyin.")
+    if assistant is not None:
+        print("Artemis dinlemede. Adını söyleyin veya tepsi simgesinden 'Şimdi dinle' deyin.")
+        if hotkey:
+            print(f"Kısayol: {hotkey_text}")
+    else:
+        print("Sesli asistan kapalı (voice_enabled: false); yazılı komutlar için paneli açın.")
+    print("Panel için tepsi simgesine tek tıklayın. Çıkmak için tepsi simgesine sağ tıklayıp 'Çıkış' deyin.")
 
     try:
         app.exec()
     finally:
-        assistant.stop()
+        if assistant is not None:
+            assistant.stop()
         if hotkey is not None:
             # Kayıt sırasıyla ters: önce Qt'nin native event filter
             # listesinden çıkar, sonra işletim sistemi kaydını kaldır.
@@ -454,24 +475,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Komut satırı seçeneklerini ayrıştırır.
 
     Elle `sys.argv` taraması yerine `argparse`: yazım hatası yapan bir
-    kullanıcı (`--voise`) sessizce LLM'siz demo moduna düşüyordu, çünkü
-    tarama yalnızca bilinen üç dizeyi arıyor, bilinmeyeni yok sayıyordu.
-    Artık bilinmeyen seçenek hata verir ve `--help` çalışır.
+    kullanıcı (`--voise`) sessizce yanlış moda düşmesin diye bilinmeyen
+    seçenek hata verir ve `--help` çalışır.
     """
 
     parser = argparse.ArgumentParser(
         prog="artemis",
-        description="Yerel çalışan, Türkçe konuşan Ollama tabanlı masaüstü asistanı.",
+        description=(
+            "Yerel çalışan, Türkçe konuşan Ollama tabanlı masaüstü asistanı. "
+            "Seçenek verilmezse tepsi uygulaması açılır (sesli asistan ve panel)."
+        ),
     )
     mod = parser.add_mutually_exclusive_group()
-    mod.add_argument("--chat", action="store_true", help="Terminal tabanlı sohbet döngüsü.")
+    mod.add_argument(
+        "--chat",
+        action="store_true",
+        help="Terminal tabanlı sohbet döngüsü (tepsi ve panel açılmaz).",
+    )
     mod.add_argument(
         "--chat-gui",
         action="store_true",
         dest="chat_gui",
-        help="Artemis paneli: sohbet geçmişi + ayarlar (ui/panel.py).",
+        help="Tepsi uygulaması, panel açık başlar (--voice ile aynı uygulama).",
     )
-    mod.add_argument("--voice", action="store_true", help="Sesli asistan (tepsi + overlay).")
+    mod.add_argument(
+        "--voice",
+        action="store_true",
+        help=(
+            "Tepsi uygulaması: sesli asistan, kısayol ve panel. Seçenek vermeden "
+            "çalıştırmakla aynıdır; voice_enabled kapalıysa uyarır ve çıkar."
+        ),
+    )
     mod.add_argument(
         "--settings",
         action="store_true",
@@ -483,20 +517,36 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="stop_ollama",
         help="RAM temizliği: yetim ollama süreçlerini kapatır.",
     )
+    mod.add_argument(
+        "--demo",
+        action="store_true",
+        help="LLM'siz tek seferlik örnek tool çağrısı (geliştirici denemesi).",
+    )
     return parser.parse_args(argv)
 
 
-if __name__ == "__main__":
-    args = _parse_args()
+def _dispatch(args: argparse.Namespace) -> None:
+    """Ayrıştırılmış seçeneği ilgili giriş noktasına yönlendirir.
+
+    Ayrı bir fonksiyon, yönlendirmenin testle kilitlenebilmesi içindir:
+    `--voice` ile `--chat-gui`'nin hangi uygulamayı açtığı burada belli olur.
+    """
+
     if args.stop_ollama:
         main_stop_ollama()
     elif args.settings:
         main_settings()
+    elif args.demo:
+        main_demo()
+    elif args.chat:
+        main_chat()
     elif args.voice:
         main_voice()
     elif args.chat_gui:
         main_chat_gui()
-    elif args.chat:
-        main_chat()
     else:
         main()
+
+
+if __name__ == "__main__":
+    _dispatch(_parse_args())

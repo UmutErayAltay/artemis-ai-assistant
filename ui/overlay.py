@@ -6,6 +6,11 @@ Bu modül YALNIZCA görüntüden sorumludur. Ses tanıma, LLM veya tool
 Böylece arayüz tamamen değiştirilse bile `core/` ve `voice/`
 katmanlarında hiçbir değişiklik gerekmez.
 
+Tek istisna ETKİLEŞİMLİ ONAYDIR: sesli onay beklenirken pencere Evet/Hayır
+düğmeleri gösterir ve tıklamanın sonucunu bir geri çağrıyla (`on_decision`)
+geri verir. Yani pencere, sesli cevapla AYNI soruyu sorar; hangisi önce
+gelirse o geçerlidir (karar mantığı `core/voice_loop.py`'de yaşar).
+
 İŞ PARÇACIĞI (THREAD) NOTU — önemli:
     Qt'de arayüz nesnelerine YALNIZCA ana (GUI) iş parçacığından
     dokunulabilir. Wake-word ve ses tanıma katmanları ise ayrı bir iş
@@ -13,7 +18,9 @@ katmanlarında hiçbir değişiklik gerekmez.
     doğrudan çizim yapmak yerine bir Qt SİNYALİ yayınlar; sinyal Qt
     tarafından otomatik olarak GUI iş parçacığına kuyruklanır
     (`QueuedConnection`). Yani bu sınıfın public metotları HERHANGİ bir
-    iş parçacığından güvenle çağrılabilir.
+    iş parçacığından güvenle çağrılabilir. Onay geri çağrısı (`on_decision`)
+    ise GUI iş parçacığında, tıklamada çağrılır; onu dinleyen taraf bunu
+    bir kilitle korumalıdır.
 
 Tek başına önizleme (ses katmanı olmadan):
 
@@ -25,12 +32,14 @@ from __future__ import annotations
 import math
 import random
 import sys
+from collections.abc import Callable
 from enum import Enum, auto
 
 from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
+    QRect,
     Qt,
     QTimer,
     pyqtSignal,
@@ -38,21 +47,41 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
 )
-from PyQt6.QtWidgets import QApplication, QWidget
+from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
 
 from ui import theme
 
 # --- Pencere ölçüleri ---------------------------------------------------
 _WINDOW_WIDTH = 620
-_WINDOW_HEIGHT = 260
 _GLOW_MARGIN = 34  # panelin dışında, parıltı (glow) için ayrılan boşluk
 _CORNER_RADIUS = 30
 _BOTTOM_OFFSET = 90  # ekranın altından yukarı boşluk (görev çubuğu payı)
+
+# --- Yerleşim (panel içi, üst kenardan ölçülen piksel) ------------------
+# Pencere boyu İÇERİĞE GÖRE DEĞİŞMEZ. Alttaki "bölge" (zone) en çok
+# _TEXT_MAX_LINES satır tutar; adım listesi, onay satırı ya da cevap metni
+# aynı bölgeyi sırayla kullanır. Bölge yüksekliği baştan ayrıldığı için uzun
+# bir cevap pencereyi büyütüp ekranda yer değiştirmez ve dalga formunun
+# üstüne binmez.
+_WAVE_CENTER_Y = 98
+_ZONE_TOP = 146
+_ZONE_BOTTOM_PAD = 14
+_ZONE_SIDE_PAD = 28
+_TEXT_MAX_LINES = 4
+_TEXT_FONT_SIZE = 12
+_LIST_FONT_SIZE = 11
+
+# --- Onay düğmeleri ----------------------------------------------------
+_BUTTON_WIDTH = 112
+_BUTTON_HEIGHT = 30
+_BUTTON_GAP = 12
+_BUTTON_RADIUS = 15
 
 # --- Dalga formu --------------------------------------------------------
 _BAR_COUNT = 38
@@ -66,6 +95,35 @@ _FRAME_INTERVAL_MS = 16  # ~60 fps
 _FADE_DURATION_MS = 220
 _AMPLITUDE_ATTACK = 0.45  # sese ne kadar hızlı tepki verilir (0-1)
 _AMPLITUDE_RELEASE = 0.12  # sessizlikte ne kadar hızlı sönümlenir (0-1)
+
+# --- Adım listesi -------------------------------------------------------
+# Durum adları planner'ın (`core/planner.py::PlanProgress.state`) ürettiği
+# değerlerle aynıdır; "pending" planner'da olay olarak gelmez, arayüz kendisi
+# "henüz başlamadı" için kullanır.
+_STEP_MARKS = {"pending": "·", "running": "⏳", "done": "✓", "failed": "✗"}
+_STEP_MARK_COLORS = {
+    "pending": theme.TEXT_MUTED,
+    "running": theme.ACCENT_BLUE,
+    "done": theme.ACCENT_GREEN,
+    "failed": theme.ACCENT_RED,
+}
+_STEP_LABEL_COLORS = {
+    "pending": theme.TEXT_MUTED,
+    "running": theme.TEXT_PRIMARY,
+    "done": theme.TEXT_SECONDARY,
+    "failed": theme.TEXT_SECONDARY,
+}
+_STEP_MARK_GAP = 8
+
+# Onay açıkken Enter = Evet, Esc = Hayır (bkz. `keyPressEvent`).
+_ENTER_KEYS = (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+
+# "Düşünme" durumunun iki ucu: mavi ile mor arasında, ikisinden de koyu
+# bir ton. `ui/theme.py`'de karşılığı OLMAYAN tek renk budur (palet oradan
+# çıkarılırken atlanmış — Apple'in Sistem Renkleri'nde de karşılığı yok);
+# bu yüzden paylaşılan palete zorla yakın bir renk sokmak yerine burada,
+# SADECE bu durumda kullanılan yerel bir sabit olarak duruyor.
+_THINKING_EDGE = QColor(120, 92, 255)
 
 
 class OverlayState(Enum):
@@ -81,13 +139,6 @@ class OverlayState(Enum):
     ERROR = auto()  # bir hata oluştu; kırmızı/turuncu palet
 
 
-# "Düşünme" durumunun iki ucu: mavi ile mor arasında, ikisinden de koyu
-# bir ton. `ui/theme.py`'de karşılığı OLMAYAN tek renk budur (palet oradan
-# çıkarılırken atlanmış — Apple'in Sistem Renkleri'nde de karşılığı yok);
-# bu yüzden paylaşılan palete zorla yakın bir renk sokmak yerine burada,
-# SADECE bu durumda kullanılan yerel bir sabit olarak duruyor.
-_THINKING_EDGE = QColor(120, 92, 255)
-
 # Her durum için (sol, orta, sağ) degrade renkleri. Renkler artık
 # `ui/theme.py`'den gelir: aynı palet sohbet/ayarlar pencerelerinde de
 # kullanıldığı için tek kaynak orasıdır (bkz. `ui/theme.py` modül
@@ -98,6 +149,97 @@ _PALETTES: dict[OverlayState, tuple[QColor, QColor, QColor]] = {
     OverlayState.SPEAKING: (theme.ACCENT_TEAL, theme.ACCENT_BLUE, theme.ACCENT_TEAL),
     OverlayState.ERROR: (theme.ACCENT_ORANGE, theme.ACCENT_RED, theme.ACCENT_ORANGE),
 }
+
+
+def _qss_rgba(color: QColor, alpha: int | None = None) -> str:
+    """`QColor`'ı QSS `rgba(...)` metnine çevirir.
+
+    `ui/theme.py::_rgba` ile aynı işi yapar; o fonksiyon modül-içi (özel) olduğu
+    için burada küçük bir kopya tutuluyor. Çıktı değişirse ikisi birlikte değişmeli.
+    """
+
+    a = color.alpha() if alpha is None else alpha
+    return f"rgba({color.red()}, {color.green()}, {color.blue()}, {a / 255:.3f})"
+
+
+def _button_style(primary: bool) -> str:
+    """Onay düğmesinin QSS'i. Evet "birincil" (dolu mavi), Hayır ikincil (koyu) görünür.
+
+    Düğmeler saydam bir pencerenin çocuğu olduğu için arka planları opak
+    verilir; yoksa arkadaki masaüstü düğmenin içinden görünürdü.
+    """
+
+    if primary:
+        body = (
+            f"background-color: {_qss_rgba(theme.ACCENT_BLUE)}; color: white; border: none;"
+        )
+        hover = f"background-color: {_qss_rgba(theme.ACCENT_BLUE.lighter(112))};"
+    else:
+        body = (
+            f"background-color: {_qss_rgba(theme.BG_ELEVATED)}; "
+            f"color: {_qss_rgba(theme.TEXT_PRIMARY)}; "
+            f"border: 1px solid {_qss_rgba(theme.BORDER)};"
+        )
+        hover = f"background-color: {_qss_rgba(theme.BG_ELEVATED_HOVER)};"
+    return (
+        f"QPushButton {{ {body} border-radius: {_BUTTON_RADIUS}px; "
+        f'font-family: "{theme.FONT_FAMILY}"; font-size: 12px; font-weight: 600; padding: 0px; }}'
+        f"QPushButton:hover {{ {hover} }}"
+    )
+
+
+def _wrap_text(text: str, metrics: QFontMetrics, width: int, max_lines: int) -> list[str]:
+    """Metni `width` genişliğe sözcük sınırından sarar; en çok `max_lines` satır döner.
+
+    NEDEN: eskiden uzun cevap tek satıra sığdırılıp sonu kesiliyordu ("…ve içine rapor
+    ..."); kullanıcı cevabın ne olduğunu göremiyordu. Şimdi cevap okunaklı satırlara
+    bölünür. Yine de bir sınır var: `max_lines` satırı aşan kısım son satırın sonunda
+    "…" ile kesilir — pencere bu yüzden hiçbir cevapta büyümez.
+
+    Tek başına sığmayan bir sözcük (uzun URL gibi) kendi satırında kesilir; bu da
+    satırın taşmasını önler.
+    """
+
+    def fit(line: str) -> str:
+        if metrics.horizontalAdvance(line) <= width:
+            return line
+        return metrics.elidedText(line, Qt.TextElideMode.ElideRight, width)
+
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for position, word in enumerate(words):
+        candidate = f"{current} {word}" if current else word
+        if metrics.horizontalAdvance(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(fit(current))
+            if len(lines) == max_lines:
+                # Kalan sözcükler sığmadı: son satır, kalanla birlikte kesilir.
+                rest = " ".join(words[position:])
+                lines[-1] = metrics.elidedText(f"{lines[-1]} {rest}", Qt.TextElideMode.ElideRight, width)
+                return lines
+        current = word
+    if current:
+        lines.append(fit(current))
+    return lines
+
+
+def _visible_step_start(states: list[str], capacity: int) -> int:
+    """Adım listesi bölgeye sığmazsa hangi adımdan başlayarak gösterileceğini seçer.
+
+    Uzun planda çalışan adım gizlenmesin diye pencere, çalışan adımı (yoksa ilk bekleyeni)
+    kapsayacak şekilde kayar; çalışan adımın bir üstündeki satır bağlam olarak görünür.
+    """
+
+    count = len(states)
+    if count <= capacity:
+        return 0
+    active = next((i for i, state in enumerate(states) if state == "running"), None)
+    if active is None:
+        active = next((i for i, state in enumerate(states) if state == "pending"), count - 1)
+    return max(0, min(active - 1, count - capacity))
 
 
 class ArtemisOverlay(QWidget):
@@ -114,6 +256,10 @@ class ArtemisOverlay(QWidget):
     _heard_requested = pyqtSignal(str)
     _amplitude_requested = pyqtSignal(float)
     _dismiss_requested = pyqtSignal()
+    _steps_requested = pyqtSignal(object)
+    _step_state_requested = pyqtSignal(int, str)
+    _confirm_requested = pyqtSignal(str, object)
+    _confirm_clear_requested = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -127,7 +273,23 @@ class ArtemisOverlay(QWidget):
         self._target_amplitude = 0.0  # dışarıdan bildirilen ham genlik
         self._bar_noise = [random.uniform(0.0, math.tau) for _ in range(_BAR_COUNT)]
 
+        # Adım listesi: etiketler ve her adımın durumu (bkz. `show_steps`).
+        self._steps: list[str] = []
+        self._step_states: list[str] = []
+
+        # Sesli onay sırasında gösterilen düğmeler (bkz. `show_confirmation`).
+        self._confirming = False
+        self._confirm_summary = ""
+        self._on_decision: Callable[[bool], None] | None = None
+        self._state_before_confirm = self._state
+
+        # Yerleşim, yazı tipinin satır yüksekliğine bağlıdır; pencere boyu da buna göre
+        # bir kez hesaplanır ve sonra DEĞİŞMEZ (bkz. `_ZONE_TOP` yorumu).
+        self._line_height = QFontMetrics(QFont(theme.FONT_FAMILY, _TEXT_FONT_SIZE)).lineSpacing()
+        self._zone_height = _TEXT_MAX_LINES * self._line_height
+
         self._configure_window()
+        self._build_confirm_buttons()
 
         self._fade = QPropertyAnimation(self, b"windowOpacity", self)
         self._fade.setDuration(_FADE_DURATION_MS)
@@ -143,6 +305,10 @@ class ArtemisOverlay(QWidget):
         self._heard_requested.connect(self._apply_heard)
         self._amplitude_requested.connect(self._apply_amplitude)
         self._dismiss_requested.connect(self._apply_dismiss)
+        self._steps_requested.connect(self._apply_steps)
+        self._step_state_requested.connect(self._apply_step_state)
+        self._confirm_requested.connect(self._apply_confirmation)
+        self._confirm_clear_requested.connect(self._clear_confirmation)
 
     # ------------------------------------------------------------------
     # Public API — herhangi bir iş parçacığından güvenle çağrılabilir
@@ -191,6 +357,43 @@ class ArtemisOverlay(QWidget):
 
         self._amplitude_requested.emit(float(amplitude))
 
+    def show_steps(self, labels: list[str]) -> None:
+        """Plan adımlarını etiketleriyle gösterir; hepsi "bekliyor" durumunda başlar.
+
+        Çağıran tarafın (sesli döngü) yalnızca çok adımlı planlarda çağırması beklenir;
+        tek adımlı bir planın ayrı bir listeye ihtiyacı yoktur.
+        """
+
+        self._steps_requested.emit(list(labels))
+
+    def set_step_state(self, index: int, state: str) -> None:
+        """Bir adımın durumunu değiştirir.
+
+        Args:
+            index: Adımın 0-tabanlı sırası (`show_steps` listesindeki konum).
+            state: "pending", "running", "done" ya da "failed". Bilinmeyen bir değer
+                "pending" sayılır; çizim asla bozulmaz.
+        """
+
+        self._step_state_requested.emit(int(index), state)
+
+    def show_confirmation(self, summary: str, on_decision: Callable[[bool], None]) -> None:
+        """Sesli onay beklenirken Evet/Hayır düğmelerini gösterir.
+
+        Args:
+            summary: Onaylanacak işlemin kısa metni (tool adı ve argümanlar); NEYİ
+                onayladığını kullanıcının görmesi için gösterilir.
+            on_decision: Düğmeye tıklanınca ya da Enter (Evet) / Esc (Hayır) basılınca
+                `True`/`False` ile çağrılır. Bu çağrı GUI iş parçacığında gerçekleşir.
+        """
+
+        self._confirm_requested.emit(summary, on_decision)
+
+    def hide_confirmation(self) -> None:
+        """Onay düğmelerini gizler; cevap sesle geldiğinde ya da zaman aşımında çağrılır."""
+
+        self._confirm_clear_requested.emit()
+
     def dismiss(self) -> None:
         """Pencereyi yumuşakça kapatır (fade-out)."""
 
@@ -206,6 +409,11 @@ class ArtemisOverlay(QWidget):
         # yanlış anlaşıldığını sanır.
         if state is OverlayState.LISTENING:
             self._heard = ""
+        # Adım listesi yalnızca yeni tur (dinleme) ya da cevap (konuşma) gelince silinir.
+        # Hata/onay durumu plan ortasında da gelebilir; adım listesi onda kalmalı.
+        if state in (OverlayState.LISTENING, OverlayState.SPEAKING):
+            self._steps = []
+            self._step_states = []
 
         self._state = state
         if text:
@@ -227,6 +435,10 @@ class ArtemisOverlay(QWidget):
         self._target_amplitude = max(0.0, min(1.0, amplitude))
 
     def _apply_dismiss(self) -> None:
+        # Açık bir onay varsa düğmeleri de kaldır; karar vermeden. Soruyu hâlâ sesle
+        # dinleyen taraf zaman aşımında "hayır" sayar (güvenli taraf).
+        self._clear_confirmation()
+
         if not self.isVisible():
             return
 
@@ -246,9 +458,68 @@ class ArtemisOverlay(QWidget):
         self._amplitude = 0.0
         self._target_amplitude = 0.0
 
+    def _apply_steps(self, labels: list[str]) -> None:
+        self._steps = list(labels)
+        self._step_states = ["pending"] * len(self._steps)
+        self.update()
+
+    def _apply_step_state(self, index: int, state: str) -> None:
+        if not 0 <= index < len(self._step_states):
+            return
+        self._step_states[index] = state if state in _STEP_MARKS else "pending"
+        self.update()
+
+    def _apply_confirmation(self, summary: str, on_decision: Callable[[bool], None]) -> None:
+        if not self._confirming:
+            self._state_before_confirm = self._state  # onay bitince palet eski haline döner
+        self._confirming = True
+        self._confirm_summary = summary
+        self._on_decision = on_decision
+        self._state = OverlayState.ERROR  # onay bir uyarıdır: turuncu/kırmızı palet
+
+        self._yes_button.show()
+        self._no_button.show()
+        if not self.isVisible():
+            self._reveal()
+        # Enter/Esc'in bu pencereye ulaşması için odak istenir. Windows, arka plandaki bir
+        # süreçten gelen odağı bazen reddeder; o durumda tuşlar çalışmaz ama düğmeler çalışır.
+        self.activateWindow()
+        self.update()
+
+    def _clear_confirmation(self) -> None:
+        """Onay düğmelerini gizler ve palet eski haline döner. Karar VERMEZ."""
+
+        if not self._confirming:
+            return
+        self._confirming = False
+        self._on_decision = None
+        self._confirm_summary = ""
+        self._yes_button.hide()
+        self._no_button.hide()
+        if self._state is OverlayState.ERROR:
+            self._state = self._state_before_confirm
+        self.update()
+
+    def _answer_confirmation(self, approved: bool) -> None:
+        """Kullanıcının cevabını (tıklama ya da tuş) geri çağrıya iletir.
+
+        Önce arayüz kapatılır, sonra cevap verilir: çift tıklama ikinci kez saymaz.
+        """
+
+        callback = self._on_decision
+        if callback is None:
+            return
+        self._clear_confirmation()
+        callback(approved)
+
     # ------------------------------------------------------------------
     # Pencere kurulumu ve konumlandırma
     # ------------------------------------------------------------------
+
+    def _window_height(self) -> int:
+        """Pencere boyu: panel (başlık + dalga + bölge + alt boşluk) ve parıltı payı."""
+
+        return 2 * _GLOW_MARGIN + _ZONE_TOP + self._zone_height + _ZONE_BOTTOM_PAD
 
     def _configure_window(self) -> None:
         """Çerçevesiz, saydam, her zaman üstte bir araç penceresi kurar."""
@@ -259,8 +530,33 @@ class ArtemisOverlay(QWidget):
             | Qt.WindowType.Tool  # görev çubuğunda ayrı bir pencere olarak görünmesin
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(_WINDOW_WIDTH, _WINDOW_HEIGHT)
+        self.setFixedSize(_WINDOW_WIDTH, self._window_height())
         self.setWindowOpacity(0.0)
+
+    def _build_confirm_buttons(self) -> None:
+        """Evet/Hayır düğmelerini kurar (başta gizli).
+
+        Düğmeler odak almaz (`NoFocus`): tuş olayları pencereye gider ve Enter/Esc
+        `keyPressEvent`'te yakalanır. Tıklamalar yine düğmeye ulaşır.
+        """
+
+        self._no_button = QPushButton("Hayır", self)
+        self._yes_button = QPushButton("Evet", self)
+        for button, primary in ((self._no_button, False), (self._yes_button, True)):
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setStyleSheet(_button_style(primary))
+            button.hide()
+
+        self._yes_button.clicked.connect(lambda: self._answer_confirmation(True))
+        self._no_button.clicked.connect(lambda: self._answer_confirmation(False))
+
+        zone = self._zone_rect(self._panel_rect())
+        row_width = 2 * _BUTTON_WIDTH + _BUTTON_GAP
+        x = zone.x() + (zone.width() - row_width) // 2
+        y = zone.bottom() + 1 - _BUTTON_HEIGHT
+        self._no_button.setGeometry(x, y, _BUTTON_WIDTH, _BUTTON_HEIGHT)
+        self._yes_button.setGeometry(x + _BUTTON_WIDTH + _BUTTON_GAP, y, _BUTTON_WIDTH, _BUTTON_HEIGHT)
 
     def _move_to_bottom_center(self) -> None:
         """Pencereyi, imlecin bulunduğu ekranın alt-ortasına yerleştirir.
@@ -343,19 +639,34 @@ class ArtemisOverlay(QWidget):
     # Çizim
     # ------------------------------------------------------------------
 
+    def _panel_rect(self) -> QRect:
+        """Ana panelin dikdörtgeni: pencere eksi parıltı payı."""
+
+        return self.rect().adjusted(_GLOW_MARGIN, _GLOW_MARGIN, -_GLOW_MARGIN, -_GLOW_MARGIN)
+
+    def _zone_rect(self, panel: QRect) -> QRect:
+        """Adım listesi / onay / cevap metninin çizileceği alt bölge."""
+
+        return QRect(
+            panel.x() + _ZONE_SIDE_PAD,
+            panel.y() + _ZONE_TOP,
+            panel.width() - 2 * _ZONE_SIDE_PAD,
+            self._zone_height,
+        )
+
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt'nin metot adı
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-        panel = self.rect().adjusted(_GLOW_MARGIN, _GLOW_MARGIN, -_GLOW_MARGIN, -_GLOW_MARGIN)
+        panel = self._panel_rect()
 
         self._paint_glow(painter, panel)
         self._paint_panel(painter, panel)
         self._paint_title(painter, panel)
         self._paint_heard(painter, panel)
         self._paint_waveform(painter, panel)
-        self._paint_text(painter, panel)
+        self._paint_zone(painter, self._zone_rect(panel))
 
         painter.end()
 
@@ -436,7 +747,7 @@ class ArtemisOverlay(QWidget):
 
         total_width = _BAR_COUNT * _BAR_WIDTH + (_BAR_COUNT - 1) * _BAR_GAP
         start_x = panel.x() + (panel.width() - total_width) / 2.0
-        center_y = panel.y() + panel.height() / 2.0 + 2
+        center_y = panel.y() + _WAVE_CENTER_Y
 
         gradient = QLinearGradient(start_x, 0.0, start_x + total_width, 0.0)
         gradient.setColorAt(0.0, left)
@@ -479,39 +790,126 @@ class ArtemisOverlay(QWidget):
         elided = metrics.elidedText(f"“{self._heard}”", Qt.TextElideMode.ElideRight, rect.width())
         painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, elided)
 
-    def _paint_text(self, painter: QPainter, panel) -> None:
-        """Alt satırdaki durum/döküm metnini çizer (uzunsa kısaltılır)."""
+    def _paint_zone(self, painter: QPainter, zone: QRect) -> None:
+        """Alt bölgede o an geçerli içeriği seçer: onay > adım listesi > cevap metni."""
+
+        if self._confirming:
+            self._paint_confirmation(painter, zone)
+        elif self._steps:
+            self._paint_steps(painter, zone)
+        else:
+            self._paint_text(painter, zone)
+
+    def _paint_text(self, painter: QPainter, zone: QRect) -> None:
+        """Cevap / durum metnini bölgeye sarıp çizer (en çok `_TEXT_MAX_LINES` satır).
+
+        Metin alt hizalıdır: kısa bir durum ("Dinliyorum…") bölgenin altına oturur,
+        uzun bir cevap yukarı doğru dolar.
+        """
 
         if not self._text:
             return
 
-        painter.setFont(QFont(theme.FONT_FAMILY, 12))
+        font = QFont(theme.FONT_FAMILY, _TEXT_FONT_SIZE)
+        painter.setFont(font)
         # Cevap metni panelin en okunması gereken satırı; `TEXT_PRIMARY`
         # (235) burada fazla sert düşüyordu. 205, arada bir yerde durur.
         text_color = QColor(theme.TEXT_PRIMARY)
         text_color.setAlpha(205)
         painter.setPen(text_color)
 
-        rect = panel.adjusted(28, 0, -28, -22)
-        metrics = painter.fontMetrics()
-        elided = metrics.elidedText(self._text, Qt.TextElideMode.ElideRight, rect.width())
-        painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, elided)
+        lines = _wrap_text(self._text, QFontMetrics(font), zone.width(), _TEXT_MAX_LINES)
+        top = zone.bottom() + 1 - len(lines) * self._line_height
+        for row, line in enumerate(lines):
+            rect = QRect(zone.x(), top + row * self._line_height, zone.width(), self._line_height)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter, line)
+
+    def _paint_steps(self, painter: QPainter, zone: QRect) -> None:
+        """Plan adımlarını durum işaretleriyle, ortalanmış bir blok olarak çizer."""
+
+        font = QFont(theme.FONT_FAMILY, _LIST_FONT_SIZE)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        start = _visible_step_start(self._step_states, _TEXT_MAX_LINES)
+        rows = range(start, min(len(self._steps), start + _TEXT_MAX_LINES))
+        mark_width = max(metrics.horizontalAdvance(mark) for mark in _STEP_MARKS.values())
+        label_limit = zone.width() - mark_width - _STEP_MARK_GAP
+        labels = {
+            index: metrics.elidedText(self._steps[index], Qt.TextElideMode.ElideRight, label_limit)
+            for index in rows
+        }
+        block_width = mark_width + _STEP_MARK_GAP + max(
+            (metrics.horizontalAdvance(label) for label in labels.values()), default=0
+        )
+        x = zone.x() + (zone.width() - block_width) // 2
+
+        for row, index in enumerate(rows):
+            state = self._step_states[index]
+            y = zone.y() + row * self._line_height
+            painter.setPen(_STEP_MARK_COLORS[state])
+            painter.drawText(
+                QRect(x, y, mark_width, self._line_height),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                _STEP_MARKS[state],
+            )
+            painter.setPen(_STEP_LABEL_COLORS[state])
+            painter.drawText(
+                QRect(x + mark_width + _STEP_MARK_GAP, y, block_width - mark_width - _STEP_MARK_GAP, self._line_height),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                labels[index],
+            )
+
+    def _paint_confirmation(self, painter: QPainter, zone: QRect) -> None:
+        """Onaylanacak işlemin kısa metnini bölgenin üstüne yazar; düğmeler alta gelir.
+
+        Düğmeler ayrı çocuk pencerelerdir (`_build_confirm_buttons`); burada yalnızca
+        neyin onaylandığı çizilir. Metin tek satırdır ve sığmazsa kesilir: tam
+        argümanlar kayıtta (log) ve sesli soruda zaten vardır.
+        """
+
+        font = QFont(theme.FONT_FAMILY, _LIST_FONT_SIZE)
+        painter.setFont(font)
+        color = QColor(theme.TEXT_PRIMARY)
+        color.setAlpha(205)
+        painter.setPen(color)
+        summary = QFontMetrics(font).elidedText(self._confirm_summary, Qt.TextElideMode.ElideRight, zone.width())
+        painter.drawText(
+            QRect(zone.x(), zone.y(), zone.width(), self._line_height),
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+            summary,
+        )
 
     # ------------------------------------------------------------------
     # Kullanıcı etkileşimi
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt'nin metot adı
-        """Esc ile pencereyi kapatır."""
+        """Onay açıkken Enter = Evet, Esc = Hayır; değilken Esc pencereyi kapatır."""
 
-        if event.key() == Qt.Key.Key_Escape:
+        key = event.key()
+        if self._confirming:
+            if key in _ENTER_KEYS:
+                self._answer_confirmation(True)
+                return
+            if key == Qt.Key.Key_Escape:
+                self._answer_confirmation(False)
+                return
+        elif key == Qt.Key.Key_Escape:
             self.dismiss()
-        else:
-            super().keyPressEvent(event)
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt'nin metot adı
-        """Pencereye tıklanınca kapatır (Siri'de olduğu gibi)."""
+        """Pencereye tıklanınca kapatır (Siri'de olduğu gibi).
 
+        Onay sırasında kapatma YAPILMAZ: boşluğa tıklamak soruyu yarım bırakıp
+        kullanıcıyı bir sonraki tıklamaya kadar şaşırtmasın. Cevap yalnızca
+        düğmelerle (ya da Enter/Esc ile) verilir.
+        """
+
+        if self._confirming:
+            return
         self.dismiss()
 
 
