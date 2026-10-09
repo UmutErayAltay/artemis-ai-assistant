@@ -32,18 +32,21 @@ import json
 import re
 import subprocess
 import sys
-import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from models.project_models import JobStatus
+from projects.jobs import record_job_outcome
 from projects.store import ProjectStore
+from projects.vault import VaultBridge
 
 _QUESTION_RE = re.compile(r"^\s*SORU\s*:\s*(.+)", re.MULTILINE | re.DOTALL)
-_ACTIVITY_WRITE_INTERVAL_SECONDS = 2.0
 _STDERR_TAIL_CHARS = 600
+_VAULT_RECORDED_STATUSES = (JobStatus.TAMAMLANDI, JobStatus.BASARISIZ, JobStatus.SORU_BEKLIYOR)
+"""Runner'ın vault'a yazdığı sonuçlar. `durduruldu` / `yarim_kaldi` runner'ın değil
+Artemis'in kararıdır (`jobs.stop`); runner o durumlarda yazmaz."""
 
 
 @dataclass
@@ -174,8 +177,14 @@ def count_commits(project_dir: Path) -> int | None:
         return None
 
 
-def run_job(store: ProjectStore, job_id: int, job_directory: Path) -> int:
-    """İşi yürütür ve sonucu kaydeder. Çıkış kodu runner'ın kendi durumudur."""
+def run_job(store: ProjectStore, job_id: int, job_directory: Path, bridge: VaultBridge | None = None) -> int:
+    """İşi yürütür ve sonucu kaydeder. Çıkış kodu runner'ın kendi durumudur.
+
+    Args:
+        bridge: Verilirse ve iş sonuçlanırsa sonuç vault'a da yazılır. Vault
+            sorunu işin durumunu ASLA değiştirmez: durum depoya vault'tan
+            ÖNCE yazılır ve köprü hata fırlatmaz.
+    """
 
     job = store.get_job(job_id)
     if job is None or job.status is not JobStatus.CALISIYOR:
@@ -211,25 +220,23 @@ def run_job(store: ProjectStore, job_id: int, job_directory: Path) -> int:
         except OSError:
             pass  # süreç hemen öldüyse sonuç olayı gelmez; aşağıda başarısız yazılır
 
-        last_write = 0.0
-        pending: str | None = None
         for line in process.stdout:
             events.write(line)
             events.flush()
             activity = tracker.feed(line)
             if activity:
-                pending = activity
-            now = time.monotonic()
-            if pending and now - last_write >= _ACTIVITY_WRITE_INTERVAL_SECONDS:
-                store.record_activity(job_id, pending)
-                pending, last_write = None, now
-        if pending:
-            store.record_activity(job_id, pending)
+                # NEDEN KISITLAMA (throttle) YOK: etkinlik yalnızca `system/init` ve
+                # `assistant` olaylarından gelir (`StreamTracker.feed`), akış sağanağı
+                # olan `stream_event` satırlarından değil; yani seyrektir. Eskiden
+                # 2 sn'de bir yazılıp aradaki son etkinlik BİR SONRAKİ satıra kadar
+                # bekletiliyordu: kodlayıcı uzun süre sessiz kalırsa (düşünüyor, test
+                # koşuyor) `last_activity` bayat görünürdü.
+                store.record_activity(job_id, activity)
         returncode = process.wait()
 
     stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-_STDERR_TAIL_CHARS:].strip()
     outcome = tracker.outcome(returncode, stderr_tail)
-    store.finish_job(
+    written = store.finish_job(
         job_id,
         outcome.status,
         summary=outcome.summary,
@@ -238,7 +245,35 @@ def run_job(store: ProjectStore, job_id: int, job_directory: Path) -> int:
         cost_usd=outcome.cost_usd,
         commits=count_commits(job.project_dir),
     )
+    # `written` False ise iş bu arada durdurulmuştur; o kararı `jobs.stop` kaydeder,
+    # burada ikinci (yanlış durumlu) bir vault girdisi açılmaz.
+    if written and bridge is not None and outcome.status in _VAULT_RECORDED_STATUSES:
+        finished = store.get_job(job_id)
+        if finished is not None:
+            record_job_outcome(bridge, store, finished)
     return 0
+
+
+def _vault_bridge_from(args: argparse.Namespace) -> VaultBridge | None:
+    """`--vault-*` seçeneklerinden köprüyü kurar; `--vault-path` yoksa None.
+
+    Bozuk bir `--vault-command` işi düşürmez: vault isteğe bağlıdır, bu yüzden
+    uyarı `runner.log`'a yazılır ve köprü kapalı kalır.
+    """
+
+    if args.vault_path is None:
+        return None
+    command: list[str] | None = None
+    if args.vault_command is not None:
+        try:
+            parsed = json.loads(args.vault_command)
+        except json.JSONDecodeError:
+            parsed = None
+        if not isinstance(parsed, list) or not all(isinstance(part, str) for part in parsed):
+            print(f"Uyarı: --vault-command JSON metin listesi değil, vault kaydı yok: {args.vault_command!r}")
+            return None
+        command = parsed
+    return VaultBridge(args.vault_path, command, args.vault_timeout)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,10 +281,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--job", required=True, type=int)
     parser.add_argument("--job-dir", required=True, type=Path)
+    parser.add_argument("--vault-path", type=Path, default=None, help="Vault klasörü; verilmezse kayıt yapılmaz")
+    parser.add_argument("--vault-command", type=str, default=None, help="Vault CLI komutu (JSON metin listesi)")
+    parser.add_argument("--vault-timeout", type=float, default=20.0, help="Tek vault CLI çağrısı için saniye")
     args = parser.parse_args(argv)
     store = ProjectStore(args.db)
     try:
-        return run_job(store, args.job, args.job_dir)
+        return run_job(store, args.job, args.job_dir, _vault_bridge_from(args))
     except Exception as exc:  # noqa: BLE001 - runner ölmeden önce işi kapatmalı
         # İş "çalışıyor"da asılı kalmasın. Yığın izi runner.log'a gider
         # (stdout/stderr oraya yönlendirildi); kullanıcıya tür ve yer yeter.

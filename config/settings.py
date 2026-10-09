@@ -121,6 +121,14 @@ class ProjelerSettings(BaseModel):
             gerekli). `git push` her durumda yasaktır.
         interview_max_questions: Görüşmenin en fazla kaç soru sorabileceği;
             sınıra gelince model elindeki bilgiyle spec üretmeye zorlanır.
+        vault_path: Umut'un ikinci beyni (Obsidian vault) klasörü. `None`
+            (varsayılan) ise vault köprüsü KAPALIDIR: görüşme ve iş sonucu
+            vault'a hiç dokunmaz (M1 davranışı). Bkz. `projects/vault.py`.
+        vault_command: Vault CLI'sının komutu. `None` ise
+            `[python, <vault>/beyin.py]` kullanılır; bulut ortamında
+            `[".bulut/beyin.sh"]` gibi bir betik verilebilir.
+        vault_timeout_seconds: Tek bir vault CLI çağrısının azami süresi;
+            aşılırsa köprü o çağrıyı sessizce atlar, işi bekletmez.
     """
 
     root: Path = Field(default_factory=lambda: Path.home() / "Desktop" / "Projeler")
@@ -132,6 +140,9 @@ class ProjelerSettings(BaseModel):
     claude_budget_usd: float = Field(default=5.0, gt=0)
     allow_bash: bool = True
     interview_max_questions: int = Field(default=6, ge=1, le=20)
+    vault_path: Path | None = None  # None: köprü kapalı (M1 davranışı)
+    vault_command: list[str] | None = None  # None: [python, <vault>/beyin.py]; bulutta [".bulut/beyin.sh"]
+    vault_timeout_seconds: float = Field(default=20.0, gt=0)
 
 
 class Settings(BaseModel):

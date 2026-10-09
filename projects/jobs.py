@@ -19,7 +19,9 @@ from config.settings import ProjelerSettings
 from models.project_models import Coder, JobStatus, ProjectSpec, slugify
 from models.tool_models import ToolResult
 from projects import coder as coder_mod
+from projects.interview import CONTEXT_ROLE
 from projects.store import INTERVIEW_STARTED, Interview, Job, ProjectStore
+from projects.vault import VaultBridge
 from utils.paths import safe_join, unsafe_target_result
 
 _STARTUP_GRACE_SECONDS = 1.0
@@ -30,9 +32,58 @@ _INITIAL_PROMPT = (
     "Önce spec.md'yi oku. Kuralların sistem promptunda; işin bitince kısa bir Türkçe özetle bitir."
 )
 
+STATUS_LABELS: dict[JobStatus, str] = {
+    JobStatus.CALISIYOR: "kodlanıyor",
+    JobStatus.TAMAMLANDI: "tamamlandı",
+    JobStatus.BASARISIZ: "başarısız",
+    JobStatus.SORU_BEKLIYOR: "soru bekliyor",
+    JobStatus.DURDURULDU: "durduruldu",
+    JobStatus.YARIM_KALDI: "yarım kaldı",
+}
+"""Vault proje notuna yazılan, insan okuyacağı durum etiketleri."""
+
 
 def open_store(settings: ProjelerSettings) -> ProjectStore:
     return ProjectStore(coder_mod.db_path(settings))
+
+
+def vault_bridge(settings: ProjelerSettings) -> VaultBridge:
+    """Ayarlardan vault köprüsünü kurar; `vault_path` yoksa köprü pasiftir (hiçbir şey yapmaz)."""
+
+    return VaultBridge(settings.vault_path, settings.vault_command, settings.vault_timeout_seconds)
+
+
+def record_job_outcome(bridge: VaultBridge, store: ProjectStore, job: Job) -> None:
+    """İşin sonucunu vault'taki proje notuna ve receipt'e yazar; not yolunu işe kaydeder.
+
+    NEDEN HİÇBİR ŞEY FIRLATMAZ VE DURUMU DEĞİŞTİRMEZ: vault Artemis için
+    isteğe bağlıdır. Köprü kendi hatalarını yutup `None` döner; burada da
+    işin durumuna dokunulmaz — kodlayıcı başardıysa vault kapalı diye
+    "başarısız" yazılmaz. Receipt reddedilse bile (`receipt_ok=False`) not
+    yazılmıştır, o yüzden yol yine kaydedilir.
+    """
+
+    if not bridge.enabled:
+        return
+    try:
+        spec = (job.project_dir / "spec.md").read_text(encoding="utf-8")
+    except OSError:
+        spec = None
+    first_line = spec.lstrip().splitlines()[0] if spec and spec.strip() else ""
+    title = first_line[2:].strip() if first_line.startswith("# ") else ""
+    record = bridge.record_outcome(
+        slug=job.slug,
+        title=title or job.slug,
+        status_label=STATUS_LABELS[job.status],
+        summary=job.summary or job.question or job.error or "",
+        project_dir=job.project_dir,
+        spec_markdown=spec,
+        # Aynı iş aynı durumda iki kez kaydedilirse receipt tekilleşsin; yeniden
+        # başlatılan ya da cevaplanan iş farklı `finished_at` ile ayrı bir olay olur.
+        event_key=f"{job.slug}-{job.id}-{job.status.value}-{int(job.finished_at or job.updated_at)}",
+    )
+    if record is not None:
+        store.set_vault_note(job.id, record.note)
 
 
 def existing_store(settings: ProjelerSettings) -> ProjectStore | None:
@@ -58,6 +109,11 @@ def reconcile(store: ProjectStore) -> None:
 def describe_job(job: Job) -> str:
     """Bir işin kullanıcıya okunacak tek paragraflık durumu."""
 
+    text = _describe_status(job)
+    return f"{text} Vault notu: {job.vault_note}" if job.vault_note else text
+
+
+def _describe_status(job: Job) -> str:
     name = f"'{job.slug}'"
     if job.status is JobStatus.CALISIYOR:
         minutes = max(0, int((time.time() - job.created_at) // 60))
@@ -194,7 +250,12 @@ def stop(settings: ProjelerSettings, name: str) -> ToolResult:
         return ToolResult(success=False, message=f"Durdurulacak bir şey yok. {describe_job(job)}")
     if job.status is JobStatus.CALISIYOR and job.pid and not coder_mod.stop_process_tree(job.pid):
         return ToolResult(success=False, message=f"'{job.slug}' sürecini durduramadım (pid {job.pid}).")
-    store.mark_stopped(job.id)
+    if store.mark_stopped(job.id):
+        # Yalnızca durdurma gerçekten yazıldıysa kaydedilir: bu arada biten bir işin
+        # sonucu runner tarafından zaten vault'a işlenmiştir, ikinci kez yazılmaz.
+        stopped = store.get_job(job.id)
+        if stopped is not None:
+            record_job_outcome(vault_bridge(settings), store, stopped)
     return ToolResult(success=True, message=f"'{job.slug}' durduruldu. Yapılan iş klasörde duruyor: {job.project_dir}")
 
 
@@ -236,7 +297,23 @@ def begin_interview(settings: ProjelerSettings, idea: str, first_question: str) 
             message=f"Zaten açık bir proje görüşmemiz var ({current.idea[:60]}). Ona devam edelim ya da 'vazgeç' de.",
         )
     interview = store.create_interview(idea.strip(), first_question)
-    return ToolResult(success=True, message=first_question, data={"interview_id": interview.id})
+
+    # Vault bağlamı (tercihler + ilgili notlar) görüşmeye VERİ olarak eklenir; köprü pasifse
+    # ya da bağlam boşsa hiçbir şey değişmez ve mesaj aynen `first_question` kalır.
+    message = first_question
+    sources: list[str] = []
+    context = vault_bridge(settings).context_for(idea.strip())
+    if context is not None and not context.is_empty():
+        interview.transcript.insert(0, {"rol": CONTEXT_ROLE, "metin": context.to_prompt()})
+        store.save_interview(interview)
+        sources = context.sources()
+        if context.notes and context.preferences:
+            message += f" (Vault'tan tercihlerini ve {len(context.notes)} ilgili notu okudum.)"
+        elif context.notes:
+            message += f" ({len(context.notes)} ilgili vault notu okudum.)"
+        else:
+            message += " (Vault'tan tercihlerini okudum.)"
+    return ToolResult(success=True, message=message, data={"interview_id": interview.id, "vault_sources": sources})
 
 
 def _missing_cli(settings: ProjelerSettings, coder: Coder) -> str | None:

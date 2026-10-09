@@ -322,6 +322,9 @@ def test_stop_really_stops_the_process_tree(
     deadline = time.monotonic() + 20
     while store.get_job(job_id).last_activity != "uzun bir iş yapıyorum" and time.monotonic() < deadline:
         time.sleep(0.1)
+    # Süre dolunca sessizce devam etmek, "kodlayıcı uyku evresinde" varsayımını doğrulanmamış bırakırdı;
+    # ayrıca kodlayıcı sustuktan sonra son etkinliğin kayda düştüğünü (runner'da kısıtlama yok) kanıtlar.
+    assert store.get_job(job_id).last_activity == "uzun bir iş yapıyorum"
     pid = store.get_job(job_id).pid
     assert coder_mod.pid_alive(pid)
 

@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     announced INTEGER NOT NULL DEFAULT 1,
     created_at REAL NOT NULL,
     updated_at REAL NOT NULL,
-    finished_at REAL
+    finished_at REAL,
+    vault_note TEXT
 );
 """
 
@@ -106,6 +107,7 @@ class Job:
     created_at: float
     updated_at: float
     finished_at: float | None
+    vault_note: str | None = None
 
 
 class ProjectStore:
@@ -120,6 +122,12 @@ class ProjectStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            # `CREATE TABLE IF NOT EXISTS` mevcut bir tabloya sütun EKLEMEZ: önceki
+            # sürümün oluşturduğu veritabanında `vault_note` yoktur ve `SELECT *`
+            # sonrası `row["vault_note"]` patlardı. Eksikse burada eklenir.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+            if "vault_note" not in columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN vault_note TEXT")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -253,6 +261,17 @@ class ProjectStore:
         with self._connect() as conn:
             conn.execute("UPDATE jobs SET pid = ?, updated_at = ? WHERE id = ?", (pid, time.time(), job_id))
 
+    def set_vault_note(self, job_id: int, note: str) -> None:
+        """İşin vault'ta yazılan proje notunun yolunu kaydeder.
+
+        Durum koşulu YOK ve `announced`'e dokunulmaz: not, işin sonucundan
+        sonra (ve durdurulmuş işler için de) yazılabilir; kullanıcıya
+        bildirim durumunu etkilemez.
+        """
+
+        with self._connect() as conn:
+            conn.execute("UPDATE jobs SET vault_note = ?, updated_at = ? WHERE id = ?", (note, time.time(), job_id))
+
     def record_activity(self, job_id: int, activity: str) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -376,4 +395,5 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         finished_at=row["finished_at"],
+        vault_note=row["vault_note"],
     )

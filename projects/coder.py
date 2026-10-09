@@ -21,6 +21,7 @@ durdurma tüm ağacı (runner + claude + onun alt süreçleri) kapsasın.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -107,11 +108,14 @@ def _resolve(executable: str) -> str:
     return shutil.which(executable) or executable
 
 
-def spawn_runner(settings: ProjelerSettings, job_id: int) -> subprocess.Popen[bytes]:
-    """`projects/runner.py`'yi ayrık bir süreç olarak başlatır."""
+def runner_command(settings: ProjelerSettings, job_id: int) -> list[str]:
+    """Runner sürecinin argv'si — saf bir fonksiyon, süreç başlatmadan test edilebilir.
 
-    directory = job_dir(settings, job_id)
-    directory.mkdir(parents=True, exist_ok=True)
+    Vault ayarları runner'a komut satırıyla geçer çünkü runner ayrı bir süreçtir
+    ve `Settings`'i yüklemez. Argümanlar `.cmd` sarmalayıcısına değil doğrudan
+    python'a gider; bu yüzden `--vault-command`'ın JSON metni güvenle taşınır.
+    """
+
     command = [
         sys.executable,
         "-m",
@@ -121,8 +125,21 @@ def spawn_runner(settings: ProjelerSettings, job_id: int) -> subprocess.Popen[by
         "--job",
         str(job_id),
         "--job-dir",
-        str(directory),
+        str(job_dir(settings, job_id)),
     ]
+    if settings.vault_path is not None:
+        command += ["--vault-path", str(settings.vault_path), "--vault-timeout", str(settings.vault_timeout_seconds)]
+        if settings.vault_command:
+            command += ["--vault-command", json.dumps(settings.vault_command)]
+    return command
+
+
+def spawn_runner(settings: ProjelerSettings, job_id: int) -> subprocess.Popen[bytes]:
+    """`projects/runner.py`'yi ayrık bir süreç olarak başlatır."""
+
+    directory = job_dir(settings, job_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    command = runner_command(settings, job_id)
     env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ARTEMIS_ROOT), os.environ.get("PYTHONPATH")]))}
     kwargs: dict[str, object] = {}
     if os.name == "nt":
