@@ -3122,6 +3122,16 @@ fark gürültüdür). Korpus ~163 not / 899 pasaj.
 | Hibrit (RRF) MiniLM | 0.67 | 0.44 | 0.48 | 32 | — |
 | Hibrit MiniLM + eşik | 0.63 | 0.42 | 0.44 | 4 | — |
 
+DÜZELTME (ajanın nihai raporu, tabloya eklenmeyen satırlar): **e5-large** tek başına
+hit@4 0.73, recall@4 0.53, MRR 0.65 (134 ms/sorgu, indeks ~941 sn CPU'da) — hibritten
+(0.70) ve MiniLM hibritten (0.67) iyi; hibrit zayıf kodlayıcıları yükseltiyor ama
+e5-large'ı düşürüyor (aday havuzu doğru notu çoğu zaman içermiyor). Negatiflerde hiçbir
+yöntem temiz değil: e5-large + eşik (0.835) gürültüyü 0'a indiriyor ama hit@4 0.53'e
+düşüyor; eşikler aynı 38 soruya uydurulduğu için iyimser. Altın küme paraphrase
+ağırlıklı olduğundan yapısal olarak embedding lehine. q18'i hiçbir yöntem bulamadı
+(etiket zayıf). Öneri güncel: e5-large tek başına (ya da MiniLM, hızlı kurulum için) +
+isteğe bağlı eşik; hibrit şart değil.
+
 Bulgular: embedding hit@4'ü 0.43 → 0.67'ye çıkarıyor; ama %33 hâlâ kaçıyor ve
 ilgisiz fikirde de not getiriyor — eşik pozitif/negatifi temiz ayırmıyor (e5'in skorları
 0.84-0.88'e sıkışık, MiniLM'in ayrımı daha iyi). İndeks kurulumu 1-3 dk (CPU).
