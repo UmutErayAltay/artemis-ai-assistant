@@ -241,7 +241,7 @@ def test_panel_has_a_command_box_and_send_button_and_a_read_only_history(panel: 
 
     tabs = panel.findChild(QTabWidget)
     assert tabs is not None
-    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Geçmiş", "Ayarlar"]
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["Geçmiş", "Projeler", "Ayarlar"]
 
     history = panel.findChild(QTextBrowser)
     assert history is not None, "geçmiş sekmesi bir metin görünümü olmalı"
@@ -261,7 +261,7 @@ def test_settings_tab_reuses_the_existing_window_rather_than_a_copy(
 
     tabs = panel.findChild(QTabWidget)
     assert tabs is not None
-    settings_tab = tabs.widget(1)
+    settings_tab = tabs.widget(2)  # Geçmiş, Projeler, Ayarlar
     assert settings_tab.findChild(SettingsWindow) is not None
 
 

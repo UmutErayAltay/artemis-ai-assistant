@@ -87,6 +87,7 @@ from config.settings import Settings
 from core.command_runner import CommandOutcome, CommandRunner
 from core.dispatcher import ToolDispatcher
 from ui import theme
+from ui.projects_view import ProjectsView
 from ui.settings_window import SettingsWindow
 from utils.confirmation import format_confirmation_arguments
 from utils.tool_labels import tool_label
@@ -871,6 +872,10 @@ class ArtemisPanel(QWidget):
         self._stack.addWidget(empty_page)
         self._stack.addWidget(self._history)
         tabs.addTab(self._stack, "Geçmiş")
+
+        # Proje işleri sekmesi: kendi yenileme zamanlayıcısını taşır, yalnızca görünürken
+        # çalışır (bkz. `ui/projects_view.py`). Arka plan kipi panelle aynıdır.
+        tabs.addTab(ProjectsView(self._settings, background=self._background), "Projeler")
 
         # `SettingsWindow` normal bir `QWidget`; sekmeye YERLEŞTİRMEK onu
         # yeniden yazmaz, aynı pencereyi kullanır. Dolayısıyla `--settings`

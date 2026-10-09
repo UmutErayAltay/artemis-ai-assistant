@@ -60,6 +60,12 @@ _TELEGRAM_DETAIL_LIMIT = 1500
 """`telegram_job_text`'te ayrıntı bölümünün azami uzunluğu (Telegram sınırı 4096; bol pay bırakılır)."""
 
 
+def status_icon(status: JobStatus) -> str:
+    """Durumun simgesi. Telegram mesajı ve panelin proje kartları AYNI tabloyu kullanır (salt okunur)."""
+
+    return _STATUS_ICONS[status]
+
+
 def open_store(settings: ProjelerSettings) -> ProjectStore:
     return ProjectStore(coder_mod.db_path(settings))
 
