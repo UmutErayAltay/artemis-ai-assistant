@@ -43,7 +43,15 @@ NEW_NOTE_BANNER = "> Bu not Artemis'in proje atölyesi tarafından açıldı; ko
 _PREFERENCES_LIMIT = 1200
 _EXCERPT_LIMIT = 300
 _ENTRY_SUMMARY_LIMIT = 300
-_RECEIPT_SUMMARY_LIMIT = 500
+_RECEIPT_SUMMARY_LIMIT = 1500
+
+# `beyin.py context` bütçeyi kayıtlara SIRAYLA harcar: ilk (genelde gürültü olan, 8-11K karakterlik)
+# `daily/` kaydı 20000'lik bütçeyi yiyordu ve sonraki her kaydın metni ~160 karaktere kırpılıp
+# " [truncated]" ile bitiyordu. JSON süreç içinde ayrıştırılır, boyut sorun değildir: bütçe geniş
+# tutulur; gürültüyü bütçe değil `_is_noise` süzer.
+_CONTEXT_LIMIT = "40"
+_CONTEXT_BUDGET_CHARS = "200000"
+_TRUNCATED_MARKER = re.compile(r"\s*\[truncated\]\s*$")
 
 # Bağlam sorgusunda gürültü olan, ham oturum kayıtları ve üretilmiş dizin dosyaları.
 _NOISE_PREFIXES = ("daily/", "receipts/")
@@ -65,6 +73,57 @@ def _shorten(text: str, limit: int) -> str:
 def _one_line(text: str) -> str:
     """Her türlü boşluk dizisini (satır sonları dahil) tek boşluğa indirir."""
     return " ".join(text.split())
+
+
+def _first_line(text: str) -> str:
+    """İlk boş olmayan satırı (iç boşlukları tek boşluğa indirilmiş) döndürür; yoksa `""`.
+
+    Kodlayıcının özeti çok satırlıdır ve İLK SATIRI tek başına anlam taşıyacak şekilde
+    istenir ("M1 bitti, 3 test geçiyor."); tüm özeti tek satıra yassılatmak notu okunmaz yapar.
+    """
+    for line in text.splitlines():
+        if line.strip():
+            return _one_line(line)
+    return ""
+
+
+def _normalize_lines(text: str) -> str:
+    """Satır yapısını korur; satır sonu boşluklarını, baştaki/sondaki ve ardışık boş satırları atar."""
+    lines: list[str] = []
+    for line in text.strip().splitlines():
+        line = line.rstrip()
+        if not line and (not lines or not lines[-1]):
+            continue
+        lines.append(line)
+    return "\n".join(lines).rstrip()
+
+
+def _shorten_at_line(text: str, limit: int) -> str:
+    """Metni en çok `limit` karaktere indirir; mümkünse bir SATIR SINIRINDA keser.
+
+    Satır ortasından kesmek bir cümleyi yarım bırakır. Pencerede hiç satır sonu yoksa
+    (tek uzun satır) `_shorten` gibi karakterden kesilir. Kesilen metin "…" ile biter.
+    """
+    if len(text) <= limit:
+        return text
+    room = limit - len("\n…")
+    cut = text.rfind("\n", 0, room + 1)
+    if cut > 0:
+        return text[:cut].rstrip() + "\n…"
+    return _shorten(text, limit)
+
+
+def _display_dir(path: Path) -> str:
+    """Yolu vault'a yazılacak biçimde verir: ev dizininin altındaysa `~/<göreli>`.
+
+    Mutlak yol Windows'ta `C:\\Users\\<kullanıcı adı>\\...` olur; vault bir git deposudur ve
+    paylaşılabilir. Kullanıcı adını sızdırmamak için ev dizini `~` ile gösterilir.
+    """
+    try:
+        relative = path.relative_to(Path.home())
+    except (ValueError, RuntimeError):  # ev dizininin dışında / ev dizini belirlenemedi
+        return str(path)
+    return "~" if not relative.parts else f"~/{relative.as_posix()}"
 
 
 def _yaml_scalar(value: str) -> str:
@@ -228,7 +287,9 @@ class VaultBridge:
             return None
 
         preferences = self._read_preferences(vault)
-        answer = self._run(["context", "--no-sync", "--limit", "15", "--budget-chars", "20000", query])
+        answer = self._run(
+            ["context", "--no-sync", "--limit", _CONTEXT_LIMIT, "--budget-chars", _CONTEXT_BUDGET_CHARS, query]
+        )
 
         notes: list[VaultNote] = []
         records = answer.get("records") if answer is not None else None
@@ -278,10 +339,16 @@ class VaultBridge:
         Bölüm bir sonraki `## ` satırında biter. HTML yorum satırları (tek
         satırlık ya da çok satırlı) atılır: yorumlar kullanıcının kendine
         notudur, modele gitmemeli.
+
+        YALNIZCA liste maddeleri (`- ` / `* `) ve onların girintili devam
+        satırları alınır. Bölüm genelde bir üst bilgi cümlesiyle başlar ("Her
+        madde Umut'un doğrudan söylediği ... (kaynak: [[...]])"); o cümle bir
+        tercih değil bölümün açıklamasıdır ve modele tercih diye gitmemeli.
         """
         collected: list[str] = []
         in_section = False
         in_comment = False
+        in_item = False
         for line in content.splitlines():
             stripped = line.strip()
             if not in_section:
@@ -295,7 +362,13 @@ class VaultBridge:
             if stripped.startswith("<!--"):
                 in_comment = "-->" not in stripped
                 continue
-            collected.append(line.rstrip())
+            if stripped.startswith(("- ", "* ")):
+                in_item = True
+                collected.append(line.rstrip())
+            elif in_item and stripped and line[0] in " \t":
+                collected.append(line.rstrip())  # maddenin girintili devam satırı
+            else:
+                in_item = False  # boş satır ya da girintisiz paragraf: madde bitti, satır atılır
         return _shorten("\n".join(collected).strip(), _PREFERENCES_LIMIT)
 
     @staticmethod
@@ -304,8 +377,11 @@ class VaultBridge:
 
         Başlıklar ve frontmatter atılır: prompt'a giden şey notun KONUSU değil
         içeriği olmalı, başlık zaten kaynak yolunda görünüyor.
+
+        CLI bütçesi biten kayıtların metnini " [truncated]" ile bitirir; bu
+        işaret CLI'nın iç kaydıdır, prompt'a ve kullanıcıya gitmemeli.
         """
-        lines = text.splitlines()
+        lines = _TRUNCATED_MARKER.sub("", text).splitlines()
         start = 0
         if lines and lines[0].strip() == "---":
             for index in range(1, len(lines)):
@@ -354,10 +430,12 @@ class VaultBridge:
             return None
         rel_note = note_path.relative_to(vault).as_posix()
 
-        # Tek satırlık özet bir kez hesaplanır: girdi 300, receipt 500 karakterlik pencere alır.
-        summary_line = _one_line(summary)
+        # Not girdisi özetin yalnızca İLK satırını alır (300 karakter); receipt ise satır yapısını
+        # koruyan özetin tamamını (1500 karakter, satır sınırında kesilerek) taşır.
+        summary_line = _first_line(summary)
+        summary_body = _normalize_lines(summary)
         status = _one_line(status_label)
-        entry_line = f"- {datetime.now():%Y-%m-%d %H:%M} · {status} · `{project_dir}`"
+        entry_line = f"- {datetime.now():%Y-%m-%d %H:%M} · {status} · `{_display_dir(project_dir)}`"
         if summary_line:
             entry_line += f" — {_shorten(summary_line, _ENTRY_SUMMARY_LIMIT)}"
 
@@ -373,8 +451,8 @@ class VaultBridge:
             return None
 
         receipt_summary = f"Artemis proje atölyesi: '{slug}' {status}."
-        if summary_line:
-            receipt_summary += f" {_shorten(summary_line, _RECEIPT_SUMMARY_LIMIT)}"
+        if summary_body:
+            receipt_summary += f" {_shorten_at_line(summary_body, _RECEIPT_SUMMARY_LIMIT)}"
         payload = {
             "event_id": f"artemis-proje-{event_key}",
             "summary": f"{receipt_summary}\nÖğrenilen: yok",
@@ -431,6 +509,13 @@ class VaultBridge:
         # Spec'in kendi başlığı notun `# başlık` satırıyla çakışmasın.
         if spec_lines and spec_lines[0].startswith("# "):
             spec_lines = spec_lines[1:]
+            # Başlığın hemen altındaki alıntı bloğu ("> Bu dosya Artemis'in ... sözleşmesidir.")
+            # spec'in kendi uyarısıdır; notun kendi uyarısı (`NEW_NOTE_BANNER`) varken iki
+            # uyarı üst üste görünmesin.
+            while spec_lines and not spec_lines[0].strip():
+                spec_lines = spec_lines[1:]
+            while spec_lines and spec_lines[0].lstrip().startswith(">"):
+                spec_lines = spec_lines[1:]
         spec_body = "\n".join(spec_lines).strip()
         if spec_body:
             lines += ["", spec_body]

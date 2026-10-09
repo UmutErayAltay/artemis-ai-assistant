@@ -103,7 +103,7 @@ Artemis: [proje] 'not-cli' tamamlandı (2 commit, ~0.84 $). Kodlayıcının öze
 - `proje ne durumda`, `proje işlerini listele`, `not-cli'yi durdur` çalışır.
 - **İkinci beyin (opsiyonel):** `config.yaml::projeler.vault_path` vault'unu
   gösterirse görüşme `Core.md`'deki kalıcı tercihlerini ve fikirle ilgili
-  vault notlarını okur ("Vault'tan tercihlerini ve 2 ilgili notu okudum"),
+  vault notlarını okur ("Vault'tan tercihlerini ve 2 notu okudum: ad-bir, ad-iki"),
   biten/soru soran/durdurulan her iş `300-Projects/<proje>.md` notuna eklenir
   ve bir receipt gönderilir. Var olan bir nota yalnızca EKLENİR, asla yeniden
   yazılmaz. Vault yoksa ya da CLI hata verirse işler etkilenmez.

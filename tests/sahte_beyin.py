@@ -23,9 +23,11 @@ from typing import Any
 CORE_MD = """# Artemis: Core
 
 ## What I should never forget
+Her madde Umut'un doğrudan söylediği bir kuraldır (kaynak: [[Thread-Detay/kurallar-gerekce]]).
 <!-- bu satır bir HTML yorumudur, modele gitmemeli -->
 - Tercih 1: Kısa ve net cevaplar.
 - Tercih 2: Türkçe yanıtlamak.
+  Teknik terimler İngilizce kalabilir.
 
 ## Başka bölüm
 - Bu bölüm tercihlere karışmamalı.

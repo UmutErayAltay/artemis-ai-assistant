@@ -27,6 +27,18 @@ from projects.vault import (
 from tests.sahte_beyin import SahteVault, sahte_vault
 
 
+@pytest.fixture(autouse=True)
+def _fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`Path.home()`'u geçici bir klasöre yönlendirir.
+
+    Köprü proje dizinini ev dizininin altındaysa `~/...` yazar; testlerin sonucu
+    çalıştığı makinenin gerçek ev dizinine (ör. kök `/` olan bir konteyner) bağlı olmasın.
+    """
+    home = tmp_path / "ev" / "kullanici-adi"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    return home
+
+
 def _outcome(bridge: VaultBridge, **overrides: object) -> VaultRecord | None:
     """`record_outcome`'ı makul varsayılanlarla çağırır; testler yalnızca ilgilendiğini verir."""
     arguments: dict[str, object] = {
@@ -93,8 +105,13 @@ def test_context_for_preferences_filtering_and_excerpts(tmp_path: Path) -> None:
     ctx = _bridge(sv).context_for("RLS nedir?", max_notes=10)
 
     assert ctx is not None
-    # Tercihler: iki madde, HTML yorumu ve sonraki bölüm yok.
-    assert ctx.preferences == "- Tercih 1: Kısa ve net cevaplar.\n- Tercih 2: Türkçe yanıtlamak."
+    # Tercihler: iki madde (ikincinin girintili devam satırıyla); üst bilgi cümlesi, HTML yorumu
+    # ve sonraki bölüm yok.
+    assert ctx.preferences == (
+        "- Tercih 1: Kısa ve net cevaplar.\n- Tercih 2: Türkçe yanıtlamak.\n  Teknik terimler İngilizce kalabilir."
+    )
+    assert "Her madde" not in ctx.preferences
+    assert "kurallar-gerekce" not in ctx.preferences
     assert "<!--" not in ctx.preferences
     assert "HTML yorumu" not in ctx.preferences
     assert "Başka bölüm" not in ctx.preferences
@@ -120,10 +137,54 @@ def test_context_for_preferences_filtering_and_excerpts(tmp_path: Path) -> None:
     # CLI doğru argümanlarla ve vault kökünde çağrıldı.
     (call,) = sv.calls()
     assert set(call) == {"argv", "cwd", "receipt", "receipt_path"}
-    assert call["argv"] == ["context", "--no-sync", "--limit", "15", "--budget-chars", "20000", "RLS nedir?"]
+    assert call["argv"] == ["context", "--no-sync", "--limit", "40", "--budget-chars", "200000", "RLS nedir?"]
     assert Path(call["cwd"]).resolve() == sv.path.resolve()
     assert call["receipt"] is None
     assert call["receipt_path"] is None
+
+
+def test_context_for_strips_the_cli_truncation_marker(tmp_path: Path) -> None:
+    """CLI bütçesi biten kayıtların metnini " [truncated]" ile bitirir; bu işaret özete girmemeli."""
+    long_cut = "# Uzun\n\n" + " ".join(["kelime"] * 100) + " [truncated]"
+    records = [
+        {"source": "knowledge/concepts/kisa.md", "text": "# Kısa\n\nİlk cümle yarım kal [truncated]"},
+        {"source": "knowledge/concepts/satirda.md", "text": "# Satırda\n\nSatır sonundan sonra\n[truncated]"},
+        {"source": "knowledge/concepts/uzun.md", "text": long_cut},
+        {"source": "knowledge/concepts/tam.md", "text": "# Tam\n\nİşaretsiz not."},
+    ]
+    sv = sahte_vault(tmp_path, records=records)
+
+    ctx = _bridge(sv).context_for("q", max_notes=10)
+
+    assert ctx is not None
+    excerpts = {note.source: note.excerpt for note in ctx.notes}
+    assert excerpts["knowledge/concepts/kisa.md"] == "İlk cümle yarım kal"
+    assert excerpts["knowledge/concepts/satirda.md"] == "Satır sonundan sonra"
+    assert excerpts["knowledge/concepts/tam.md"] == "İşaretsiz not."
+    assert len(excerpts["knowledge/concepts/uzun.md"]) == 300
+    assert excerpts["knowledge/concepts/uzun.md"].endswith("…")
+    assert all("[truncated]" not in note.excerpt for note in ctx.notes)
+    assert "[truncated]" not in ctx.to_prompt()
+    # Geniş bütçe: ilk kayıt bütçeyi yiyip sonrakileri kırpmasın.
+    (call,) = sv.calls()
+    assert call["argv"][2:6] == ["--limit", "40", "--budget-chars", "200000"]
+
+
+def test_preferences_keep_only_list_items_and_their_indented_continuations() -> None:
+    content = (
+        "# Core\n\n## What I should never forget\n"
+        "Her madde Umut'un söylediği bir kuraldır (kaynak: [[Thread-Detay/kurallar-gerekce]]).\n\n"
+        "- Madde bir\n  devam satırı\n"
+        "* Madde iki\n"
+        "Ara paragraf.\n  girintili ama bir maddeye ait değil\n"
+        "- Madde üç\n    - alt madde\n\n"
+        "## Sonraki\n- dışarıda\n"
+    )
+
+    assert VaultBridge._extract_preferences(content) == (
+        "- Madde bir\n  devam satırı\n* Madde iki\n- Madde üç\n    - alt madde"
+    )
+    assert VaultBridge._extract_preferences("## What I should never forget\nYalnızca üst bilgi.\n") == ""
 
 
 def test_context_for_respects_max_notes(tmp_path: Path) -> None:
@@ -312,6 +373,67 @@ def test_record_outcome_new_note_without_spec_and_with_risky_title(tmp_path: Pat
     assert lines[12] == PROJECT_LOG_HEADING
 
 
+_SPEC_WITH_BLOCKQUOTE = """# Not Defteri
+
+> Bu dosya Artemis'in proje görüşmesinden üretildi; kodlayıcının sözleşmesidir.
+> İkinci uyarı satırı.
+
+## Amaç
+
+Hızlı not almak.
+
+> Spec'in içindeki gerçek bir alıntı kalmalı.
+"""
+
+
+def test_new_note_drops_the_specs_own_leading_blockquote(tmp_path: Path) -> None:
+    """Spec'in başlık altındaki uyarısı atılır (notun kendi uyarısı var); gövdedeki alıntılar kalır."""
+    sv = sahte_vault(tmp_path)
+
+    record = _outcome(_bridge(sv), spec_markdown=_SPEC_WITH_BLOCKQUOTE)
+
+    assert record is not None
+    content = (sv.path / record.note).read_text(encoding="utf-8")
+    assert "sözleşmesidir" not in content and "İkinci uyarı satırı" not in content
+    assert content.count(NEW_NOTE_BANNER) == 1
+    assert f"{NEW_NOTE_BANNER}\n\n## Amaç\n\nHızlı not almak." in content
+    assert "> Spec'in içindeki gerçek bir alıntı kalmalı." in content
+
+
+def test_entry_renders_project_dir_under_home_as_tilde(tmp_path: Path, _fake_home: Path) -> None:
+    """Ev dizininin altındaki yol `~/...` yazılır: vault bir git deposu, kullanıcı adı sızmamalı."""
+    sv = sahte_vault(tmp_path)
+    bridge = _bridge(sv)
+    outside = tmp_path / "baska" / "disarida"
+
+    _outcome(bridge, slug="icerde", project_dir=_fake_home / "Desktop" / "Projeler" / "icerde")
+    _outcome(bridge, slug="ev-kendisi", project_dir=_fake_home)
+    _outcome(bridge, slug="disarida", project_dir=outside)
+
+    inside_note = (sv.path / "🏰 300-Projects" / "icerde.md").read_text(encoding="utf-8")
+    assert "`~/Desktop/Projeler/icerde`" in inside_note
+    assert "kullanici-adi" not in inside_note
+    assert "`~`" in (sv.path / "🏰 300-Projects" / "ev-kendisi.md").read_text(encoding="utf-8")
+    # Ev dizininin dışındaki yol olduğu gibi kalır.
+    assert f"`{outside}`" in (sv.path / "🏰 300-Projects" / "disarida.md").read_text(encoding="utf-8")
+
+
+def test_entry_keeps_the_absolute_path_when_home_cannot_be_determined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_home() -> Path:
+        raise RuntimeError("Could not determine home directory.")
+
+    monkeypatch.setattr(Path, "home", no_home)
+    sv = sahte_vault(tmp_path)
+    project_dir = tmp_path / "projeler" / "x"
+
+    record = _outcome(_bridge(sv), project_dir=project_dir)
+
+    assert record is not None
+    assert f"`{project_dir}`" in (sv.path / record.note).read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------- #
 # 6. record_outcome: var olan kullanıcı notu
 # ---------------------------------------------------------------------- #
@@ -445,37 +567,69 @@ def test_receipt_failed_still_counts_note_as_written(tmp_path: Path) -> None:
     assert not Path(receipt_call["receipt_path"]).exists()
 
 
-def test_receipt_summary_uses_500_chars_while_entry_uses_300(tmp_path: Path) -> None:
-    """Giriş satırı özeti 300, receipt özeti 500 karakterle sınırlanır; ikisi de tek satırdır."""
+_RECEIPT_PREFIX = "Artemis proje atölyesi: '{slug}' TAMAM. "
+_RECEIPT_SUFFIX = "\nÖğrenilen: yok"
+
+
+def _receipts_by_slug(sv: SahteVault) -> dict[str, str]:
+    return {
+        Path(call["receipt"]["refs"][0]).stem: call["receipt"]["summary"]
+        for call in sv.calls()
+        if call["argv"][0] == "receipt"
+    }
+
+
+def _receipt_body(sv: SahteVault, slug: str) -> str:
+    summary = _receipts_by_slug(sv)[slug]
+    return summary.removeprefix(_RECEIPT_PREFIX.format(slug=slug)).removesuffix(_RECEIPT_SUFFIX)
+
+
+def _entry_line(sv: SahteVault, slug: str) -> str:
+    return (sv.path / "🏰 300-Projects" / f"{slug}.md").read_text(encoding="utf-8").splitlines()[-1]
+
+
+def test_entry_uses_only_the_first_summary_line_but_receipt_keeps_the_lines(tmp_path: Path) -> None:
+    """Kodlayıcı özetinin İLK satırı tek başına durur: not girdisine o girer, receipt tüm satırları taşır."""
+    sv = sahte_vault(tmp_path)
+    summary = "\n  M1 bitti,   3 test geçiyor.\n\n\nYapılanlar:\n- not ekle\n- notları listele   \n"
+
+    _outcome(_bridge(sv), slug="cok-satirli", summary=summary)
+
+    entry = _entry_line(sv, "cok-satirli")
+    assert entry.endswith(" — M1 bitti, 3 test geçiyor.")
+    note = (sv.path / "🏰 300-Projects" / "cok-satirli.md").read_text(encoding="utf-8")
+    assert "Yapılanlar" not in note and "notları listele" not in note
+    # Receipt: satır yapısı korunur (boş satır tek, satır sonu boşluğu yok), sonda sabit "Öğrenilen".
+    assert _receipts_by_slug(sv)["cok-satirli"] == (
+        "Artemis proje atölyesi: 'cok-satirli' TAMAM. M1 bitti,   3 test geçiyor.\n\n"
+        "Yapılanlar:\n- not ekle\n- notları listele\nÖğrenilen: yok"
+    )
+
+
+def test_entry_is_cut_at_300_chars_and_receipt_at_a_line_boundary_within_1500(tmp_path: Path) -> None:
     sv = sahte_vault(tmp_path)
     bridge = _bridge(sv)
-    long_summary = "alfa  beta\n" * 100  # tek satıra indirilince 999 karakter
-    medium_summary = " ".join(["orta"] * 100)  # 399 karakter
+    lines = [f"Satır {index:03d}: " + "x" * 40 for index in range(100)]  # satır başına 50 karakter
+    one_long_line = "alfa " * 1000
 
-    _outcome(bridge, slug="uzun", summary=long_summary)
-    _outcome(bridge, slug="orta", summary=medium_summary)
+    _outcome(bridge, slug="satirli", summary="\n".join(lines))
+    _outcome(bridge, slug="tek-satir", summary=one_long_line)
 
-    prefix = "Artemis proje atölyesi: '{slug}' TAMAM. "
-    suffix = "\nÖğrenilen: yok"
-    receipts = {call["receipt"]["refs"][0]: call["receipt"] for call in sv.calls() if call["argv"][0] == "receipt"}
+    # Giriş: yalnızca ilk satır; kısa olduğu için kesilmez.
+    assert _entry_line(sv, "satirli").endswith(f" — {lines[0]}")
 
-    def entry_summary(slug: str) -> str:
-        text = (sv.path / "🏰 300-Projects" / f"{slug}.md").read_text(encoding="utf-8")
-        return text.splitlines()[-1].split(" — ", 1)[1]
+    # Receipt: 1500'ü aşmaz, "…" ile biter ve kesim TAM bir satırdan sonradır (yarım satır yok).
+    body = _receipt_body(sv, "satirli")
+    assert len(body) <= 1500 and body.endswith("\n…")
+    kept = body.split("\n")[:-1]
+    assert kept == lines[: len(kept)]
+    assert len(body) > 1400, "kesim sınıra yakın olmalı, çok erken değil"
 
-    def receipt_summary(slug: str) -> str:
-        summary = receipts[f"🏰 300-Projects/{slug}.md"]["summary"]
-        return summary.removeprefix(prefix.format(slug=slug)).removesuffix(suffix)
-
-    long_entry, long_receipt = entry_summary("uzun"), receipt_summary("uzun")
-    assert len(long_entry) == 300 and long_entry.endswith("…")
-    assert len(long_receipt) == 500 and long_receipt.endswith("…")
-    assert "\n" not in long_receipt
-    assert long_receipt.startswith(long_entry[:-1])
-
-    medium_entry, medium_receipt = entry_summary("orta"), receipt_summary("orta")
-    assert len(medium_entry) == 300 and medium_entry.endswith("…")
-    assert medium_receipt == medium_summary  # 500'ün altında: kesilmez
+    # Tek uzun satırda satır sınırı yoktur: karakterden kesilir (giriş 300, receipt 1500).
+    entry = _entry_line(sv, "tek-satir").split(" — ", 1)[1]
+    assert len(entry) == 300 and entry.endswith("…")
+    long_body = _receipt_body(sv, "tek-satir")
+    assert len(long_body) == 1500 and long_body.endswith("…") and "\n" not in long_body
 
 
 # ---------------------------------------------------------------------- #

@@ -13,7 +13,7 @@ from __future__ import annotations
 import shutil
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from config.settings import ProjelerSettings
 from models.project_models import Coder, JobStatus, ProjectSpec, slugify
@@ -307,10 +307,13 @@ def begin_interview(settings: ProjelerSettings, idea: str, first_question: str) 
         interview.transcript.insert(0, {"rol": CONTEXT_ROLE, "metin": context.to_prompt()})
         store.save_interview(interview)
         sources = context.sources()
+        # Okunan notlar ADIYLA söylenir: alakasız olanı Umut fark edip "onlar ilgisiz" diyebilsin.
+        # Yalnızca dosya adı (klasör ve `.md` yok) yeter; tam yol sesli okunacak mesajı şişirir.
+        names = ", ".join(PurePosixPath(source.replace("\\", "/")).stem for source in sources)
         if context.notes and context.preferences:
-            message += f" (Vault'tan tercihlerini ve {len(context.notes)} ilgili notu okudum.)"
+            message += f" (Vault'tan tercihlerini ve {len(context.notes)} notu okudum: {names}.)"
         elif context.notes:
-            message += f" ({len(context.notes)} ilgili vault notu okudum.)"
+            message += f" (Vault'tan {len(context.notes)} notu okudum: {names}.)"
         else:
             message += " (Vault'tan tercihlerini okudum.)"
     return ToolResult(success=True, message=message, data={"interview_id": interview.id, "vault_sources": sources})

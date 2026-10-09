@@ -36,7 +36,7 @@ from tests.test_projects import _FAKE_CODER, _ready_spec, _wait, posix_only
 _NOTE_SOURCE = "knowledge/concepts/sqlite-tercihi.md"
 _NOTE_EXCERPT = "Küçük araçlarda sunucusuz SQLite kullanıyorum"
 _RECORDS = [
-    {"source": _NOTE_SOURCE, "text": f"# SQLite tercihi\n\n{_NOTE_EXCERPT}; Postgres gereksiz yük."},
+    {"source": _NOTE_SOURCE, "text": f"# SQLite tercihi\n\n{_NOTE_EXCERPT}; Postgres gereksiz yük. [truncated]"},
     {"source": "daily/2026-09-01.md", "text": "# Günlük\n\nHam oturum kaydı, bağlama girmemeli."},
 ]
 _PROJECT_NOTE = "🏰 300-Projects/not-defteri.md"
@@ -195,6 +195,8 @@ def test_interview_gets_preferences_and_related_notes_as_data(tmp_path: Path, mo
     assert result.success, result.message
     assert result.message.startswith(first_question())
     assert "Vault'tan" in result.message
+    # Okunan not ADIYLA söylenir (klasör ve `.md` olmadan) ki alakasızsa Umut itiraz edebilsin.
+    assert result.message == first_question() + " (Vault'tan tercihlerini ve 1 notu okudum: sqlite-tercihi.)"
     assert result.data["vault_sources"] == [_NOTE_SOURCE], "ham günlük kaydı bağlama girmemeli"
     store = jobs.open_store(projeler)
     interview = store.open_interview()
@@ -212,12 +214,36 @@ def test_interview_gets_preferences_and_related_notes_as_data(tmp_path: Path, mo
     assert sent.count("VAULT NOTLARI") == 1
     assert _NOTE_EXCERPT in sent
     assert "Ham oturum kaydı" not in sent
+    assert "[truncated]" not in sent, "CLI'nın kırpma işareti modele gitmemeli"
+    assert "Her madde" not in sent, "Core.md'nin üst bilgi cümlesi tercih değildir"
     conversation = sent.split("GÖRÜŞME:", 1)[1]
     assert "Umut'un kalıcı tercihleri" not in conversation, "vault bağlamı konuşma gibi basılmamalı"
     assert "Umut: not defteri uygulaması" in conversation and "Umut: kendim için" in conversation
     assert "SORU HAKKIN BİTTİ" not in sent, "bağlam turu soru hakkından düşmez"
     saved = store.open_interview()
     assert saved is not None and saved.transcript[0]["rol"] == CONTEXT_ROLE
+
+
+def test_message_names_every_note_that_was_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    records = [
+        {"source": "knowledge/concepts/webrtc-p2p-sesli-goruntulu-arama.md", "text": "# WebRTC\n\nP2P arama."},
+        {"source": "knowledge\\concepts\\supabase-mfa-totp.md", "text": "# MFA\n\nTOTP tuzakları."},
+        {"source": "daily/2026-09-01.md", "text": "# Günlük\n\nGürültü."},
+    ]
+    vault = sahte_vault(tmp_path, records)
+    projeler = _projeler(tmp_path, monkeypatch, vault)
+
+    result = jobs.begin_interview(projeler, "sesli arama uygulaması", first_question())
+
+    names = "webrtc-p2p-sesli-goruntulu-arama, supabase-mfa-totp"
+    assert result.message == first_question() + f" (Vault'tan tercihlerini ve 2 notu okudum: {names}.)"
+    assert len(result.data["vault_sources"]) == 2
+
+    # Core.md yoksa yalnızca notlar vardır; mesaj aynı biçimi korur.
+    (vault.path / "🔮 850-Companion" / "Core.md").unlink()
+    jobs.open_store(projeler).mark_interview(result.data["interview_id"], "cancelled")
+    notes_only = jobs.begin_interview(projeler, "sesli arama uygulaması", first_question())
+    assert notes_only.message == first_question() + f" (Vault'tan 2 notu okudum: {names}.)"
 
 
 # --- 3. kapalı köprü -------------------------------------------------------------
@@ -251,8 +277,8 @@ def test_failing_vault_cli_still_gives_preferences_from_core_md(
 
     assert result.success, result.message
     assert result.message.startswith(first_question())
-    assert "tercihlerini" in result.message
-    assert "ilgili" not in result.message, "CLI çöktü: not sayısı iddia edilmemeli"
+    assert result.message == first_question() + " (Vault'tan tercihlerini okudum.)"
+    assert "notu" not in result.message, "CLI çöktü: not sayısı iddia edilmemeli"
     assert result.data["vault_sources"] == []
     interview = jobs.open_store(projeler).open_interview()
     assert interview is not None and interview.transcript[0]["rol"] == CONTEXT_ROLE
@@ -283,6 +309,8 @@ def test_finished_job_is_recorded_in_the_vault_note_and_receipt(
     assert "tamamlandı" in note
     assert "M1 bitti, 3 test geçiyor." in note
     assert "## M1 bitti ölçütü" in note, "spec.md notun içine alınır"
+    assert "kodlayıcının sözleşmesidir" not in note, "spec'in kendi uyarısı notun uyarısıyla çift görünmemeli"
+    assert note.count("\n> ") == 1, "notta yalnızca Artemis'in kendi uyarısı olmalı"
     receipts = _receipts(vault)
     assert len(receipts) == 1
     assert receipts[0]["receipt"]["refs"] == [job.vault_note]
