@@ -1,7 +1,7 @@
 """LLM istemcilerinin ortak sözleşmesi.
 
 Neden ayrı bir modül: `OllamaLLMClient`, `OpenRouterLLMClient` ve
-`LLMRouter` üçü de aynı üç metodu sunar, ama hiçbiri diğerinden
+`LLMRouter` üçü de aynı dört metodu sunar, ama hiçbiri diğerinden
 türetilmez — üçü de `voice/router.py`'deki sağlayıcılar gibi bağımsız
 uygulamalardır. Ortak arayüz bir sınıf değil bir PROTOKOL olduğu için
 kopyalanmaz; burada tek yerde yazılır.
@@ -9,7 +9,7 @@ kopyalanmaz; burada tek yerde yazılır.
 Bu, `scripts/_toolbench_vendor.py::LLMLike` için konulan öncülün
 (Protocol ile tek yeteneği tanımlayıp bağımlılığı yapılandırmak) genel
 hali: kıyas betiği tek bir metot için bir Protocol kullanıyordu, burada
-dolaşım döngüleri üç metotluk bir sözleşme için aynı şeyi yapıyor.
+dolaşım döngüleri dört metotluk bir sözleşme için aynı şeyi yapıyor.
 """
 
 from __future__ import annotations
@@ -28,12 +28,18 @@ class LLMClient(Protocol):
     Burada `raise`/`return` gövdesi YOK: bir Protocol o sınıfların
     gerçekten uyguladığı metotlardan ibaret olmalı. Yeni bir sağlayıcı
     eklendiğinde bu sözleşmenin genişletilip genişletilmeyeceği sorusu
-    buradan görülebilir — `LLMRouter`'ın `_run`'ı da yalnızca bu üç
-    metodu çağırır, dolayısıyla dördüncü bir metot eklemek yönlendiriciyi
-    kırmadan "dikkate alınacak yeni yetenek" anlamına gelir.
+    buradan görülebilir — `LLMRouter`'ın `_run`'ı da yalnızca bu
+    metotları çağırır. Dördüncü metot `get_structured_response`
+    (ARCHITECTURE.md §42) tam olarak böyle eklendi: `get_raw_response` tool-call şemasına
+    kilitli olduğu için başka bir JSON sözleşmesi konuşan proje görüşmesi
+    onu kullanamıyordu.
     """
 
     def get_raw_response(self, system_prompt: str, user_input: str) -> str: ...
+
+    def get_structured_response(
+        self, system_prompt: str, user_input: str, schema: dict[str, Any], schema_name: str = "cevap"
+    ) -> dict[str, Any]: ...
 
     def get_tool_calls(
         self, system_prompt: str, user_input: str, max_retries: int = 2

@@ -234,6 +234,32 @@ def _validate_tool_calls(parsed: list[Any]) -> list[dict[str, Any]]:
 
 
 
+def parse_json_object(raw_text: str) -> dict[str, Any]:
+    """Model çıktısından TEK bir JSON nesnesi çıkarır (code-fence/ön-metin toleranslı).
+
+    Şemasız stratejilerde model nesneyi markdown bloğuna sarabilir ya da
+    önüne bir cümle ekleyebilir; `extract_tool_calls`'ın nesne karşılığı.
+
+    Raises:
+        LLMResponseParseError: Geçerli bir JSON nesnesi bulunamazsa.
+    """
+
+    text = raw_text.strip()
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise LLMResponseParseError(f"Çıktıda JSON nesnesi yok: {text[:200]!r}") from None
+        try:
+            parsed = json.loads(match.group(0))
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise LLMResponseParseError(f"JSON nesnesi ayrıştırılamadı: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise LLMResponseParseError(f"Beklenen bir JSON nesnesiydi, {type(parsed).__name__} geldi.")
+    return parsed
+
+
 class OllamaLLMClient:
     """Yerel Ollama modeliyle konuşan ince (thin) istemci.
 
@@ -280,6 +306,40 @@ class OllamaLLMClient:
         ]
         raw_text, _ = self._chat(messages)
         return raw_text
+
+    def get_structured_response(
+        self, system_prompt: str, user_input: str, schema: dict[str, Any], schema_name: str = "cevap"
+    ) -> dict[str, Any]:
+        """Çıktısı VERİLEN şemaya göre kısıtlanmış tek bir JSON nesnesi ister.
+
+        NEDEN AYRI METOT: `get_raw_response` da `_chat`'in varsayılan
+        stratejilerinden geçer ve ilki TOOL-CALL şemasıdır — yani "ham"
+        cevap aslında `[{"tool": ...}]` biçimine kilitlidir. Başka bir JSON
+        sözleşmesi isteyen bir akış (proje görüşmesi) o yolla kendi
+        biçimini fiziksel olarak üretemez (README §16a ile aynı sınıf).
+
+        Args:
+            schema: Ollama `format` alanına gidecek JSON şeması.
+            schema_name: Yalnızca OpenRouter'ın `json_schema.name` alanı
+                için; imza simetrisi için burada da kabul edilir.
+
+        Raises:
+            ConnectionError: Ollama'ya ulaşılamazsa.
+            LLMResponseParseError: Çıktı bir JSON nesnesi değilse.
+        """
+
+        del schema_name  # Ollama'da karşılığı yok
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        strategies: list[tuple[str, dict[str, Any]]] = [
+            ("schema", {"format": schema}),
+            ("json", {"format": "json"}),
+            ("none", {}),
+        ]
+        raw_text, _ = self._chat(messages, strategies=strategies, remember=False)
+        return parse_json_object(raw_text)
 
     def get_tool_calls(self, system_prompt: str, user_input: str, max_retries: int = 2) -> list[dict[str, Any]]:
         """Modelden tool-call(lar)ı alır ve bir sözlük listesine ayrıştırır.
@@ -393,8 +453,18 @@ class OllamaLLMClient:
         logger.info("Komut kapısı: %r -> %s", text, decision)
         return engage
 
-    def _chat(self, messages: list[dict[str, str]]) -> tuple[str, list[dict[str, Any]] | None]:
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        strategies: list[tuple[str, dict[str, Any]]] | None = None,
+        remember: bool = True,
+    ) -> tuple[str, list[dict[str, Any]] | None]:
         """Ollama'ya, sırayla farklı stratejiler deneyerek tek bir "tur" chat isteği atar.
+
+        `strategies`/`remember`: `get_structured_response` KENDİ şemasıyla
+        çağırır ve çalışan stratejiyi HATIRLATMAZ — aksi halde tool-call
+        yolunun öğrendiği sıralama (ör. "native") başka bir sözleşmenin
+        sonucuyla ezilirdi.
 
         Returns:
             (ham_metin, native_tool_calls) çifti. Native tool-calling
@@ -403,7 +473,8 @@ class OllamaLLMClient:
             kendi ayrıştırmalıdır.
         """
 
-        strategies = self._strategies()
+        if strategies is None:
+            strategies = self._strategies()
 
         last_exc: Exception | None = None
         for key, extra in strategies:
@@ -441,7 +512,8 @@ class OllamaLLMClient:
             # karşılık gelebilir — önceki sürüm tam olarak bu yüzden
             # önbelleği her iki çağrıda bir kendi kendine geçersiz
             # kılıyordu (bkz. modül testleri).
-            self._working_strategy_key = key
+            if remember:
+                self._working_strategy_key = key
 
             message = response["message"]
             native_calls = self._extract_native_tool_calls(message) if "tools" in extra else None

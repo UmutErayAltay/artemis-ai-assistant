@@ -312,6 +312,17 @@ mcp_servers: []
 #
 #     env: {"ARTEMIS_BROWSER_ALLOW_LOCAL": "1"}
 
+# --- Proje atölyesi (sohbetle proje + arka planda kodlama) ---
+# Tanımlanmazsa aşağıdaki varsayılanlar kullanılır (bkz. config/settings.py::
+# ProjelerSettings ve ARCHITECTURE.md §42). Değiştirmek için yorumu kaldırın:
+#
+# projeler:
+#   root: "C:/Users/<sen>/Desktop/Projeler"   # yeni projelerin açılacağı kök
+#   claude_budget_usd: 5.0                     # Claude kodlayıcısının iş başı tavanı
+#   free_model: "poolside/laguna-s-2.1:free"   # cor üzerinden ücretsiz kodlayıcı
+#   allow_bash: true                           # test koşabilsin; git push her durumda yasak
+#   interview_max_questions: 6
+
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.
 # Anahtarlar yalnızca şu üç kaynaktan, bu sırayla okunur:

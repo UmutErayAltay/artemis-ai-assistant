@@ -34,6 +34,7 @@ config/          # Settings (pydantic + pathlib), config.yaml
 models/          # ToolCall, ToolResult, ToolDefinition (pydantic)
 memory/          # SQLite tabanlı bağlam hafızası
 plugins/         # her dosya bir "kategori" (filesystem_plugin.py, windows_plugin.py...)
+projects/        # proje atölyesi: görüşme -> spec.md -> arka planda claude -p (ARCHITECTURE §42)
 tests/           # her core modülü ve her plugin için ayrı test dosyası
 ```
 
@@ -143,6 +144,14 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
   YALNIZCA host katmanını açar, şema kısıtını değil. Not: bu tool
   "çalışma zamanında ağa çıkmaz" DEĞİLDİR — verilen `url` neyse oraya
   gider; ağ kullanmayan şey TESTLERİDİR, kodu değil.
+- Proje atölyesi (`projects/`, `plugins/proje_plugin.py`) LLM'e yalnızca İKİ
+  tool gösterir (`proje.sor` SAFE, `proje.islem` CONFIRM_REQUIRED) — işlemler
+  `islem` alanıyla toplandı çünkü sistem promptu boyutu yerel modelin gecikme
+  bütçesidir (`tests/test_prompt_builder.py`). Kodlayıcı (`projects/runner.py`)
+  AYRI süreçtir; "tamamlandı" yalnızca `claude -p`'nin `result` olayı
+  `is_error=false` ve çıkış kodu 0 ise yazılır. Görüşme `get_structured_response`
+  kullanır: `get_raw_response` tool-call şemasına kilitlidir, başka bir JSON
+  sözleşmesi için KULLANILAMAZ.
 - `skills/` klasörü **bilinçli olarak boş** — bu artık açık bir soru
   değil, verilmiş bir karar: `core/planner.py::TaskPlanner` zaten
   tool zincirleme işini yapıyor, ayrı bir skills çerçevesi ikinci ve

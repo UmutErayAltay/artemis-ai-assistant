@@ -49,6 +49,11 @@ class FakeLLM:
     def should_engage(self, user_input: str) -> bool:
         return self._answer("gate")
 
+    def get_structured_response(
+        self, system_prompt: str, user_input: str, schema: dict[str, Any], schema_name: str = "cevap"
+    ) -> dict[str, Any]:
+        return {"cevap": self._answer("structured"), "schema_name": schema_name}
+
 
 def _router(cloud: FakeLLM, local: FakeLLM, **kwargs: Any) -> LLMRouter:
     return LLMRouter(lambda: cloud, lambda: local, **kwargs)
@@ -324,3 +329,22 @@ def test_local_mode_never_logs_a_cloud_provider(caplog: pytest.LogCaptureFixture
     messages = _provider_log_messages(caplog)
     assert len(messages) == 1
     assert "yerel" in messages[0]
+
+
+# --------------------------------------------------------------------------
+# get_structured_response (proje görüşmesi, ARCHITECTURE.md §42)
+# --------------------------------------------------------------------------
+
+
+def test_structured_response_falls_back_to_local_like_other_methods() -> None:
+    """Dördüncü metot da aynı `_run` sarmalından geçer: bulut düşerse yerel."""
+
+    cloud = FakeLLM(error=ConnectionError("bulut yok"))
+    local = FakeLLM(text="yerel")
+    router = _router(cloud, local)
+
+    result = router.get_structured_response("sistem", "girdi", {"type": "object"}, "proje_gorusmesi")
+
+    assert result == {"cevap": "yerel", "schema_name": "proje_gorusmesi"}
+    assert cloud.calls == ["structured"]
+    assert local.calls == ["structured"]

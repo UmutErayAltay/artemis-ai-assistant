@@ -112,6 +112,15 @@ class LLMRouter:
 
         return self._run(lambda provider: provider.get_raw_response(system_prompt, user_input))
 
+    def get_structured_response(
+        self, system_prompt: str, user_input: str, schema: dict[str, Any], schema_name: str = "cevap"
+    ) -> dict[str, Any]:
+        """Şemalı tek bir JSON nesnesi ister; bulut başarısız olursa yerele düşer."""
+
+        return self._run(
+            lambda provider: provider.get_structured_response(system_prompt, user_input, schema, schema_name)
+        )
+
     def get_tool_calls(
         self, system_prompt: str, user_input: str, max_retries: int = 2
     ) -> list[dict[str, Any]]:

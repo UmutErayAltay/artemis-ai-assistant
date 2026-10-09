@@ -42,6 +42,7 @@ from core.llm_client import LLMResponseParseError
 from core.llm_types import LLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from projects.session import pending_notices, route_to_interview
 from utils.confirmation import format_confirmation_arguments
 from utils.text import AFFIRMATIVE_WORDS, is_clear_affirmative_answer
 
@@ -315,6 +316,18 @@ class VoiceAssistant:
         self._overlay.set_heard(transcript)
         self._overlay.show_thinking("Düşünüyorum…")
 
+        # Açık bir proje görüşmesi varsa cevap ona gider — komut kapısından
+        # ÖNCE: "FastAPI olsun" tek başına bir komut gibi durmaz ve kapı onu
+        # gürültü sayabilirdi (bkz. projects/session.py).
+        turn = route_to_interview(self._settings.projeler, self._llm, transcript)
+        if turn is not None:
+            reply = turn.message
+            if turn.tool_call is not None:
+                step_results = self._planner.execute_plan([turn.tool_call])
+                reply = f"{reply} {self._summarize(step_results, 1)}"
+            self._respond(self._with_notices(reply))
+            return
+
         # KOMUT KAPISI: her duyulan şey asistana yönelik değildir. Uyandırma
         # sözcüğü gürültüyle de tetiklenebiliyor ve sonrasında yakalanan
         # arka plan konuşması, tool seçiminde rastgele bir eyleme
@@ -343,7 +356,17 @@ class VoiceAssistant:
         )
 
         step_results = self._planner.execute_plan(tool_calls)
-        self._respond(self._summarize(step_results, len(tool_calls)))
+        self._respond(self._with_notices(self._summarize(step_results, len(tool_calls))))
+
+    def _with_notices(self, message: str) -> str:
+        """Arka planda biten/soru soran proje işlerini cevabın sonuna ekler.
+
+        Ses döngüsü kendiliğinden konuşmaz (uyandırma sözcüğünü bekler); bu
+        yüzden bildirimler bir sonraki cevaba eklenir.
+        """
+
+        notices = pending_notices(self._settings.projeler)
+        return " ".join([message, *notices]) if notices else message
 
     def _record_and_transcribe(self, mic: Any) -> str:
         """Konuşma bitene kadar kaydeder ve metne çevirir."""

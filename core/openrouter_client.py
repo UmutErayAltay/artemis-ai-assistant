@@ -53,6 +53,7 @@ from core.llm_client import (
     _GATE_ENGAGE,
     LLMResponseParseError,
     OllamaLLMClient,
+    parse_json_object,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,42 @@ class OpenRouterLLMClient:
         ]
         raw_text, _ = self._chat(messages)
         return raw_text
+
+    def get_structured_response(
+        self, system_prompt: str, user_input: str, schema: dict[str, Any], schema_name: str = "cevap"
+    ) -> dict[str, Any]:
+        """`OllamaLLMClient.get_structured_response`'ın OpenRouter karşılığı.
+
+        Şema `response_format.json_schema` (strict) ile gönderilir; sağlayıcı
+        desteklemezse `json_object`'e, o da olmazsa kısıtsız isteğe düşülür.
+        Strict modda her nesnenin TÜM alanları `required` ve
+        `additionalProperties: false` olmalıdır — şemayı kuran taraf bunu
+        sağlar (bkz. `projects/interview.py::RESPONSE_SCHEMA`).
+
+        Raises:
+            OpenRouterUnavailableError: Ulaşılamazsa / kota / anahtar sorunu.
+            LLMResponseParseError: Çıktı bir JSON nesnesi değilse.
+        """
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_input},
+        ]
+        strategies: list[tuple[str, dict[str, Any]]] = [
+            (
+                "json_schema",
+                {
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+                    }
+                },
+            ),
+            ("json_object", {"response_format": {"type": "json_object"}}),
+            ("none", {}),
+        ]
+        raw, _ = self._chat(messages, strategies=strategies, remember=False)
+        return parse_json_object(raw)
 
     def get_tool_calls(self, system_prompt: str, user_input: str, max_retries: int = 2) -> list[dict[str, Any]]:
         """OllamaLLMClient.get_tool_calls'ın BİREBİR aynı retry/correction döngüsü
@@ -187,7 +224,12 @@ class OpenRouterLLMClient:
         logger.info("Komut kapısı: %r -> %s", text, decision)
         return engage
 
-    def _chat(self, messages: list[dict[str, str]]) -> tuple[str, None]:
+    def _chat(
+        self,
+        messages: list[dict[str, str]],
+        strategies: list[tuple[str, dict[str, Any]]] | None = None,
+        remember: bool = True,
+    ) -> tuple[str, None]:
         """Sırayla farklı stratejiler deneyerek tek bir "tur" chat isteği atar.
 
         Denenenler (bilinen çalışanı başa alma numarası dahil — OllamaLLMClient'ın
@@ -261,9 +303,13 @@ class OpenRouterLLMClient:
 
         import requests  # lazy import: bu modül olmadan da proje import edilebilsin
 
-        strategies = self._strategies()
+        # Dışarıdan verilen stratejiler (`get_structured_response`) kendi
+        # sırasıyla denenir ve öğrenilmiş tool-call sıralamasına karışmaz.
+        explicit = strategies is not None
+        if strategies is None:
+            strategies = self._strategies()
         known = self._working_strategy_key
-        if known is not None:
+        if known is not None and not explicit:
             # KİMLİK (`key`) saklanır, POZİSYON DEĞİL: liste her çağrıda
             # yeniden sıralanıyor, yani bir pozisyon farklı çağrılarda
             # farklı stratejilere karşılık gelebilir (bkz. Ollama'daki
@@ -328,7 +374,8 @@ class OpenRouterLLMClient:
                 logger.debug("Strateji basarisiz (%s) — yanit ayristirilamadi: %s", key, exc)
                 continue
 
-            self._working_strategy_key = key
+            if remember:
+                self._working_strategy_key = key
             return raw, None
 
         raise OpenRouterUnavailableError(f"OpenRouter'a bağlanılamadı ('{self.model}'): {last_exc}")

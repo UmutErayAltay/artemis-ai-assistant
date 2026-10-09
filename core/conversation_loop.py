@@ -27,6 +27,7 @@ from core.llm_client import LLMResponseParseError
 from core.llm_types import LLMClient
 from core.planner import TaskPlanner
 from core.prompt_builder import build_system_prompt
+from projects.session import pending_notices, route_to_interview
 from utils.confirmation import format_confirmation_arguments
 from utils.text import is_clear_affirmative_answer, lower_variants
 
@@ -90,7 +91,14 @@ def run(dispatcher: ToolDispatcher, llm_client: LLMClient) -> None:
     planner = TaskPlanner(dispatcher, confirm_callback=_confirm_with_user)
     print("Artemis hazır. Çıkmak için 'çıkış' yazın.\n")
 
+    projeler = dispatcher.settings.projeler
+
     while True:
+        # Arka planda biten/soru soran proje işleri: döngü `input()`'ta
+        # beklerken söylenemez, bu yüzden her turun başında söylenir.
+        for notice in pending_notices(projeler):
+            print(f"Artemis: [proje] {notice}")
+
         user_input = input("Siz: ").strip()
         if not user_input:
             continue
@@ -101,6 +109,18 @@ def run(dispatcher: ToolDispatcher, llm_client: LLMClient) -> None:
         if lower_variants(user_input) & _EXIT_COMMANDS:
             print("Artemis: Görüşürüz.")
             break
+
+        # Açık bir proje görüşmesi varsa girdi tool seçimine DEĞİL görüşmeye
+        # gider: "FastAPI olsun" hangi soruya cevap olduğu bilinmeden
+        # anlamsızdır (bkz. projects/interview.py). Görüşme "başlat" dendiğinde
+        # bir tool çağrısı üretir; o da onaylı normal yoldan geçer.
+        turn = route_to_interview(projeler, llm_client, user_input)
+        if turn is not None:
+            print(f"Artemis: {turn.message}")
+            if turn.tool_call is not None:
+                for step in planner.execute_plan([turn.tool_call]):
+                    print(f"Artemis: {step.result.message}")
+            continue
 
         try:
             tool_calls = llm_client.get_tool_calls(system_prompt, user_input)

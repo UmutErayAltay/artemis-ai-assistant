@@ -78,6 +78,12 @@ def test_prompt_contains_tools_and_stays_compact() -> None:
     yükseltildi; bir model geri yüklenince gerçek ölçümle KESİNLEŞTİRİLMELİ
     (Faz 6, README §28+). Rastgele büyütülmedi — yalnızca ölçüm mümkün
     olana kadar çalışmayı engellememesi için geçici bir tavan.
+
+    19.000'E ÇIKIŞ (ARCHITECTURE.md §42): proje atölyesi (`proje.sor`,
+    `proje.islem`) ~800 karakter ekledi; prompt 17.754'ten ~18.550'ye
+    çıktı. Altı işlem bilerek İKİ tool'a toplandı (ayrım onay sınırı) —
+    altı ayrı tool ~3.000 karakter eklerdi. Gerçek GPU ölçümü hâlâ BORÇ:
+    bu tavan da o ölçümle kesinleşmeli.
     """
 
     prompt = build_system_prompt()
@@ -85,7 +91,7 @@ def test_prompt_contains_tools_and_stays_compact() -> None:
     assert "filesystem.create_folder" in prompt
     assert "assistant.reply" in prompt
     assert "{tool_manifest}" not in prompt
-    assert len(prompt) < 18_000, "sistem promptu beklenenden çok büyüdü (gecikme artar)"
+    assert len(prompt) < 19_000, "sistem promptu beklenenden çok büyüdü (gecikme artar)"
 
 
 def test_manifest_omits_danger_level() -> None:

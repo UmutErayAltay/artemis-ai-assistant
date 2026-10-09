@@ -26,10 +26,25 @@ from typing import Any
 
 import pytest
 
-from config.settings import Settings
+import config.settings as settings_module
+from config.settings import ProjelerSettings, Settings
 from core.dispatcher import ToolDispatcher
 from core.plugin_loader import TOOL_REGISTRY, load_plugins
 from memory.context_memory import ContextMemory
+
+
+@pytest.fixture(autouse=True)
+def _isolate_project_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Proje atölyesinin varsayılan deposunu geçici klasöre yönlendirir.
+
+    `Settings()` ile (fikstürsüz) kurulan bir test sohbet/ses döngüsünü
+    çalıştırırsa döngü her turda proje deposuna bakar; bildirimleri
+    "söylendi" diye işaretler ve süreci ölmüş işleri `yarim_kaldi` yapar.
+    Bu yönlendirme olmadan bir test turu, geliştiricinin GERÇEK proje
+    kayıtlarını değiştirebilirdi.
+    """
+
+    monkeypatch.setattr(settings_module, "_PROJELER_STATE_DIR", tmp_path / "projeler-state")
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +87,7 @@ def settings(tmp_path: Path) -> Settings:
         downloads_path=tmp_path / "Downloads",
         db_path=tmp_path / "memory.db",
         log_dir=tmp_path / "logs",
+        projeler=ProjelerSettings(root=tmp_path / "Projeler", state_dir=tmp_path / "projeler-state"),
     )
 
 

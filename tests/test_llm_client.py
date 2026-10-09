@@ -607,3 +607,72 @@ def test_unsupported_strategy_still_falls_back(monkeypatch: pytest.MonkeyPatch) 
     kullanilan.clear()
     client.get_tool_calls("sistem", "bir daha")
     assert kullanilan == ["json"]
+
+
+# --- get_structured_response (ARCHITECTURE.md §42) -------------------------
+
+_GORUSME_SEMASI = {
+    "type": "object",
+    "properties": {"durum": {"type": "string", "enum": ["soru", "hazir"]}},
+    "required": ["durum"],
+}
+
+
+def _ollama_with(monkeypatch: pytest.MonkeyPatch, replies: list[object]) -> list[dict]:
+    """Her `chat` çağrısında sıradaki cevabı veren (ya da hatayı fırlatan) sahte ollama."""
+
+    calls: list[dict] = []
+    remaining = list(replies)
+    fake_ollama = types.ModuleType("ollama")
+
+    class _FakeClient:
+        def __init__(self, timeout=None, **kwargs):
+            pass
+
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            reply = remaining.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return {"message": {"content": reply}}
+
+    fake_ollama.Client = _FakeClient
+    monkeypatch.setitem(__import__("sys").modules, "ollama", fake_ollama)
+    return calls
+
+
+def test_structured_response_sends_the_given_schema_not_the_tool_call_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`get_raw_response` tool-call şemasına kilitliydi; bu metot ÇAĞIRANIN şemasını dayatır."""
+
+    calls = _ollama_with(monkeypatch, ['{"durum": "soru"}'])
+
+    result = OllamaLLMClient(model="test").get_structured_response("sistem", "girdi", _GORUSME_SEMASI)
+
+    assert result == {"durum": "soru"}
+    assert calls[0]["format"] == _GORUSME_SEMASI
+
+
+def test_structured_response_does_not_overwrite_learned_tool_call_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Öğrenilmiş tool-call stratejisi başka bir sözleşmenin sonucuyla ezilmemeli."""
+
+    _ollama_with(monkeypatch, [RuntimeError("şema desteklenmiyor"), '{"durum": "hazir"}'])
+    client = OllamaLLMClient(model="test")
+    client._working_strategy_key = "schema"
+
+    assert client.get_structured_response("sistem", "girdi", _GORUSME_SEMASI) == {"durum": "hazir"}
+    assert client._working_strategy_key == "schema"
+
+
+def test_structured_response_tolerates_fenced_output_and_rejects_non_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ollama_with(monkeypatch, ['Tabii:\n```json\n{"durum": "soru"}\n```'])
+    assert OllamaLLMClient(model="test").get_structured_response("s", "g", _GORUSME_SEMASI) == {"durum": "soru"}
+
+    _ollama_with(monkeypatch, ['["liste", "nesne değil"]'])
+    with pytest.raises(LLMResponseParseError):
+        OllamaLLMClient(model="test").get_structured_response("s", "g", _GORUSME_SEMASI)

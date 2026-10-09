@@ -84,7 +84,7 @@ markers = [
 # package_data` yalnızca TOML anahtarının VARLIĞINA bakıyordu, dosyanın
 # gerçekten paketlendiğine değil; bu yüzden bu drift testte hiç
 # yakalanmamıştı.
-include = ["core*", "config*", "models*", "prompts*", "memory*", "plugins*", "mcp_servers*", "utils*", "voice*", "ui*"]
+include = ["core*", "config*", "models*", "prompts*", "memory*", "plugins*", "projects*", "mcp_servers*", "utils*", "voice*", "ui*"]
 
 [tool.setuptools.package-data]
 # `core/prompt_builder.py` bu dosyayı ÇALIŞMA ZAMANINDA okur; paket

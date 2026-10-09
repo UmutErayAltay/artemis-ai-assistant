@@ -87,6 +87,53 @@ class KuleSettings(BaseModel):
     timeout_seconds: float = 5.0
 
 
+_PROJELER_STATE_DIR = Path(__file__).resolve().parent.parent / "memory" / "projeler"
+"""`ProjelerSettings.state_dir` varsayılanı. Modül düzeyinde bir ad olarak
+tutulur ki testler (`tests/conftest.py`) onu geçici bir klasöre yönlendirebilsin:
+`Settings()` ile kurulan bir test, geliştiricinin GERÇEK proje deposunu okuyup
+bildirimlerini "söylendi" diye işaretlememeli."""
+
+
+class ProjelerSettings(BaseModel):
+    """Proje atölyesi ("Jarvis" modu) ayarları — bkz. `projects/` ve ARCHITECTURE.md §42.
+
+    Artemis bir projeyi sohbetle netleştirir, `spec.md` yazar ve onaydan
+    sonra kodlamayı ARKA PLANDA bir kodlayıcıya devreder. Kodlayıcı Claude
+    Code'un headless modudur (`claude -p`); ücretsiz modeller aynı CLI'ın
+    cor üzerinden çalıştırılmasıyla kullanılır (`cor claude -p --model ...`)
+    — Vault'taki `ajan.py`'nin kanıtlanmış yolu.
+
+    Attributes:
+        root: Yeni projelerin klasörlerinin açılacağı kök. Proje adı bu
+            kökün altında `utils.paths.safe_join` ile doğrulanarak birleşir.
+        state_dir: İş kayıtlarının (SQLite) ve her işin olay günlüğünün
+            tutulduğu klasör. Proje reposunun İÇİNE yazılmaz — kodlayıcının
+            commit'lerine Artemis'in kendi günlükleri karışmasın.
+        claude_command: Claude Code CLI'ının adı/yolu.
+        cor_command: cor CLI'ının adı/yolu (yalnızca ücretsiz kodlayıcı için).
+        claude_model: Claude kodlayıcısının modeli; `None` ise CLI'ın
+            kendi varsayılanı kullanılır.
+        free_model: Ücretsiz kodlayıcının OpenRouter slug'ı (TAM yazılmalı).
+        claude_budget_usd: Claude kodlayıcısının TEK bir iş için
+            harcayabileceği azami tutar (`--max-budget-usd`). Ücretsiz
+            kodlayıcıda anlamsız olduğu için gönderilmez.
+        allow_bash: Kodlayıcı Bash çalıştırabilsin mi (test koşmak için
+            gerekli). `git push` her durumda yasaktır.
+        interview_max_questions: Görüşmenin en fazla kaç soru sorabileceği;
+            sınıra gelince model elindeki bilgiyle spec üretmeye zorlanır.
+    """
+
+    root: Path = Field(default_factory=lambda: Path.home() / "Desktop" / "Projeler")
+    state_dir: Path = Field(default_factory=lambda: _PROJELER_STATE_DIR)
+    claude_command: str = "claude"
+    cor_command: str = "cor"
+    claude_model: str | None = None
+    free_model: str = "poolside/laguna-s-2.1:free"
+    claude_budget_usd: float = Field(default=5.0, gt=0)
+    allow_bash: bool = True
+    interview_max_questions: int = Field(default=6, ge=1, le=20)
+
+
 class Settings(BaseModel):
     """Artemis'in çalışması için gereken tüm ayarlar.
 
@@ -369,6 +416,9 @@ class Settings(BaseModel):
 
     # --- Kule (proje durumu paneli) ---
     kule: KuleSettings = Field(default_factory=KuleSettings)
+
+    # --- Proje atölyesi (sohbetle proje + arka planda kodlama) ---
+    projeler: ProjelerSettings = Field(default_factory=ProjelerSettings)
 
 
 SECRETS_PATH = Path(__file__).resolve().parent / "secrets.yaml"

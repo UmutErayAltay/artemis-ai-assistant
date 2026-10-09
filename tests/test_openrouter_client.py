@@ -547,3 +547,32 @@ def test_module_imports_without_requests_installed() -> None:
             sys.modules.pop("requests", None)
         else:
             sys.modules["requests"] = original
+
+
+# --- get_structured_response (ARCHITECTURE.md §42) -------------------------
+
+
+def test_structured_response_uses_named_strict_json_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    schema = {"type": "object", "properties": {"durum": {"type": "string"}}, "required": ["durum"]}
+    calls = _install_fake_post(monkeypatch, response=_FakeResponse(json_payload=_chat_payload('{"durum": "soru"}')))
+
+    result = _client().get_structured_response("sistem", "girdi", schema, "proje_gorusmesi")
+
+    assert result == {"durum": "soru"}
+    response_format = calls[0][1]["json"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"] == {"name": "proje_gorusmesi", "strict": True, "schema": schema}
+
+
+def test_structured_response_keeps_learned_tool_call_strategy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """json_schema reddedilip json_object çalışsa da tool-call yolunun öğrendiği strateji değişmez."""
+
+    _install_sequential_post(
+        monkeypatch,
+        [_FakeResponse(status_code=400), _FakeResponse(json_payload=_chat_payload('{"durum": "hazir"}'))],
+    )
+    client = _client()
+    client._working_strategy_key = "json_schema"
+
+    assert client.get_structured_response("s", "g", {"type": "object"}) == {"durum": "hazir"}
+    assert client._working_strategy_key == "json_schema"

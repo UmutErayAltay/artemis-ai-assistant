@@ -31,3 +31,6 @@ voice_models/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Proje atölyesi: iş kayıtları ve kodlayıcı günlükleri (bkz. projects/store.py)
+memory/projeler/

@@ -2844,3 +2844,104 @@ sunucu `python -m ...` ile alt süreç olarak başlatılır, `file://` üzerinde
 gerçek chromium koşar, mock yok. `tests/test_mcp_plugin.py`'deki
 `_deregister` izolasyonu burada da uygulandı — bu olmadan
 `test_prompt_builder.py`'nin 14.000 karakter sınırı flaky kırılırdı.
+
+## 42) Proje atölyesi: sohbetle proje, arka planda kodlama — "Jarvis" M1 (v3.23)
+
+Hedef: "yeni bir proje yapalım" dendiğinde Artemis projeyi KONUŞARAK
+netleştirsin, bir spec çıkarsın ve onaydan sonra kodlamayı arka planda bir
+kodlayıcıya devretsin; kullanıcı sohbete devam ederken iş bitince ya da
+kodlayıcı bir soru sorunca haber versin.
+
+```
+"yeni bir proje..." -> proje.sor(islem=yeni) -> görüşme açılır (projects/store.py)
+  sonraki girdiler   -> projects/session.py::route_to_interview -> interview.py
+                        (tool seçimine GİTMEZ; get_structured_response + RESPONSE_SCHEMA)
+  "başlat"           -> görüşme bir tool çağrısı ÜRETİR: proje.islem(islem=baslat)
+                        -> planner -> dispatcher ONAYI -> jobs.start
+  jobs.start         -> spec.md yazılır, runner AYRI süreç olarak başlar (coder.py)
+  runner.py          -> `claude -p --output-format stream-json ...` (stdin: görev)
+                        -> events.jsonl + son etkinlik + sonuç -> ProjectStore
+  her turun başı     -> session.pending_notices -> "[proje] 'x' tamamlandı ..."
+```
+
+Kodlayıcı iki kipte tek komut biçimiyle çalışır — Vault'taki `ajan.py`'nin
+Umut'un makinesinde kanıtlanmış yolu: `claude -p` (bütçe tavanı
+`--max-budget-usd`) ya da `cor claude -p --model <ücretsiz slug>`.
+
+### 42a) Tasarımı değiştiren üç ölçüm
+
+1. **`get_raw_response` "ham" değildi.** İki istemcide de `_chat`'in ilk
+   stratejisi TOOL-CALL şemasıdır; yani "ham" cevap `[{"tool": ...}]`
+   biçimine gramerle kilitliydi. Görüşmenin kendi JSON sözleşmesi bu yolla
+   fiziksel olarak üretilemezdi — §16a'daki hatanın aynı sınıfı. Çözüm:
+   protokole dördüncü metot `get_structured_response(system, user, schema,
+   name)`; çağıranın şemasını dayatır, öğrenilmiş tool-call stratejisini
+   (`_working_strategy_key`) EZMEZ. `get_raw_response` üretimde hiç
+   kullanılmıyordu; dokunulmadı.
+2. **`total_cost_usd` `--resume`'da BİRİKİMLİDİR.** Gerçek ölçüm: ilk
+   çalıştırma 0.157 $, aynı oturumun `--resume`'u 0.165 $ raporladı; ikinci
+   raporun `modelUsage` token'ları ilkini de içeriyordu (4+2 girdi, 130+5
+   çıktı), `usage` ise yalnızca kendi turunu. Bu yüzden runner maliyeti
+   TOPLAMAZ, son değeri yazar (`test_question_is_answered_on_the_same_session`).
+3. **Ücretsiz modelde CLI'ın maliyeti kurgusaldır.** `laguna-s-2.1:free`
+   ile gerçek bir iş `total_cost_usd: 0.89` raporladı; cor'un
+   `usage.jsonl`'ındaki 24 isteğin hepsi `cost: 0`. CLI bilmediği modeli
+   kendi fiyat tablosuyla hesaplıyor. Ücretsiz kodlayıcıda maliyet
+   GÖSTERİLMEZ (`describe_job`).
+
+### 42b) Prompt bütçesi: altı işlem, iki tool
+
+Sistem promptu 17.754 karakterdi, test tavanı 18.000 (yerel modelin tool
+seçme gecikmesi, §16). Altı işlem altı tool olsaydı ~3.000 karakter
+eklerdi. İşlemler `islem` alanıyla İKİ tool'a toplandı; ayrım ONAY
+sınırıdır çünkü onay tool düzeyinde uygulanır:
+
+    proje.sor    SAFE              yeni | durum | liste
+    proje.islem  CONFIRM_REQUIRED  baslat | cevapla | durdur
+
+Sonuç 18.558 karakter; tavan GEÇİCİ olarak 19.000'e çıkarıldı (gerekçe
+`tests/test_prompt_builder.py`'de). Gerçek GPU ölçümü hâlâ borç. Görüşmenin
+kendisi tool değildir — prompta hiçbir şey eklemez.
+
+### 42c) Güvenlik ve dürüstlük
+
+- Para harcayan (`baslat`, `cevapla`) ve çalışan işi kesen (`durdur`)
+  işlemler onaylıdır; onay ekranı `islem`, `ad`, `metin`/`kodlayici`'yı
+  gösterir. Görüşme "başlat"ı kendisi çalıştırmaz, tool çağrısı üretir.
+- Kodlayıcı: `--permission-mode acceptEdits`, araçlar `Read/Write/Edit/
+  Glob/Grep(/Bash)`, `Bash(git push:*)` ve `Bash(git remote:*)` her durumda
+  yasak, kurallar `prompts/kodlayici_kurallari.md` (dosyadan — Windows'ta
+  `.cmd` sarmalayıcısından çok satırlı argüman geçmez). Bash açıkken
+  kodlayıcı teknik olarak klasör dışına çıkabilir; bu bir istem kuralıyla
+  sınırlanır, sandbox değildir (`allow_bash: false` ile kapatılır, o zaman
+  test koşamaz).
+- Proje klasörü `safe_join(root, slug)` ile kurulur; Artemis'in açmadığı
+  DOLU bir klasöre kodlayıcı salınmaz.
+- "tamamlandı" yalnızca `result` olayı `is_error=false` VE çıkış kodu 0
+  ise yazılır; sonuç olayı gelmezse iş `basarisiz`. Kayıtta "çalışıyor"
+  görünen ama süreci olmayan iş `yarim_kaldi` olur (`reconcile`).
+  Durum geçişleri koşulludur: durdurulmuş bir işi geç gelen "bitti" ezemez.
+- Testler gerçek proje deposuna dokunmaz: `tests/conftest.py`
+  `_PROJELER_STATE_DIR`'i her test için `tmp_path`'e yönlendirir.
+
+### 42d) Doğrulama
+
+- 38 yeni test (`test_projects.py`, `test_project_interview.py`, istemci
+  testleri); runner testleri GERÇEK alt süreçlerle, `claude`'un yerine
+  gerçek stream-json konuşan bir betikle koşar — başarı, soru→cevap→devam
+  (aynı `session_id` ile `--resume`), çökme, bütçe hatası, süreç ağacını
+  gerçekten durdurma ve `--chat` döngüsünde fikirden bildirime uçtan uca.
+- Gerçek kodlayıcıyla iki uçtan uca iş (bulut oturumu, Linux):
+  `claude -p` 20 sn / 0,19 $ / 1 commit; `cor claude -p` (laguna, ücretsiz)
+  72 sn / 1 commit. İkisinin "testler geçiyor" iddiası ayrıca `pytest` ile
+  bağımsız olarak doğrulandı; remote eklenmemişti.
+
+### 42e) Bilinen sınırlamalar (M1)
+
+- Windows'a özgü yollar (`taskkill /T`, `ctypes` ile süreç kontrolü,
+  `claude.cmd` çözümü) gerçek makinede HENÜZ koşmadı; mantık POSIX'te
+  test edildi.
+- `--voice` yönlendirmesi bağlandı ama gerçek mikrofonla denenmedi.
+- Bildirimler yalnızca bir sonraki turda söylenir (döngü `input()`'ta
+  bekler); bildirim/ses için kendiliğinden konuşma M3'te.
+- Aynı anda tek açık görüşme. Vault bağlamı (M2) ve hibrit arama (M4) yok.
