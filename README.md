@@ -17,8 +17,9 @@ bir `DangerLevel` bildirir, bu yüzden yıkıcı işlemler (silme, kapatma, kili
 `faster-whisper`, konuşma cevabı için API anahtarı istemeyen Microsoft Edge TTS ve
 yerel Piper yedeği. Beyin ise `llm_provider: "auto"` ile çalışır: bulut modeli
 (OpenRouter) ile yerel Ollama arasında sessizce seçim yapar. Üç giriş noktası
-aynı beyni paylaşır: `--chat` (terminal), `--chat-gui` (panel: geçmiş + ayarlar)
-ve `--voice` (tepsi + overlay).
+tek uygulamada birleşir: `python main.py` tepsiyi, sesli asistanı (overlay) ve
+paneli (geçmiş, yazılı komut, Projeler, ayarlar) birlikte açar. `--chat` terminal
+sohbetidir; `--demo` LLM'siz tek örnek dispatch içindir.
 
 ## Öne çıkanlar
 
