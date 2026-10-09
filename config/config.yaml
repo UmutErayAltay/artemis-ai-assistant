@@ -322,6 +322,12 @@ mcp_servers: []
 #   free_model: "poolside/laguna-s-2.1:free"   # cor üzerinden ücretsiz kodlayıcı
 #   allow_bash: true                           # test koşabilsin; git push her durumda yasak
 #   interview_max_questions: 6
+#   # İkinci beyin (Obsidian vault) köprüsü — tanımlanmazsa KAPALI. Açıkken
+#   # görüşme Core.md tercihlerini + ilgili notları okur, iş sonucu
+#   # 300-Projects altındaki proje notuna eklenir ve receipt gönderilir.
+#   vault_path: "C:/Users/<sen>/Desktop/Projeler/Mt3Ui55OS"
+#   # vault_command: [".bulut/beyin.sh"]       # yalnız bulutta; Windows'ta boş bırak (beyin.py)
+#   vault_timeout_seconds: 20
 
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.

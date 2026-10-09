@@ -151,7 +151,10 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
   AYRI süreçtir; "tamamlandı" yalnızca `claude -p`'nin `result` olayı
   `is_error=false` ve çıkış kodu 0 ise yazılır. Görüşme `get_structured_response`
   kullanır: `get_raw_response` tool-call şemasına kilitlidir, başka bir JSON
-  sözleşmesi için KULLANILAMAZ.
+  sözleşmesi için KULLANILAMAZ. Vault köprüsü (`projects/vault.py`) opt-in'dir
+  (`projeler.vault_path`); kullanıcının vault notlarına YALNIZCA ekleme kipiyle
+  (`open("a")`) yazar, yeni notu `open("x")` ile açar — `write_text` ile var
+  olan bir notu yeniden yazmak YASAK (Obsidian'daki eşzamanlı düzenleme kaybolur).
 - `skills/` klasörü **bilinçli olarak boş** — bu artık açık bir soru
   değil, verilmiş bir karar: `core/planner.py::TaskPlanner` zaten
   tool zincirleme işini yapıyor, ayrı bir skills çerçevesi ikinci ve
