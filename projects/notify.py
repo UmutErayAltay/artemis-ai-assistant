@@ -252,6 +252,16 @@ class Notifier:
         """En az bir kanal yapılandırılmış mı?"""
         return self._telegram is not None or self._desktop is not None
 
+    @property
+    def channels(self) -> list[str]:
+        """Yapılandırılmış kanalların adları (teslim edilenler değil; bkz. `notify`)."""
+        names: list[str] = []
+        if self._telegram is not None:
+            names.append(CHANNEL_TELEGRAM)
+        if self._desktop is not None:
+            names.append(CHANNEL_DESKTOP)
+        return names
+
     def notify(self, title: str, body: str, telegram_text: str | None = None) -> list[str]:
         """Bildirimi yollar; GERÇEKTEN teslim eden kanalların adlarını döner.
 

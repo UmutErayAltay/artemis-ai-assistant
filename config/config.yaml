@@ -328,6 +328,12 @@ mcp_servers: []
 #   vault_path: "C:/Users/<sen>/Desktop/Projeler/Mt3Ui55OS"
 #   # vault_command: [".bulut/beyin.sh"]       # yalnız bulutta; Windows'ta boş bırak (beyin.py)
 #   vault_timeout_seconds: 20
+#   # Bildirimler (M3). Telegram token'ı BURAYA YAZILMAZ: yalnızca okunacağı
+#   # ortam değişkeninin adı yazılır (Windows: setx ARTEMIS_TELEGRAM_BOT_TOKEN "...").
+#   telegram_chat_id: "123456789"        # bota /start yazıp getUpdates ile öğrenilir
+#   telegram_token_env: ARTEMIS_TELEGRAM_BOT_TOKEN
+#   desktop_notify: true                 # Windows sistem bildirimi
+#   speak_notices: true                  # --voice: uyandırma beklemeden söyle
 
 # GÜVENLİK: Bu depo HERKESE AÇIKTIR ve config.yaml git ile İZLENİR — API
 # anahtarlarını KESİNLİKLE buraya yazmayın, ilk commit'te sızmış olur.

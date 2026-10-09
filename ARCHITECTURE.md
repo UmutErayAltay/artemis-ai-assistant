@@ -3051,3 +3051,55 @@ aynı adın iki tipte yeniden bağlanması) da görünmez kaldı. Düzeltme:
 ruff ve mypy sürümleri sabitlendi (yükseltme bilinçli ve tek commit'te),
 bulgular giderildi, `projects/` mypy kapsamına açıkça alındı (zaten
 `plugins/proje_plugin.py` importu üzerinden denetleniyordu).
+
+## 44) Proje atölyesi M3: haber veren Jarvis (v3.25)
+
+M1-M2'de biten bir iş, kullanıcı Artemis'e bir şey söyleyene kadar SESSİZDİ:
+bildirim yalnızca bir sonraki cevaba ekleniyordu. Kodlama dakikalar sürüyor ve
+kullanıcı o sırada bilgisayardan kalkıyor; Artemis kapalıysa hiç duyulmuyordu.
+M3 üç kanal ekler; hepsini iş biten süreç (runner) ya da ses döngüsü tetikler.
+
+- **Telegram** (`projects/notify.py::TelegramChannel`): bilgisayardan
+  uzaktayken. `projeler.telegram_chat_id` ayarlı ve token ortam değişkeninde
+  varsa. Mesaj `jobs.telegram_job_text`: durum simgesi, kanıt (commit, maliyet),
+  özetin satır yapısı, `~/…` klasör, soru ise cevap ipucu.
+- **Windows bildirimi** (`DesktopChannel`): Windows PowerShell 5.1 + WinRT
+  toast. Betik SABİTTİR (`-EncodedCommand`); başlık/gövde betiğe gömülmez,
+  ortam değişkeniyle VERİ olarak gider ve XML'e kaçışlanır — modelin ürettiği
+  bir özeti betiğe yapıştırmak kod enjeksiyonu olurdu. (Linux'ta CI'da sahte
+  çalıştırıcıyla sınandı; gerçek Windows'ta denenmedi.)
+- **Ses** (`core/voice_loop.py::_announce_notices`): `--voice` açıkken
+  uyandırma beklenirken 5 sn'de bir bitmiş işe bakılır, `brief_job` tek cümlesi
+  kendiliğinden söylenir. Artemis'in kendi cevabının geri besleme soğumasında
+  konuşulmaz; SQLite hatası ses döngüsünü öldürmez.
+
+### 44a) Token kuralları (ve bulunan açık)
+
+Token yalnızca ortam değişkeninden okunur (`telegram_token_env` config'te
+yalnızca ADIDIR): argv süreç listesinde görünür, `config.yaml` git'e ve ekran
+görüntülerine girer. URL'de durduğu için `urllib` hata metni, istek ve URL hiç
+loglanmaz; yalnızca durum kodu ve istisna TÜRÜ yazılır, `repr` maskelidir.
+İncelemede bulunan açık: runner kodlayıcıyı (`claude -p` / cor ile ücretsiz
+model) KENDİ ortamıyla başlatıyordu; Bash çalıştırabilen kodlayıcı `env` ile
+token'ı görür, ücretsiz modelde bu çıktı eğitimde kullanılabilen bir
+sağlayıcıya gider. Runner bildiriciyi kurduktan hemen sonra token değişkenini
+kendi ortamından siler (her zaman — chat id yoksa da, çünkü kullanıcı onu
+`setx` ile genel tanımlar); testte kodlayıcının ortam anahtarları kaydedilip
+değişkenin olmadığı doğrulanır.
+
+### 44b) Sesli bildirimin kesilmesi
+
+`speakable()` sesli cevabı 120 karakterde keser. Bildirim birden çok iş ya da
+cevap ipuçlu bir soru içerdiğinde sonu kesiliyordu — ve iş "söylendi" diye
+işaretlendiği için kesilen kısım bir daha hiç söylenmiyordu. Her bildirim ayrı
+`_respond` çağrısıyla ve 300 karakterlik sınırla söylenir; cevaba eklenen
+bildirimler de kısa (`brief`) biçimdedir.
+
+### 44c) Doğrulama
+
+Birim/uçtan uca testler gerçek yerel HTTP sunucusuyla (Telegram taklidi), gerçek
+runner süreciyle ve sahte kodlayıcıyla koşar; ağa çıkmaz. Ayrıca bulutta gerçek
+bir bot ve gerçek `jobs.start` → ayrık runner → sahte kodlayıcı akışıyla
+telefona bildirim ulaştığı görüldü ("Bildirim gönderildi: telegram"); işin
+ürettiği hiçbir dosyada token geçmiyordu. Açık: Windows toast'ı ve sesli
+duyuru gerçek donanımda denenmedi; Telegram'dan CEVAP vermek (iki yönlü) yok.

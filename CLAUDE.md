@@ -155,6 +155,9 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
   (`projeler.vault_path`); kullanıcının vault notlarına YALNIZCA ekleme kipiyle
   (`open("a")`) yazar, yeni notu `open("x")` ile açar — `write_text` ile var
   olan bir notu yeniden yazmak YASAK (Obsidian'daki eşzamanlı düzenleme kaybolur).
+  Bildirimler (`projects/notify.py`): Telegram token'ı YALNIZCA ortam
+  değişkeninden okunur, argv'ye/log'a/config'e yazılmaz ve runner onu okuduktan
+  sonra kendi ortamından siler — kodlayıcı Bash çalıştırır, token'ı görmemeli.
 - `skills/` klasörü **bilinçli olarak boş** — bu artık açık bir soru
   değil, verilmiş bir karar: `core/planner.py::TaskPlanner` zaten
   tool zincirleme işini yapıyor, ayrı bir skills çerçevesi ikinci ve

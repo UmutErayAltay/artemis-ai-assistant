@@ -107,9 +107,13 @@ Artemis: [proje] 'not-cli' tamamlandı (2 commit, ~0.84 $). Kodlayıcının öze
   biten/soru soran/durdurulan her iş `300-Projects/<proje>.md` notuna eklenir
   ve bir receipt gönderilir. Var olan bir nota yalnızca EKLENİR, asla yeniden
   yazılmaz. Vault yoksa ya da CLI hata verirse işler etkilenmez.
+- **Haber verir:** iş biter/soru sorar/başarısız olursa runner Windows sistem
+  bildirimi gösterir, `projeler.telegram_chat_id` ayarlıysa Telegram'dan mesaj
+  atar (token yalnızca `ARTEMIS_TELEGRAM_BOT_TOKEN` ortam değişkeninden okunur,
+  kodlayıcıya geçmez); `--voice` açıksa Artemis uyandırılmayı beklemeden söyler.
 - Gereken: Claude kodlayıcısı için `claude` CLI'ı (oturum açılmış), ücretsiz
   kodlayıcı için `cor`. Ayarlar `config.yaml::projeler` altında (proje kökü,
-  bütçe, ücretsiz model, vault). Ayrıntı: `ARCHITECTURE.md` §42-§43.
+  bütçe, ücretsiz model, vault, bildirimler). Ayrıntı: `ARCHITECTURE.md` §42-§44.
 
 ### Beyin: bulut, yerel, ya da ikisi
 

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -38,7 +39,8 @@ from pathlib import Path
 from typing import Any
 
 from models.project_models import JobStatus
-from projects.jobs import record_job_outcome
+from projects.jobs import brief_job, record_job_outcome, telegram_job_text
+from projects.notify import TELEGRAM_API_BASE, Notifier, build_notifier
 from projects.store import ProjectStore
 from projects.vault import VaultBridge
 
@@ -47,6 +49,8 @@ _STDERR_TAIL_CHARS = 600
 _VAULT_RECORDED_STATUSES = (JobStatus.TAMAMLANDI, JobStatus.BASARISIZ, JobStatus.SORU_BEKLIYOR)
 """Runner'ın vault'a yazdığı sonuçlar. `durduruldu` / `yarim_kaldi` runner'ın değil
 Artemis'in kararıdır (`jobs.stop`); runner o durumlarda yazmaz."""
+_NOTIFIED_STATUSES = (JobStatus.TAMAMLANDI, JobStatus.BASARISIZ, JobStatus.SORU_BEKLIYOR)
+"""Kullanıcıya bildirim giden sonuçlar. Durdurmayı kullanıcı kendisi yaptığı için `durduruldu` yoktur."""
 
 
 @dataclass
@@ -177,13 +181,39 @@ def count_commits(project_dir: Path) -> int | None:
         return None
 
 
-def run_job(store: ProjectStore, job_id: int, job_directory: Path, bridge: VaultBridge | None = None) -> int:
+def _notify(notifier: Notifier | None, store: ProjectStore, job_id: int) -> None:
+    """İş sonuçlandıysa kullanıcıya haber verir; sonucu `runner.log`'a (stdout) tek satır yazar.
+
+    Bildirim işin yan ürünüdür: hiçbir kanal ulaşamasa da işin durumuna dokunulmaz. Satıra yalnızca
+    kanal adları yazılır; token ya da ağ hatası ayrıntısı asla (ayrıntı `notify` günlüğündedir).
+    """
+
+    if notifier is None:
+        return
+    job = store.get_job(job_id)
+    if job is None or job.status not in _NOTIFIED_STATUSES:
+        return
+    delivered = notifier.notify(f"Artemis · {job.slug}", brief_job(job), telegram_text=telegram_job_text(job))
+    if delivered:
+        print(f"Bildirim gönderildi: {', '.join(delivered)}")
+    else:
+        print(f"Bildirim gönderilemedi (kanallar: {', '.join(notifier.channels)})")
+
+
+def run_job(
+    store: ProjectStore,
+    job_id: int,
+    job_directory: Path,
+    bridge: VaultBridge | None = None,
+    notifier: Notifier | None = None,
+) -> int:
     """İşi yürütür ve sonucu kaydeder. Çıkış kodu runner'ın kendi durumudur.
 
     Args:
         bridge: Verilirse ve iş sonuçlanırsa sonuç vault'a da yazılır. Vault
             sorunu işin durumunu ASLA değiştirmez: durum depoya vault'tan
             ÖNCE yazılır ve köprü hata fırlatmaz.
+        notifier: Verilirse iş sonuçlanınca (vault kaydından ÖNCE) kullanıcıya bildirim gider.
     """
 
     job = store.get_job(job_id)
@@ -210,7 +240,8 @@ def run_job(store: ProjectStore, job_id: int, job_directory: Path, bridge: Vault
                 errors="replace",
             )
         except OSError as exc:
-            store.finish_job(job_id, JobStatus.BASARISIZ, error=f"Kodlayıcı başlatılamadı: {exc}")
+            if store.finish_job(job_id, JobStatus.BASARISIZ, error=f"Kodlayıcı başlatılamadı: {exc}"):
+                _notify(notifier, store, job_id)
             return 1
 
         assert process.stdin is not None and process.stdout is not None
@@ -246,7 +277,10 @@ def run_job(store: ProjectStore, job_id: int, job_directory: Path, bridge: Vault
         commits=count_commits(job.project_dir),
     )
     # `written` False ise iş bu arada durdurulmuştur; o kararı `jobs.stop` kaydeder,
-    # burada ikinci (yanlış durumlu) bir vault girdisi açılmaz.
+    # burada ikinci (yanlış durumlu) bir bildirim ya da vault girdisi açılmaz.
+    # Bildirim vault'tan ÖNCE: zamana duyarlıdır, vault CLI'sı 2×zaman aşımı kadar sürebilir.
+    if written:
+        _notify(notifier, store, job_id)
     if written and bridge is not None and outcome.status in _VAULT_RECORDED_STATUSES:
         finished = store.get_job(job_id)
         if finished is not None:
@@ -284,19 +318,45 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault-path", type=Path, default=None, help="Vault klasörü; verilmezse kayıt yapılmaz")
     parser.add_argument("--vault-command", type=str, default=None, help="Vault CLI komutu (JSON metin listesi)")
     parser.add_argument("--vault-timeout", type=float, default=20.0, help="Tek vault CLI çağrısı için saniye")
+    parser.add_argument("--notify-telegram-chat-id", type=str, default=None, help="Telegram sohbet kimliği")
+    parser.add_argument(
+        "--notify-telegram-token-env",
+        type=str,
+        default="ARTEMIS_TELEGRAM_BOT_TOKEN",
+        help="Telegram token'ının OKUNDUĞU ortam değişkeninin adı (değeri komut satırına yazılmaz)",
+    )
+    parser.add_argument("--notify-desktop", action="store_true", help="Windows sistem bildirimi göster")
+    parser.add_argument("--notify-timeout", type=float, default=10.0, help="Tek bildirim için saniye")
+    parser.add_argument("--telegram-api-base", type=str, default=TELEGRAM_API_BASE, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    notifier = build_notifier(
+        telegram_chat_id=args.notify_telegram_chat_id,
+        telegram_token_env=args.notify_telegram_token_env,
+        desktop=args.notify_desktop,
+        timeout_seconds=args.notify_timeout,
+        telegram_api_base=args.telegram_api_base,
+    )
+    # TOKEN İZOLASYONU: kodlayıcı (`claude -p` / cor) runner'ın ortamını miras alır, rastgele Bash çalıştırır
+    # ve çıktısı bir model sağlayıcısına gider (ücretsiz sağlayıcılar eğitimde kullanabilir). Token'ı
+    # `build_notifier` okuduktan HEMEN sonra kendi ortamımızdan siliyoruz: bundan sonra doğan her çocuk
+    # (kodlayıcı, PowerShell toast'ı) onu görmez. Sohbet kimliği olmasa da silinir: kullanıcı değişkeni
+    # `setx` ile genel tanımlamış olabilir ve kodlayıcı yine de görmemeli.
+    os.environ.pop(args.notify_telegram_token_env, None)
+    active_notifier = notifier if notifier.enabled else None
     store = ProjectStore(args.db)
     try:
-        return run_job(store, args.job, args.job_dir, _vault_bridge_from(args))
+        return run_job(store, args.job, args.job_dir, _vault_bridge_from(args), active_notifier)
     except Exception as exc:  # noqa: BLE001 - runner ölmeden önce işi kapatmalı
         # İş "çalışıyor"da asılı kalmasın. Yığın izi runner.log'a gider
         # (stdout/stderr oraya yönlendirildi); kullanıcıya tür ve yer yeter.
         traceback.print_exc()
-        store.finish_job(
+        crashed = store.finish_job(
             args.job,
             JobStatus.BASARISIZ,
             error=f"Runner beklenmeyen bir hatayla durdu ({type(exc).__name__}); ayrıntı: {args.job_dir / 'runner.log'}",
         )
+        if crashed:  # kullanıcı çöken işi de bilmeli; zaten sonuçlanmış bir iş için ikinci bildirim yok
+            _notify(active_notifier, store, args.job)
         return 1
 
 

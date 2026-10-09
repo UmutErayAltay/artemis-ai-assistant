@@ -127,6 +127,19 @@ def runner_command(settings: ProjelerSettings, job_id: int) -> list[str]:
         "--job-dir",
         str(job_dir(settings, job_id)),
     ]
+    # Bildirim ayarları da komut satırıyla geçer (runner `Settings`'i yüklemez); vault seçeneklerinden ÖNCE
+    # eklenir ki onlar isteğe bağlı sonek kalsın. Telegram TOKEN'ı ASLA
+    # argv'ye girmez: süreç listesi herkese görünür. Yalnızca ortam değişkeninin ADI geçer; değeri runner
+    # `spawn_runner`'ın aktardığı ortamdan okur. Ad, sohbet kimliği olmasa da HER ZAMAN geçer: runner o
+    # değişkeni kodlayıcıdan gizlemek için ortamından siler (bkz. `runner.main`, TOKEN İZOLASYONU).
+    command += ["--notify-telegram-token-env", settings.telegram_token_env]
+    chat_id = (settings.telegram_chat_id or "").strip()
+    if chat_id:
+        command += ["--notify-telegram-chat-id", chat_id]
+    if settings.desktop_notify:
+        command += ["--notify-desktop"]
+    if chat_id or settings.desktop_notify:
+        command += ["--notify-timeout", str(settings.notify_timeout_seconds)]
     if settings.vault_path is not None:
         command += ["--vault-path", str(settings.vault_path), "--vault-timeout", str(settings.vault_timeout_seconds)]
         if settings.vault_command:

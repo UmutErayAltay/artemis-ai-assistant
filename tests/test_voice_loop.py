@@ -1141,3 +1141,59 @@ def test_database_trouble_is_logged_and_does_not_kill_the_wait(
     assert tts.spoken == []
     assert any("Proje bildirimleri okunamadı" in record.getMessage() for record in caplog.records)
     assert _announced_flags(store) == [0], "okunamayan bildirim kaybolmaz; sonra yine denenir"
+
+
+def test_question_notice_keeps_its_answer_hint_when_spoken(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bildirim 120 karakterde kesilirse "Cevap için ..." ipucu yutulur ve iş zaten 'söylendi' sayılır."""
+
+    settings = _notice_settings(tmp_path)
+    store = jobs.open_store(settings.projeler)
+    job = store.create_job(
+        slug="not-defteri", project_dir=tmp_path / "p", coder="claude", command=["a"], prompt="p", session_id="s"
+    )
+    question = "Veri katmanı için Postgres mi SQLite mı kullanalım, yoksa dosya tabanlı bir çözüm mü olsun istersin?"
+    assert store.finish_job(job.id, JobStatus.SORU_BEKLIYOR, question=question)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=3))
+
+    [spoken] = tts.spoken
+    assert len(spoken) > 120, "test, eski sınırın aşıldığı bir metinle çalışmalı"
+    assert spoken.startswith("Proje haberi: not-defteri kodlayıcısı soru soruyor: Veri katmanı")
+    assert spoken.endswith("Cevap için not-defteri için cevabım: ... de.")
+
+
+def test_two_finished_jobs_are_spoken_as_two_complete_notices(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _notice_settings(tmp_path)
+    store = _finished_job_store(settings)
+    second = store.create_job(
+        slug="ikinci", project_dir=tmp_path / "p", coder="claude", command=["a"], prompt="p", session_id="s2"
+    )
+    assert store.finish_job(second.id, JobStatus.BASARISIZ, error="Bütçe aşıldı. " + "Ayrıntı " * 20)
+    assistant, _, tts, clock = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    assistant._sleep_until_woken(_ClockedMicrophone(clock, assistant, trigger_after=3))
+
+    assert len(tts.spoken) == 2
+    assert tts.spoken[0] == _SPOKEN_NOTICE
+    assert tts.spoken[1].startswith("ikinci başarısız oldu: Bütçe aşıldı.")
+    assert not tts.spoken[1].startswith("Proje haberi"), "önek yalnızca ilk bildirimde"
+    assert not tts.spoken[1].endswith("…")
+
+
+def test_notices_appended_to_an_answer_are_brief_and_not_cut(
+    dispatcher: ToolDispatcher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _notice_settings(tmp_path, speak_notices=False)
+    _finished_job_store(settings)
+    assistant, _, tts, _ = _notice_assistant(dispatcher, settings, monkeypatch)
+
+    assistant._respond_with_notices("Klasör oluşturuldu. " + "Uzun " * 25)
+
+    [spoken] = tts.spoken
+    assert len(spoken) > 120 and spoken.endswith("x tamamlandı: M1 bitti.")
+    assert "Klasör:" not in spoken

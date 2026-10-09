@@ -63,11 +63,15 @@ ucuzdur; her ses bloğunda (saniyede ~30) bakmak diske boşuna saniyede onlarca 
 _WINDOWS_PATH_PATTERN = re.compile(r"[A-Za-z]:\\[^\s'\"]+")
 _URL_PATTERN = re.compile(r"https?://[^\s'\"]+")
 _MAX_SPOKEN_LENGTH = 120
+_NOTICE_SPOKEN_LIMIT = 300
+"""Proje bildirimi için `speakable` kesme sınırı. `brief_job` metni tasarım gereği ~250 karakteri aşmaz;
+120'de kesmek "Cevap için ..." ipucunu yutardı ve kesilen bildirim ZATEN "söylendi" diye işaretlendiğinden
+bir daha duyulmazdı."""
 
 _SPEAKABLE_NOISE = re.compile(r"[''\"]")
 
 
-def speakable(message: str) -> str:
+def speakable(message: str, limit: int = _MAX_SPOKEN_LENGTH) -> str:
     """Bir tool mesajını SESLİ OKUNMAYA uygun, kısa bir biçime indirger.
 
     Tool mesajları terminal için yazılmıştı ve tam yol/tam URL içeriyor:
@@ -85,8 +89,8 @@ def speakable(message: str) -> str:
     Yapılan üç şey:
       1. Windows yolları son bileşene indirilir (`...\\Orbit` -> `Orbit`).
       2. URL'ler yalnızca alan adına indirilir; `www.` ve yol/sorgu atılır.
-      3. Tırnaklar temizlenir (sesli okumada anlamsız) ve sonuç çok
-         uzunsa sözcük sınırından kırpılır.
+      3. Tırnaklar temizlenir (sesli okumada anlamsız) ve sonuç `limit`'ten
+         uzunsa sözcük sınırından kırpılır (varsayılan 120).
 
     Tam mesaj KAYBOLMAZ: log'a olduğu gibi yazılır (bkz. `_respond`).
     """
@@ -102,10 +106,10 @@ def speakable(message: str) -> str:
     text = _WINDOWS_PATH_PATTERN.sub(_shorten_path, text)
     text = _SPEAKABLE_NOISE.sub("", text).strip()
 
-    if len(text) <= _MAX_SPOKEN_LENGTH:
+    if len(text) <= limit:
         return text
 
-    clipped = text[:_MAX_SPOKEN_LENGTH].rsplit(" ", 1)[0]
+    clipped = text[:limit].rsplit(" ", 1)[0]
     return f"{clipped}…"
 
 
@@ -321,8 +325,11 @@ class VoiceAssistant:
         except (sqlite3.Error, OSError) as exc:
             logger.warning("Proje bildirimleri okunamadı; ses döngüsü devam ediyor: %s", exc)
             return
-        if notices:
-            self._respond("Proje haberi: " + " ".join(notices))
+        # Her bildirim KENDİ cümlesidir: tek `_respond`'da birleştirmek sınırı toplam metne uygular ve
+        # sonraki işleri keserdi (kesilen iş zaten "söylendi" işaretli, kaybolur).
+        for index, notice in enumerate(notices):
+            prefix = "Proje haberi: " if index == 0 else ""
+            self._respond(prefix + notice, limit=_NOTICE_SPOKEN_LIMIT)
 
     def _disable_wake_word(self, exc: Exception) -> None:
         """Uyandırma sözcüğünü kalıcı olarak kapatır ve kullanıcıyı bilgilendirir."""
@@ -368,7 +375,7 @@ class VoiceAssistant:
             if turn.tool_call is not None:
                 step_results = self._planner.execute_plan([turn.tool_call])
                 reply = f"{reply} {self._summarize(step_results, 1)}"
-            self._respond(self._with_notices(reply))
+            self._respond_with_notices(reply)
             return
 
         # KOMUT KAPISI: her duyulan şey asistana yönelik değildir. Uyandırma
@@ -399,7 +406,13 @@ class VoiceAssistant:
         )
 
         step_results = self._planner.execute_plan(tool_calls)
-        self._respond(self._with_notices(self._summarize(step_results, len(tool_calls))))
+        self._respond_with_notices(self._summarize(step_results, len(tool_calls)))
+
+    def _respond_with_notices(self, message: str) -> None:
+        """Cevabı söyler; bildirim eklendiyse kesme sınırını bildirim boyuna çıkarır (bkz. `_NOTICE_SPOKEN_LIMIT`)."""
+
+        text = self._with_notices(message)
+        self._respond(text, limit=_NOTICE_SPOKEN_LIMIT if text != message else _MAX_SPOKEN_LENGTH)
 
     def _with_notices(self, message: str) -> str:
         """Arka planda biten/soru soran proje işlerini cevabın sonuna ekler.
@@ -409,7 +422,9 @@ class VoiceAssistant:
         (`speak_notices` kapalıysa ya da soğuma süresine denk gelenler) ve bir sonraki cevaba eklenir.
         """
 
-        notices = pending_notices(self._settings.projeler)
+        # Kısa kip: sesli okunacak metinde tam yol ve uzun özet olmaz (tam `describe_job` metni 120'de
+        # kesilirdi); ayrıntı chat/Telegram'dadır.
+        notices = pending_notices(self._settings.projeler, brief=True)
         return " ".join([message, *notices]) if notices else message
 
     def _record_and_transcribe(self, mic: Any) -> str:
@@ -558,7 +573,7 @@ class VoiceAssistant:
 
         return f"{total} işlemden {successful} tanesini tamamladım; kalanında sorun oldu."
 
-    def _respond(self, message: str, error: bool = False) -> None:
+    def _respond(self, message: str, error: bool = False, limit: int = _MAX_SPOKEN_LENGTH) -> None:
         """Cevabı ekranda gösterir, sesli okur ve pencereyi kapatır.
 
         Kullanıcıya giden metin `speakable()` ile kısaltılır: tool
@@ -567,7 +582,7 @@ class VoiceAssistant:
         mesaj kaybolmaz — log'a olduğu gibi yazılır.
         """
 
-        spoken = speakable(message)
+        spoken = speakable(message, limit)
         if spoken != message:
             logger.info("Cevap (tam): %s", message)
 
