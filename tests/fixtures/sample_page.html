@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Artemis Test Sayfası</title>
+  </head>
+  <body>
+    <!--
+      `mcp_servers/browser_automation_server.py` testlerinin gerçek bir
+      hedefi. Statik, ağ gerektirmeyen, `file://` üzerinden açılabilen bir
+      sayfa: yapay gecikmeler de YOK, yani testler deterministik.
+
+      Sözleşme (testler bu ID'lere bağlıdır):
+        #name       -> metin alır (`fill`), #greet düğmesine gönderilir
+        #greet      -> tıklanır; #greeting içine selam yazar
+        #greeting   -> `read_text` ile okunur
+        #status     -> her zaman "hazir"; `wait_for` hedefi olabilir
+        #hidden-note -> `display:none`; görünürlük kontrolleri için
+    -->
+    <h1 id="title">Test Sayfası</h1>
+    <input id="name" type="text" placeholder="adınız" />
+    <button id="greet" type="button">Selamla</button>
+    <p id="greeting"></p>
+    <p id="status">hazir</p>
+    <p id="hidden-note" style="display: none">gizli</p>
+
+    <script>
+      document.getElementById("greet").addEventListener("click", function () {
+        var name = document.getElementById("name").value;
+        document.getElementById("greeting").textContent = "Merhaba " + name + "!";
+      });
+    </script>
+  </body>
+</html>

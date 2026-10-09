@@ -26,7 +26,10 @@ hissettirmezdi.
 
 from __future__ import annotations
 
-from PyQt6.QtGui import QColor
+import base64
+
+from PyQt6.QtCore import QBuffer, QByteArray, QPointF, Qt
+from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 
 # --- Zemin ----------------------------------------------------------------
 BG_BASE = QColor(18, 18, 24)  # en dış zemin (overlay panelinin alt durağı)
@@ -72,6 +75,53 @@ def _rgba(color: QColor, alpha: int | None = None) -> str:
     return f"rgba({color.red()}, {color.green()}, {color.blue()}, {a / 255:.3f})"
 
 
+def _tick_data_uri() -> str:
+    """Beyaz onay tikini `data:image/png;base64,…` olarak döndürür.
+
+    NEDEN KODDA ÇİZİLİYOR: Qt stilleri (QSS) `QCheckBox::indicator` için
+    metin/dot karakteri basamaz, yalnızca `image: url(…)` kabul eder.
+    Harici bir `.png` eklemek yerine PNG burada QPainter ile ÜRETİLİR:
+    böylece depoya yeni bir dosya girmiyor, tik paletin `ACCENT_BLUE`
+    dolgusuyla tek vuruşta değişiyor ve QSS tek bir kaynakta kalıyor.
+
+    ÖLÇÜM (`scripts/screenshot_panel.py` + 64 px gösterge denemesi):
+    gösterge 16 px. `16/1` (16 px, dpr 1) doğru ölçekte; `32/2` aynı
+    görünür boyutu verir ama QSS görüntüyü mantıksal 16 px'e DÖNDÜRÜP
+    en-boy oranını KIRPARAK soluk, bulanık bir tik bırakır. Bu yüzden
+    küçük ve iki katına çıkarmadan çizilir.
+    """
+
+    size, dpr = 16, 1
+    image = QImage(size, size, QImage.Format.Format_ARGB32)
+    image.setDevicePixelRatio(dpr)
+    image.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(255, 255, 255), 2.0 * dpr)  # beyaz, dolgunun üstünde okunur
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    scale = size / 16.0
+    tick = QPainterPath()
+    tick.moveTo(QPointF(3.4 * scale, 8.4 * scale))
+    tick.lineTo(QPointF(6.6 * scale, 11.6 * scale))
+    tick.lineTo(QPointF(12.6 * scale, 4.8 * scale))
+    painter.drawPath(tick)
+    painter.end()
+
+    # `QBuffer` YAZDIĞI `QByteArray`'a ham işaretçi tutar; burada geçici
+    # bir `QByteArray()` verilirse Python onu toplayıp tamponu BOŞ
+    # göstergeye bırakır ve segfault olur. Yerel değişkenle yaşam
+    # süresi uzatılır.
+    payload = QByteArray()
+    buffer = QBuffer(payload)
+    buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+    image.save(buffer, "PNG")
+    buffer.close()
+    return "data:image/png;base64," + base64.b64encode(bytes(payload)).decode("ascii")
+
+
 def stylesheet() -> str:
     """Standart QWidget tabanlı pencereler (sohbet, ayarlar) için ortak QSS.
 
@@ -94,12 +144,24 @@ def stylesheet() -> str:
         font-weight: 600;
         color: {_rgba(TEXT_PRIMARY)};
     }}
+    QLabel[role="heading"] {{
+        font-size: 17px;
+        font-weight: 600;
+        color: {_rgba(TEXT_PRIMARY)};
+    }}
+    QLabel[role="status"] {{
+        color: {_rgba(TEXT_PRIMARY)};
+        font-weight: 600;
+    }}
     QLabel[role="subtitle"] {{
         color: {_rgba(TEXT_SECONDARY)};
     }}
     QLabel[role="hint"] {{
-        color: {_rgba(TEXT_MUTED)};
-        font-size: 11px;
+        color: {_rgba(TEXT_SECONDARY)};
+        font-size: 12px;
+    }}
+    QLabel[role="dot"] {{
+        border-radius: 4px;
     }}
     QScrollArea, QAbstractScrollArea {{
         background: transparent;
@@ -167,13 +229,56 @@ def stylesheet() -> str:
         border-radius: 4px;
         background: {_rgba(BG_ELEVATED)};
     }}
+    QCheckBox::indicator:hover {{
+        border-color: {_rgba(ACCENT_BLUE, 200)};
+    }}
+    QCheckBox::indicator:focus {{
+        border-color: {_rgba(ACCENT_BLUE, 200)};
+    }}
     QCheckBox::indicator:checked {{
         background: {_rgba(ACCENT_BLUE)};
         border-color: {_rgba(ACCENT_BLUE)};
+        image: url({_tick_data_uri()});
+    }}
+    QCheckBox:disabled {{
+        color: {_rgba(TEXT_MUTED)};
+    }}
+    QCheckBox::indicator:disabled {{
+        background: {_rgba(BG_PANEL)};
+        border-color: {_rgba(BORDER)};
+    }}
+    QCheckBox::indicator:checked:disabled {{
+        background: {_rgba(BG_PANEL)};
+        border-color: {_rgba(BORDER)};
     }}
     QListWidget {{
         background: transparent;
         border: none;
+    }}
+    QTabWidget::pane {{
+        border: 1px solid {_rgba(BORDER)};
+        border-radius: 10px;
+        top: -1px;
+    }}
+    QTabBar::tab {{
+        background: transparent;
+        color: {_rgba(TEXT_SECONDARY)};
+        border: 1px solid transparent;
+        border-top-left-radius: 8px;
+        border-top-right-radius: 8px;
+        padding: 8px 20px;
+    }}
+    QTabBar::tab:selected {{
+        background: {_rgba(BG_PANEL)};
+        color: {_rgba(TEXT_PRIMARY)};
+        border-color: {_rgba(BORDER)};
+    }}
+    QTabBar::tab:hover:!selected {{
+        color: {_rgba(TEXT_PRIMARY)};
+    }}
+    QTabBar::tab:focus {{
+        color: {_rgba(TEXT_PRIMARY)};
+        border-color: {_rgba(ACCENT_BLUE, 180)};
     }}
     QToolTip {{
         background-color: {_rgba(BG_ELEVATED)};

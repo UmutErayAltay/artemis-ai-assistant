@@ -8,7 +8,7 @@ döngüsü (Whisper STT -> ... -> Piper/pyttsx3 TTS) eklenecektir;
 Kullanım:
     python main.py                # tek seferlik demo dispatch (LLM'siz)
     python main.py --chat          # gerçek sohbet döngüsü (terminal)
-    python main.py --chat-gui      # aynı sohbet döngüsü, pencereli (ui/chat_window.py)
+    python main.py --chat-gui      # Artemis paneli: geçmiş + ayarlar (ui/panel.py)
     python main.py --voice         # sesli asistan: "Artemis" deyince ekrana gelir
     python main.py --settings      # ayarlar penceresini tek başına açar
     python main.py --stop-ollama   # RAM temizliği: yetim ollama süreçlerini kapatır
@@ -75,86 +75,115 @@ def _start_llm_session(settings: Settings) -> tuple[OllamaServerManager | None, 
     güncellemeyi unutmak kolaydı.
 
     ÜÇ DALLI YAPI NEDEN VAR (bkz. config/config.yaml'daki ayar bloğu):
-        * "local": bugünkü davranışın TAMAMEN aynısı — Ollama ayağa kalkar,
-          model seçtirilir. Tek fark: dönen tip `LLMClient` olur.
+        * "local": sunucu AÇILIŞTA ayağa kalkar, model seçtirilir.
+          Dönen tip `LLMClient` olur.
         * "cloud": Ollama'ya hiç dokunulmaz, sunucu bile başlatılmaz.
           Kullanıcı "yalnızca bulut" dediyse sessizce yerele düşmek
           tercihini çiğnemek olurdu; yönlendirici de aynı sözü veriyor.
-        * "auto": İKİSİ de kurulur ve `LLMRouter` seçimi yapar. Buradaki
-          "bilgisayarı kastırmama" vaadi, modelin BİELLEĞİNDE değil
-          YÜKLENMESİNDEDİR: Ollama ağırlıkları ilk gerçek `chat()`
-          çağrısında VRAM/RAM'e alınır (bkz. `core/ollama_manager.py`), oysa
-          bu fonksiyon yalnızca `ensure_running()` + model SEÇİMİ yapar.
-          Dolayısıyla OpenRouter çalıştığı sürece yerel model hiç
-          yüklenmez — ama sunucu başlatılır ve menü sorulur. Bu kabul
-          bilinçlidir: menü bir saniyelik konsol etkileşimidir (bellek
-          maliyeti yok) ve `--voice` gibi KONSOLSUZ bir yolda, ilk
-          gerçek konuşmada gecikmeli bir `input()` çağrısı yapmak işi
-          kilitlerdi. Yönlendiricinin `local_factory`'si zaten lazy'dir:
-          bulut bir kez bile olsa yanıt verirse yerel istemci hiç kurulmaz.
+        * "auto": AÇILIŞTA OLLAMA'YA HİÇ DOKUNULMAZ — sunucu başlatılmaz,
+          model seçtirilmez, `OllamaLLMClient` kurulmaz. Her şey
+          yönlendiricinin tembel `local_factory`'sine sığınır: ilk gerçek
+          istekte önce bulut (OpenRouter) denenir ve çalışıyorsa yerel
+          sağlayıcıya hiç girilmez. Bulut başarısız olduğunda (anahtar yok,
+          ağ yok, 429/5xx, soğuma) O ZAMAN — ve yalnızca o zaman — sunucu
+          `ensure_running()` ile başlatılır; 15 saniyelik bekleme de sadece
+          bu yedek yolda yaşar. (Eskiden bu, bulut HİÇ denenmeden
+          açılışta oluyordu: kullanıcı her açılışta yerel sunucuyu
+          bekletti, sonra buluta düştü.)
+
+    "auto"da MODEL SEÇİMİ NEDEN SORULMUYOR: menü `input()` çağırır, yedek
+    yol ise ilk konuşmada — `--voice` gibi KONSOLSUZ bir yolda bile —
+    tetiklenebilir; kullanıcı görmediği bir konsol istemine cevap vermek
+    zorunda kalır ve asistan kilitlenir. Bu yüzden yedek yol
+    `config.yaml::ollama_model` değerini kullanır; modeli değiştirmek
+    isteyen kullanıcı config'i düzenler ya da `llm_provider: "local"`
+    seçip başlangıçtaki menüyü kullanır.
+
+    Yedek yolda sunucu hiç ayağa kalkamazsa hata çağırana yükselir:
+    bulut zaten denendi ve işe yaramadı, sessizce "başarılı" bir cevap
+    üretmek dürüst olmazdı. Hata `ConnectionError` olarak yükseltilir ki
+    dolaşım döngüleri (bkz. `core/conversation_loop.py`,
+    `core/voice_loop.py`) onu yakalayıp Türkçe bir mesaj göstersin.
 
     Returns:
-        (sunucu_yöneticisi, istemci) çifti; Ollama'nın HİÇ kullanılamadığı
-        ve mod "cloud" değilse `None` (sebep zaten kullanıcıya
-        yazdırılmıştır). Sunucu yöneticisi yalnızca "cloud" modunda `None`
-        olabilir — bu yüzden çağıran taraf `stop_if_we_started_it()`
-        çağrılarını `server_manager is not None` ile korumak ZORUNDADIR
-        (aksi halde "bulut modundayken" AttributeError ile çökeriz).
-        Sunucu yöneticisi DÖNDÜRÜLÜR çünkü kapatma sorumluluğu çağırana
-        aittir: yalnızca çağıran, döngünün ne zaman bittiğini bilir.
+        (sunucu_yöneticisi, istemci) çifti. Sunucu yöneticisi yalnızca
+        "cloud" modunda `None` olabilir — bu yüzden çağıran taraf
+        `stop_if_we_started_it()` çağrılarını `server_manager is not None`
+        ile korumak ZORUNDADIR (aksi halde "bulut modundayken"
+        AttributeError ile çökeriz). "auto" modunda yönetici açılışta BOŞ
+        bir nesne olarak döner (`ensure_running` hiç çağrılmaz); tembel
+        fabrika aynı ÖRNEĞE yazar, böylece çıkışta kapatılan sunucu yine
+        yalnızca bizim başlattığımız sunucudur.
     """
+
+    def _cloud_client() -> LLMClient:
+        """Bulut istemcisi. Anahtar constructor'da DOĞRULANMAZ; eksik anahtar
+        yalnızca gerçek bir çağrıda hataya dönüşür (bkz.
+        OpenRouterLLMClient.__init__). Bu, "auto" modda buluttan sessizce
+        yerele düşmeyi mümkün kılan şeydir."""
+        return OpenRouterLLMClient(
+            model=settings.openrouter_model,
+            api_key=get_openrouter_api_key(),
+            timeout_seconds=settings.openrouter_timeout_seconds,
+        )
 
     if settings.llm_provider == "cloud":
         # Ollama yoluna hiç girmiyoruz: sunucu yöneticisi kurulmaz, model
-        # seçtirilmez. Anahtar yoksa burada UYARMIYORUZ — istemci eksik
-        # anahtarla kurulabilir (bkz. OpenRouterLLMClient.__init__) ve
-        # hata ancak gerçek bir çağrıda ortaya çıkar; bu, "auto" modda
-        # buluttan sessizce yerele düşmeyi mümkün kılan şeydir.
-        client = OpenRouterLLMClient(
-            model=settings.openrouter_model,
-            api_key=get_openrouter_api_key(),
-            timeout_seconds=settings.openrouter_timeout_seconds,
-        )
-        return None, client
+        # seçtirilmez.
+        return None, _cloud_client()
 
     server_manager = OllamaServerManager()
-    try:
-        server_manager.ensure_running()
-        selected_model = prompt_user_to_select_model(list_installed_models(), fallback_model=settings.ollama_model)
-    except OllamaUnavailableError as exc:
-        # "auto" modda bulut HENÜZ denenmedi, yani yalnızca bu iki şey
-        # kurtarır: kullanıcı anahtarı tanımlamamıştır ya da OpenRouter'a
-        # ulaşılamıyor. Kullanıcıya ne yapacağını SÖYMEK yerine buluta
-        # geçmek daha dürüst: sessizce açılan bir yol, görünmeyen bir
-        # ağ isteği demektir (API anahtarı varsa).
-        if settings.llm_provider == "cloud":
-            print(f"Artemis başlatılamadı: {exc}")
-            return None
-        logger.warning("Yerel Ollama kullanılamıyor (%s); bulut LLM denenecek.", exc)
-        client = OpenRouterLLMClient(
-            model=settings.openrouter_model,
-            api_key=get_openrouter_api_key(),
-            timeout_seconds=settings.openrouter_timeout_seconds,
-        )
-        return None, client
-
-    local_client = OllamaLLMClient(
-        model=selected_model,
-        use_native_tool_calling=settings.use_native_tool_calling,
-        keep_alive=settings.ollama_keep_alive,
-        timeout_seconds=settings.ollama_timeout_seconds,
-    )
 
     if settings.llm_provider == "local":
-        return server_manager, local_client
+        # DEĞİŞMEYEN DAVRANIŞ: sunucu burada, açılışta kurulur.
+        try:
+            server_manager.ensure_running()
+            selected_model = prompt_user_to_select_model(
+                list_installed_models(), fallback_model=settings.ollama_model
+            )
+        except OllamaUnavailableError as exc:
+            # Kullanıcı "yalnızca yerel" dediyse bile burada buluta
+            # düşülür: `llm_client` modülü zaten aynı sözü veriyordu ve
+            # eski davranış buydu.
+            logger.warning("Yerel Ollama kullanılamıyor (%s); bulut LLM denenecek.", exc)
+            return None, _cloud_client()
+
+        return server_manager, OllamaLLMClient(
+            model=selected_model,
+            use_native_tool_calling=settings.use_native_tool_calling,
+            keep_alive=settings.ollama_keep_alive,
+            timeout_seconds=settings.ollama_timeout_seconds,
+        )
+
+    def _lazy_local_client() -> LLMClient:
+        """Yedek yol: yalnızca bulut bu istekte başarısız olduğunda çağrılır.
+
+        `ensure_running()` sunucu zaten ayaktaysa dokunmaz, kapalıysa arka
+        planda başlatıp hazır olana kadar bekler (bkz.
+        `core/ollama_manager.py`) — bu bekleme artık yalnızca yedeğe
+        düşülen isteği geciktirir, uygulamanın AÇILIŞINI değil.
+
+        Sunucu hiç ayağa kalkamazsa hata `ConnectionError` OLARAK
+        yükseltilir: dolaşım döngüleri (`core/conversation_loop.py`,
+        `core/voice_loop.py`) bu türü zaten yakalayıp kullanıcıya Türkçe
+        bir mesaj gösteriyor; `OllamaUnavailableError` sızdırılsa ham bir
+        traceback basılırdı. Sebep (`from exc`) korunur, hata yutulmaz.
+        """
+        try:
+            server_manager.ensure_running()
+        except OllamaUnavailableError as exc:
+            raise ConnectionError(f"Yerel Ollama kullanılamıyor: {exc}") from exc
+
+        return OllamaLLMClient(
+            model=settings.ollama_model,
+            use_native_tool_calling=settings.use_native_tool_calling,
+            keep_alive=settings.ollama_keep_alive,
+            timeout_seconds=settings.ollama_timeout_seconds,
+        )
 
     router = LLMRouter(
-        cloud_factory=lambda: OpenRouterLLMClient(
-            model=settings.openrouter_model,
-            api_key=get_openrouter_api_key(),
-            timeout_seconds=settings.openrouter_timeout_seconds,
-        ),
-        local_factory=lambda: local_client,
+        cloud_factory=_cloud_client,
+        local_factory=_lazy_local_client,
         mode=settings.llm_provider,
     )
     return server_manager, router
@@ -192,6 +221,11 @@ def main_chat() -> None:
     başlattığınız bir sunucuya dokunmaz). Hangi modeli kullanacağınızı
     da `config.yaml`'a yazmanıza gerek yok; kurulu modeller listelenir,
     numarayla seçersiniz.
+
+    "auto" modunda bu ikisi de YEDEK YOLDA olur: açılışta sunucu
+    başlatılmaz, ilk istekte bulut (OpenRouter) denenir, o da olmazsa
+    yerel sunucu başlatılır ve model `config.yaml::ollama_model`'den
+    gelir (menü yalnızca `llm_provider: "local"` modunda sorulur).
 
     Kapanış sağlamlığı: Ctrl+C (SIGINT) ve SIGTERM için de sunucu
     temizliği tetiklenir. NOT: bir IDE'nin (VS Code'un "Stop" düğmesi
@@ -239,20 +273,25 @@ def main_chat() -> None:
 
 
 def main_chat_gui() -> None:
-    """`python main.py --chat-gui`: aynı sohbet döngüsünü pencereli açar.
+    """`python main.py --chat-gui`: Artemis panelini açar (geçmiş + ayarlar).
 
-    `main_chat()` ile AYNI beyin hazırlığından (`_start_llm_session`)
-    geçer — LLM tarafı, kısayol tuşu, provider seçimi hiçbiri farklı
-    değil; farkı yalnızca terminalin yerine `ui/chat_window.py::
-    ChatWindow`'un geçmesidir. `--chat` KALDIRILMADI, ikisi de kalıcı
-    ve paralel giriş noktalarıdır (bkz. `core/conversation_loop.py`nin
-    kendi "iki yol da kalıcı" notu — buradaki gerekçe birebir aynı:
-    bazı ortamlarda GUI yoktur/istenmez).
+    Artık mesaj YAZMA penceresi değildir: panel sohbet geçmişini okur,
+    ayarları gösterir ve asistanın durumunu bildirir. Konuşmanın aracı
+    `--chat` (terminal) ve `--voice`'dur; panel yalnızca bakmak içindir.
+
+    `ui/chat_window.py::ChatWindow` SİLİNMEDİ — modül, `QThread`'li
+    döngüsü ve onay köprüsüyle birlikte duruyor ve `tests/
+    test_ui_chat_window.py` ona bağlı; yalnızca bu giriş noktası artık
+    onu açmıyor. Geri bağlamak isteyen tek satırlık iştir.
+
+    LLM oturumu (`_start_llm_session`) yine kurulur: durum şeridi
+    çalışan sağlayıcının adını gerçekten yazabilsin diye. Panel bu
+    istemciyi KULLANMAZ; sadece adını okur.
     """
 
     from PyQt6.QtWidgets import QApplication
 
-    from ui.chat_window import ChatWindow
+    from ui.panel import show_panel
 
     dispatcher = bootstrap()
 
@@ -262,8 +301,7 @@ def main_chat_gui() -> None:
     server_manager, llm_client = session
 
     app = QApplication(sys.argv)
-    window = ChatWindow(dispatcher, llm_client)
-    window.show()
+    show_panel(dispatcher.settings, llm_client)
 
     try:
         sys.exit(app.exec())
@@ -331,6 +369,7 @@ def main_voice() -> None:
     from core.voice_loop import VoiceAssistant
     from ui.hotkey import GlobalHotkey, HotkeyParseError
     from ui.overlay import ArtemisOverlay
+    from ui.panel import show_panel
     from ui.settings_window import show_settings
     from ui.tray import ArtemisTray
 
@@ -371,6 +410,11 @@ def main_voice() -> None:
         on_quit=app.quit,
         hotkey_text=hotkey_text if hotkey else "",
         on_settings=show_settings,
+        # Panel, `--chat-gui`'nin açtığı AYNI pencere: sesli modda da
+        # geçmiş + ayarlar tepsi menüsünden bir tıkla erişilir. `functools
+        # .partial` gerekir çünkü `show_panel` ayar + istemci ister, menü
+        # geri çağırması ise ek parametresizdir.
+        on_panel=lambda: show_panel(settings, llm_client),
     )
     tray.show()
 
@@ -425,7 +469,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--chat-gui",
         action="store_true",
         dest="chat_gui",
-        help="Aynı sohbet döngüsü, pencereli (ui/chat_window.py).",
+        help="Artemis paneli: sohbet geçmişi + ayarlar (ui/panel.py).",
     )
     mod.add_argument("--voice", action="store_true", help="Sesli asistan (tepsi + overlay).")
     mod.add_argument(

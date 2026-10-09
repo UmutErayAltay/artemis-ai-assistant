@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -217,9 +218,23 @@ def _make_combo(items: tuple[tuple[str, str], ...], current: str) -> QComboBox:
     Ekranda Türkçe görünen metin, seçimin ham değeri `userData` ile taşınır;
     geri okuma `currentData()` ile yapılır — GÖRÜNEN metin ASLA ayrıştırılmaz
     (türkçe karakter, çeviri ya da kısaltma değişikliği ayarı bozardı).
+
+    NEDEN `AdjustToMinimumContentsLength`: varsayılan davranış açılır
+    listenin EN UZUN öğesine göre genişlik hesaplar ("Otomatik (önce
+    ücretsiz bulut model)" ≈ 250 piksel), dolayısıyla `minimumSizeHint`
+    540'a çıkıp hem `--settings` penceresini hem de panelin ayarlar
+    sekmesini gereksiz yere genişletiyordu. Burada genişlik sabit bir
+    karakter sayısına bağlanır: seçenek metni AÇILIR LİSTEDE tam
+    görünür, kapalı kutuda ise kısa bir satır kalır. Metin ASLA
+    kesilmez — liste her zaman pencere kadar geniş olabilir.
+
+    `24` karakter, seçili değerin ("Yerel (Ollama)", "Bulut (Groq /
+    Azure)", "tr-TR-EmelNeural") üçte ikisini kesmeden alır.
     """
 
     combo = QComboBox()
+    combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+    combo.setMinimumContentsLength(24)
     for display_text, raw_value in items:
         combo.addItem(display_text, raw_value)
 
@@ -244,6 +259,11 @@ def _with_hint(control: QWidget, hint: str) -> QWidget:
     hint_label = QLabel(hint)
     hint_label.setProperty("role", "hint")
     hint_label.setWordWrap(True)
+    # Aynı sebepten: sarmalı ipucu etiketi, TEK SATIR genişliğine göre
+    # boyut ipucu verdiği için formu gereksiz yere genişletiyordu.
+    # `Ignored` yalnızca yerleşim ipucunu devre dışı bırakır; metin
+    # verilen genişlikte sarılmaya devam eder.
+    hint_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
     box.addWidget(hint_label)
 
     return container
@@ -271,6 +291,7 @@ class SettingsWindow(QWidget):
         self.setWindowTitle("Artemis — Ayarlar")
         self.setStyleSheet(theme.stylesheet())
         self.setMinimumWidth(520)
+        self.resize(620, 640)
 
         settings = config_settings.get_settings()
 
@@ -288,15 +309,36 @@ class SettingsWindow(QWidget):
         self._command_gate_enabled = QCheckBox()
         self._command_gate_enabled.setChecked(settings.command_gate_enabled)
 
+        # `QLineEdit`, içindeki metnin TAM genişliğini `minimumSizeHint`
+        # olarak bildirir; bir model slug'ı (`meta-llama/llama-3.3-70b…`)
+        # tek başına 200+ piksel dayatır ve üç alan yan yana toplanınca
+        # form 900'ü aşar. Metin zaten yatay kaydırılabilir; sabit bir taban
+        # genişlik hem pencereyi makul tutar hem alanı birkaç satıra
+        # sığdırma zorlamasından kurtarır.
+        for field in (self._openrouter_model, self._ollama_model, self._voice_hotkey):
+            field.setMinimumWidth(180)
+            field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(6)
         layout.addWidget(_section_title("Ayarlar"))
         subtitle = QLabel("Sık kullanılan ayarlar. Diğer her şey config.yaml dosyasında.")
         subtitle.setProperty("role", "subtitle")
+        # NEDEN `Ignored`: bu etiket `setWordWrap(True)` olduğu için
+        # `minimumSizeHint`'i TEK SATIRINA göre (793 piksel) hesaplıyordu
+        # ve tüm formu 919 piksele sürüklüyordu — panel o yüzden
+        # 823'e zorlanıyor, `--settings` tek başına açıldığında da
+        # 919'a geriliyordu. Yerleşime "boyut ipucuna bakma" demek,
+        # yalnızca metnin sarması ve pencere boyutunu etkiler; ipucu
+        # etiketi DEĞİŞMEZ (düzenleme yüzeyinin alt bilgisi kalır).
+        subtitle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(subtitle)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setHorizontalSpacing(16)
         form.setVerticalSpacing(10)
 
         form.addRow(_section_title("LLM ve model"))
@@ -366,7 +408,11 @@ class SettingsWindow(QWidget):
         save_button.clicked.connect(self._on_save)
         buttons.addWidget(save_button)
 
-        open_config_button = QPushButton("Gelişmiş ayarlar için config.yaml dosyasını aç")
+        # Uzun metinli ikincil düğme, formu 748 piksele sürüklüyordu ve
+        # dar pencerede düğme metni kesiliyordu. Kısa bir etiket + tam
+        # metni tooltip'te: anlam aynı, yerleşim rahat.
+        open_config_button = QPushButton("config.yaml")
+        open_config_button.setToolTip("Gelişmiş ayarlar için config.yaml dosyasını aç")
         open_config_button.clicked.connect(self._on_open_config)
         buttons.addWidget(open_config_button)
         buttons.addStretch()
