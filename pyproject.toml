@@ -35,6 +35,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+embedding = ["fastembed>=0.4"]  # yalnızca projeler.embedding_model için (projects/embedding.py)
 dev = ["pytest>=8.0", "ruff==0.16.10", "mypy==1.19.1"]  # sürüm sabitleme gerekçesi: requirements-dev.txt
 
 # pytest>=7'nin yerleşik `pythonpath` seçeneği: bu dosyanın bulunduğu

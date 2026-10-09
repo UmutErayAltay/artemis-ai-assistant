@@ -140,6 +140,20 @@ class ProjelerSettings(BaseModel):
         speak_notices: `--voice` modunda biten/soru soran işler, kullanıcı
             Artemis'i uyandırmayı beklemeden kendiliğinden SESLİ söylensin mi.
             Kapalıyken bildirimler yalnızca bir sonraki cevabın sonuna eklenir.
+        embedding_model: Vault notlarını embedding benzerliğiyle sıralayan modelin
+            adı (`fastembed` modeli). `None` (varsayılan) ise KAPALI: bağlam CLI'ın
+            sözcük aramasıyla bulunur (ölçülen hit@4 0.43). Açıkken paket/model
+            yüklenemezse sessizce CLI aramasına dönülür. Ölçümler (ARCHITECTURE §45-§46):
+            `intfloat/multilingual-e5-large` en iyisi (hit@4 0.73) ama ≈2,2 GB indirme ve
+            ilk indekslemede CPU'da ≈15 dk (sonra önbellekten, artımlı);
+            `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` ≈23 sn'de
+            indeksler, hit@4 0.57. İsteğe bağlı bağımlılık: `pip install fastembed`.
+        embedding_min_score: Bundan düşük benzerlikteki not atılır; hepsi düşerse not
+            verilmez (CLI'ya dönülmez). `None`: eşik yok. Eşik çok küçük bir kümeye
+            uydurulmuştur: gürültü sorun olmadıkça `None` bırakın (e5-large için 0.835
+            gürültüyü sıfırlar ama hit@4'ü 0.53'e düşürür).
+        embedding_cache_dir: İndeks ve model dosyalarının önbelleği. `None` ise
+            `state_dir / "embedding"`. Vault'un DIŞINDA olmalıdır.
         notify_timeout_seconds: Tek bir bildirim gönderiminin (Telegram isteği,
             toast) azami süresi; aşılırsa o kanal atlanır, işin sonucu bekletilmez.
     """
@@ -161,6 +175,9 @@ class ProjelerSettings(BaseModel):
     desktop_notify: bool = True  # Windows'ta iş bitince sistem bildirimi
     speak_notices: bool = True  # --voice: bildirimi uyandırma beklemeden söyle
     notify_timeout_seconds: float = Field(default=10.0, gt=0)
+    embedding_model: str | None = None  # None: kapalı (CLI sözcük araması)
+    embedding_min_score: float | None = None  # None: eşik yok
+    embedding_cache_dir: Path | None = None  # None: state_dir / "embedding"
 
 
 class Settings(BaseModel):

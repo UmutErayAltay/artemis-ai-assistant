@@ -107,6 +107,10 @@ Artemis: [proje] 'not-cli' tamamlandı (2 commit, ~0.84 $). Kodlayıcının öze
   biten/soru soran/durdurulan her iş `300-Projects/<proje>.md` notuna eklenir
   ve bir receipt gönderilir. Var olan bir nota yalnızca EKLENİR, asla yeniden
   yazılmaz. Vault yoksa ya da CLI hata verirse işler etkilenmez.
+- **Anlamsal vault araması (opsiyonel):** `projeler.embedding_model` verilirse
+  (`pip install fastembed`) vault notları sözcük yerine embedding benzerliğiyle
+  sıralanır (ölçüm: hit@4 0.43 → 0.57-0.73, `ARCHITECTURE.md` §46). Paket/model
+  yoksa sessizce eski aramaya dönülür; indeks vault'un DIŞINDA önbelleklenir.
 - **Haber verir:** iş biter/soru sorar/başarısız olursa runner Windows sistem
   bildirimi gösterir, `projeler.telegram_chat_id` ayarlıysa Telegram'dan mesaj
   atar (token yalnızca `ARTEMIS_TELEGRAM_BOT_TOKEN` ortam değişkeninden okunur,

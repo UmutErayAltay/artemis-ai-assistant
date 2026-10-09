@@ -155,6 +155,10 @@ Akış: kullanıcı girdisi → `core/llm_client.py` (Ollama'ya sorar) →
   (`projeler.vault_path`); kullanıcının vault notlarına YALNIZCA ekleme kipiyle
   (`open("a")`) yazar, yeni notu `open("x")` ile açar — `write_text` ile var
   olan bir notu yeniden yazmak YASAK (Obsidian'daki eşzamanlı düzenleme kaybolur).
+  Embedding araması (`projects/embedding.py`, `projeler.embedding_model`) opt-in'dir:
+  kapalıyken hiçbir şey değişmez, açıkken `fastembed`/model yoksa CLI aramasına
+  uyarıyla dönülür; indeks vault'un DIŞINDA önbelleklenir ve test paketi ASLA model
+  indirmez (sahte gömücü enjekte edilir; gerçek model yalnızca elle ölçümde).
   Bildirimler (`projects/notify.py`): Telegram token'ı YALNIZCA ortam
   değişkeninden okunur, argv'ye/log'a/config'e yazılmaz ve runner onu okuduktan
   sonra kendi ortamından siler — kodlayıcı Bash çalıştırır, token'ı görmemeli.

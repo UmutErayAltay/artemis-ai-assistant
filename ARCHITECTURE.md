@@ -3104,7 +3104,7 @@ telefona bildirim ulaştığı görüldü ("Bildirim gönderildi: telegram"); i�
 ürettiği hiçbir dosyada token geçmiyordu. Açık: Windows toast'ı ve sesli
 duyuru gerçek donanımda denenmedi; Telegram'dan CEVAP vermek (iki yönlü) yok.
 
-## 45) M4 ölçümü: embedding/hibrit arama gerekli mi? (karar bekliyor)
+## 45) M4 ölçümü: embedding/hibrit arama gerekli mi? (karar: §46'da uygulandı)
 
 Vault araması sözcük tabanlı; M2'de genel fikirlerde filtreden sonra not kalmıyordu.
 30 pozitif + 8 negatif (ilgili notu olmayan) proje fikri sorusuyla, doğru notları
@@ -3138,3 +3138,56 @@ ilgisiz fikirde de not getiriyor — eşik pozitif/negatifi temiz ayırmıyor (e
 Öneri (uygulanmadı): vault dışında, Artemis içinde ayrı bir hibrit katman; MiniLM +
 eşik ile başla. Karar: embedding limiti sıfırlanınca ele alınacak. Ham veri: ölçüm
 scriptleri ve `rapor.md` oturum scratchpad'indeydi (kalıcı değil).
+
+## 46) M4: embedding ile vault araması (opt-in)
+
+**Ne:** `projeler.embedding_model` verilirse vault köprüsü (`VaultBridge.context_for`) notları
+`beyin.py context`'in sözcük listesi yerine embedding benzerliğiyle sıralar
+(`projects/embedding.py::EmbeddingIndex`). Kapalıyken (varsayılan) hiçbir şey değişmez ve hiçbir
+paket import edilmez.
+
+**Neden:** §45 ölçümü: paraphrase ağırlıklı 30 pozitif soruda CLI hit@4 0.43; embedding tek
+başına e5-large 0.73, MiniLM 0.57. Hibrit (RRF) zayıf kodlayıcıyı yükseltiyor ama e5-large'ı
+düşürüyor, bu yüzden hibrit KURULMADI: embedding listesi CLI listesinin yerine geçer.
+
+**Nasıl çalışır:**
+
+- Korpus: `knowledge/concepts/*.md` + her `*300-Projects*` klasörünün altındaki tüm Markdown
+  dosyaları; `projects/vault.py::is_noise` kurallarıyla süzülür (daily/, receipts/, dizin
+  dosyaları, 850-Companion — CLI yolundakiyle AYNI fonksiyon).
+- Not metni = frontmatter `title` (yoksa ilk `# `, yoksa dosya adı) + gövde. Gövde paragraf
+  sınırlarında ~800 karakterlik parçalara bölünür (kelime asla bölünmez); notun skoru
+  parçalarının en yüksek kosinüsüdür ve o en iyi parça prompt'a özet olur (300 karaktere
+  temizlenip kısaltılır).
+- e5 modelleri için `query: ` / `passage: ` önekleri (adında "e5" geçen modellerde); diğerlerinde yok.
+- Gömücü `fastembed.TextEmbedding` (lazy import). Model dosyaları da `cache_dir/models` altına
+  iner (fastembed'in varsayılanı sistem geçici dizinidir; yeniden başlatmada 2 GB'lık model
+  yeniden inerdi). `intfloat/multilingual-e5-small` fastembed listesinde yok: özel durum yazılmadı.
+- Önbellek: `embedding_cache_dir` (varsayılan `state_dir/embedding`) altında model başına TEK
+  `.npz` (matris + gömülü meta JSON: not yolu → sha256, parça sayısı, satır ofseti, parça
+  metinleri). Geçici dosya + `os.replace` ile yazılır. Her aramada korpus dosyalarının hash'i
+  alınır (ucuz), YALNIZCA değişen/yeni notlar yeniden gömülür, silinenler düşer. Bozuk önbellek
+  bir uyarıyla yeniden kurulur. Önbellek vault'un DIŞINDADIR.
+- Eşik (`embedding_min_score`): altındaki not atılır; hepsi atılırsa sonuç BOŞTUR ve CLI'ya
+  düşülmez ("alakasız not vermektense hiç verme"). Yalnızca `fastembed`/model yoksa ya da indeks
+  OSError/ValueError verirse tek bir uyarı loglanır ve eski CLI yoluna dönülür.
+- Detached runner (`projects/runner.py`) köprüyü kendi kurar ve yalnızca sonuç yazar; indeks
+  KURMAZ (`jobs.vault_bridge(..., with_embedding=False)` ya da doğrudan `VaultBridge`).
+
+**Ölçüm (gerçek vault'un KOPYASI, 30 pozitif soru, `VaultBridge.context_for(q, 4)` üzerinden):**
+
+| Model | hit@4 | ilk indeks | sorgu (2. tur, ortalama) |
+|---|---|---|---|
+| MiniLM-L12 çok dilli | 0.63 (19/30) | ≈47 sn (model indirme dahil) | ≈58 ms |
+| e5-large | 0.73 (22/30) | ≈794 sn CPU (≈13 dk) | ≈155 ms |
+
+MiniLM §45'te 0.57'ydi; fark iki sorunun (q01, q02) bu ölçümde bulunmasıdır. Nedeni kanıtlanmadı:
+şüphe, §45 ölçümünün ilk iki sorgusundaki bir artefakt; gürültü süzgeci ve parçalama aynıydı.
+30 soruda ±2 soru fark gürültü sınırı içindedir.
+
+**Sınırlar (dürüst not):** altın küme küçük (30 pozitif), soruları ve etiketleri bir ajan yazdı ve
+paraphrase ağırlıklı, yani yapısal olarak embedding lehine. Eşik değeri bu kümeye uydurulmuştur,
+bu yüzden varsayılanı `None`. Windows'ta denenmedi (ölçüm Linux/CPU). e5-large ilk indekslemesi
+≈13-15 dk CPU ve ≈2,2 GB indirme; sonrası artımlı. Her aramada tüm korpus dosyaları okunup
+hash'lenir (163 not için ihmal edilebilir; çok büyük bir vault'ta değişir). Test paketi model
+indirmez (sahte gömücü); gerçek model yalnızca elle ölçümde kullanıldı.

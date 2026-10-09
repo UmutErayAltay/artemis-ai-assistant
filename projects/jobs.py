@@ -19,6 +19,7 @@ from config.settings import ProjelerSettings
 from models.project_models import Coder, JobStatus, ProjectSpec, slugify
 from models.tool_models import ToolResult
 from projects import coder as coder_mod
+from projects.embedding import EmbeddingIndex
 from projects.interview import CONTEXT_ROLE
 from projects.store import INTERVIEW_STARTED, Interview, Job, ProjectStore
 from projects.vault import VaultBridge, _first_line, _normalize_lines, _shorten, _shorten_at_line, display_dir
@@ -63,10 +64,25 @@ def open_store(settings: ProjelerSettings) -> ProjectStore:
     return ProjectStore(coder_mod.db_path(settings))
 
 
-def vault_bridge(settings: ProjelerSettings) -> VaultBridge:
-    """Ayarlardan vault köprüsünü kurar; `vault_path` yoksa köprü pasiftir (hiçbir şey yapmaz)."""
+def vault_bridge(settings: ProjelerSettings, *, with_embedding: bool = True) -> VaultBridge:
+    """Ayarlardan vault köprüsünü kurar; `vault_path` yoksa köprü pasiftir (hiçbir şey yapmaz).
 
-    return VaultBridge(settings.vault_path, settings.vault_command, settings.vault_timeout_seconds)
+    `embedding_model` verilmişse bağlam araması embedding indeksiyle yapılır (M4, §46).
+    `with_embedding=False` indeks kurmaz: yalnızca sonuç yazan çağıranlar için (bağlam
+    sorgulamayan köprüde indeks nesnesi boşuna tutulmasın).
+    """
+
+    index: EmbeddingIndex | None = None
+    if with_embedding and settings.embedding_model and settings.vault_path is not None:
+        cache_dir = settings.embedding_cache_dir or settings.state_dir / "embedding"
+        index = EmbeddingIndex(settings.vault_path, settings.embedding_model, cache_dir)
+    return VaultBridge(
+        settings.vault_path,
+        settings.vault_command,
+        settings.vault_timeout_seconds,
+        embedding=index,
+        embedding_min_score=settings.embedding_min_score,
+    )
 
 
 def record_job_outcome(bridge: VaultBridge, store: ProjectStore, job: Job) -> None:
@@ -354,7 +370,7 @@ def stop(settings: ProjelerSettings, name: str) -> ToolResult:
         # sonucu runner tarafından zaten vault'a işlenmiştir, ikinci kez yazılmaz.
         stopped = store.get_job(job.id)
         if stopped is not None:
-            record_job_outcome(vault_bridge(settings), store, stopped)
+            record_job_outcome(vault_bridge(settings, with_embedding=False), store, stopped)
     return ToolResult(success=True, message=f"'{job.slug}' durduruldu. Yapılan iş klasörde duruyor: {job.project_dir}")
 
 

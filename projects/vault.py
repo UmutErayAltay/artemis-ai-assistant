@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from projects.embedding import EmbeddingIndex, EmbeddingUnavailable
 from utils.paths import safe_join
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,19 @@ _NOISE_FOLDER_MARK = "850-Companion/"
 # YAML'da düz (tırnaksız) yazılırsa anlamı bozulan başlıklar: başta özel karakter,
 # `: ` / ` #` içeren ya da `:` ile biten metinler.
 _YAML_RISKY = re.compile(r"""^[\s\-?:,\[\]{}#&*!|>'"%@`]|:\s|\s#|:$""")
+
+
+def is_noise(source: str) -> bool:
+    """Ham oturum kaydı, receipt, üretilmiş dizin ya da companion günlüğü mü?
+
+    Modül düzeyinde ve herkese açık: embedding korpusu da AYNI kuralla süzülür
+    (`projects/embedding.py`); iki yerde ayrı kural olsaydı biri sessizce sapardı.
+    """
+    if not source.strip():
+        return True
+    # Windows'ta CLI ters bölü ile dönerse de aynı kurallar işlesin.
+    normalized = source.replace("\\", "/")
+    return normalized.startswith(_NOISE_PREFIXES) or normalized in _NOISE_FILES or _NOISE_FOLDER_MARK in normalized
 
 
 def _shorten(text: str, limit: int) -> str:
@@ -196,10 +210,14 @@ class VaultBridge:
         vault_path: Path | None,
         command: list[str] | None = None,
         timeout_seconds: float = 20.0,
+        embedding: EmbeddingIndex | None = None,
+        embedding_min_score: float | None = None,
     ) -> None:
         self._vault_path = vault_path
         self._command_override = command
         self._timeout = timeout_seconds
+        self._embedding = embedding
+        self._embedding_min_score = embedding_min_score
 
     @property
     def enabled(self) -> bool:
@@ -287,6 +305,10 @@ class VaultBridge:
             return None
 
         preferences = self._read_preferences(vault)
+        if self._embedding is not None:
+            embedded = self._notes_from_embedding(query, max_notes)
+            if embedded is not None:
+                return VaultContext(preferences=preferences, notes=embedded)
         answer = self._run(
             ["context", "--no-sync", "--limit", _CONTEXT_LIMIT, "--budget-chars", _CONTEXT_BUDGET_CHARS, query]
         )
@@ -310,6 +332,33 @@ class VaultBridge:
                     notes.append(VaultNote(source=source, excerpt=excerpt))
         return VaultContext(preferences=preferences, notes=tuple(notes))
 
+    def _notes_from_embedding(self, query: str, max_notes: int) -> tuple[VaultNote, ...] | None:
+        """Notları embedding benzerliğiyle sıralar; indeks kullanılamıyorsa `None` (CLI'ya dönülür).
+
+        Eşik altında kalan notlar atılır ve BOŞ sonuç geçerli bir cevaptır (`()`): eşik
+        "alakasız not vermektense hiç verme" demektir, bu yüzden CLI'ya düşülmez. Yalnızca
+        indeksin kendisi çalışmazsa (paket/model yok, önbellek yazılamadı) CLI yolu kullanılır.
+        """
+        if self._embedding is None:
+            return None
+        try:
+            ranked = self._embedding.search(query, max_notes)
+        except (EmbeddingUnavailable, OSError, ValueError) as exc:
+            logger.warning("Embedding araması kullanılamadı, CLI sözcük aramasına dönülüyor: %s", exc)
+            return None
+        notes: list[VaultNote] = []
+        for path, score, passage in ranked:
+            if self._embedding_min_score is not None and score < self._embedding_min_score:
+                continue
+            if is_noise(path):
+                continue
+            excerpt = self._make_excerpt(passage)
+            if excerpt:
+                notes.append(VaultNote(source=path, excerpt=excerpt))
+            if len(notes) >= max_notes:
+                break
+        return tuple(notes)
+
     @staticmethod
     def _read_preferences(vault: Path) -> str:
         """Core.md'deki tercih bölümünü okur; dosya yok/okunamıyorsa `""`."""
@@ -325,12 +374,8 @@ class VaultBridge:
 
     @staticmethod
     def _is_noise(source: str) -> bool:
-        """Ham oturum kaydı, receipt, üretilmiş dizin ya da companion günlüğü mü?"""
-        if not source.strip():
-            return True
-        # Windows'ta CLI ters bölü ile dönerse de aynı kurallar işlesin.
-        normalized = source.replace("\\", "/")
-        return normalized.startswith(_NOISE_PREFIXES) or normalized in _NOISE_FILES or _NOISE_FOLDER_MARK in normalized
+        """Bkz. modül düzeyindeki `is_noise`."""
+        return is_noise(source)
 
     @staticmethod
     def _extract_preferences(content: str) -> str:
